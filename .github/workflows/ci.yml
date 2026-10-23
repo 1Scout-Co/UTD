@@ -1,0 +1,194 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# Mặc định chỉ đọc. Riêng job release xin quyền ghi để tạo bản phát hành nháp.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Không đặt `version`: action đọc "packageManager" (pnpm@12.9.1) trong package.json.
+      # pnpm 12 cần action-setup >= v6.1.0 (tag v6 chưa trỏ tới bản này).
+      - uses: pnpm/action-setup@v6.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - run: pnpm install --frozen-lockfile
+      - run: cargo test -p utd-engine
+      - run: cargo test -p app --lib
+      - run: cargo clippy -p app --all-targets -- -D warnings
+      - run: pnpm lint
+      - run: pnpm build
+      - run: pnpm exec playwright install chromium
+      - run: pnpm exec playwright test
+
+  # Chạy khi đẩy tag vX.Y.Z (cách làm: docs/RELEASE.md). Mỗi việc một bước để dễ thêm ký mã.
+  # Tự cập nhật: bộ cài được ký bằng khoá updater (secret) và kèm latest.json cho app đọc.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      BUNDLE_DIR: target/release/bundle/nsis
+      RELEASE_DIR: release-files
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check tag matches app version
+        shell: bash
+        run: |
+          app_version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          cargo_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "v$app_version" != "$GITHUB_REF_NAME" ] || [ "$cargo_version" != "$app_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME, tauri.conf.json ($app_version) và Cargo.toml gốc ($cargo_version) phải cùng số"
+            exit 1
+          fi
+
+      # Khoá ký bản cập nhật (minisign, KHÁC ký mã Windows): chủ dự án tự thêm 2 secret (docs/RELEASE.md → Tự cập nhật).
+      # Kiểm trước khi dựng để báo lỗi sớm và rõ.
+      - name: Check updater signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          UPDATER_KEY_NO_PASSWORD: ${{ vars.UPDATER_KEY_NO_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Thiếu secret TAURI_SIGNING_PRIVATE_KEY (khoá ký bản cập nhật). Cách thêm: docs/RELEASE.md, mục Tự cập nhật"
+            exit 1
+          fi
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ] && [ "$UPDATER_KEY_NO_PASSWORD" != "true" ]; then
+            echo "::error::Thiếu secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD (mật khẩu của khoá). Khoá tạo không đặt mật khẩu thì đặt biến repo UPDATER_KEY_NO_PASSWORD=true"
+            exit 1
+          fi
+          echo "Đã có khoá ký bản cập nhật"
+
+      # Ký mã: TẮT mặc định. Bật = biến repo WINDOWS_SIGNING=true + secret WINDOWS_SIGN_COMMAND
+      # (lệnh ký, %1 là file cần ký). Tauri gọi lệnh này cho UTD.exe, uninstall.exe và bộ cài (docs/RELEASE.md).
+      - name: Configure code signing (optional)
+        if: vars.WINDOWS_SIGNING == 'true'
+        shell: bash
+        env:
+          WINDOWS_SIGN_COMMAND: ${{ secrets.WINDOWS_SIGN_COMMAND }}
+        run: |
+          if [ -z "$WINDOWS_SIGN_COMMAND" ]; then
+            echo "::error::WINDOWS_SIGNING=true nhưng chưa có secret WINDOWS_SIGN_COMMAND"
+            exit 1
+          fi
+          node -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({ bundle: { windows: { signCommand: process.env.WINDOWS_SIGN_COMMAND } } }))' "$RUNNER_TEMP/signing.conf.json"
+          echo "TAURI_EXTRA_CONFIG=$RUNNER_TEMP/signing.conf.json" >> "$GITHUB_ENV"
+
+      - name: Build NSIS installer
+        shell: bash
+        env:
+          # Chỉ truyền khi bật ký (Azure Trusted Signing đọc 3 biến này); tắt thì là chuỗi rỗng.
+          AZURE_CLIENT_ID: ${{ vars.WINDOWS_SIGNING == 'true' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ vars.WINDOWS_SIGNING == 'true' && secrets.AZURE_CLIENT_SECRET || '' }}
+          AZURE_TENANT_ID: ${{ vars.WINDOWS_SIGNING == 'true' && secrets.AZURE_TENANT_ID || '' }}
+          # Tauri ký bộ cài cho updater (tạo thêm file .sig) bằng khoá này; khoá không khớp pubkey thì CLI cảnh báo.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          # tauri.updater.conf.json bật createUpdaterArtifacts chỉ ở CI: dựng trên máy không cần khoá.
+          args=(--bundles nsis --config "$GITHUB_WORKSPACE/src-tauri/tauri.updater.conf.json")
+          if [ -n "${TAURI_EXTRA_CONFIG:-}" ]; then
+            args+=(--config "$TAURI_EXTRA_CONFIG")
+          fi
+          pnpm tauri build "${args[@]}"
+
+      # Tên bộ cài đổi theo version nên tìm bằng mẫu, không ghi cứng.
+      - name: Collect release files
+        shell: bash
+        run: |
+          shopt -s nullglob
+          installers=("$BUNDLE_DIR"/*-setup.exe)
+          if [ ${#installers[@]} -ne 1 ]; then
+            echo "::error::Cần đúng 1 bộ cài trong $BUNDLE_DIR, thấy ${#installers[@]}"
+            exit 1
+          fi
+          if [ ! -f "${installers[0]}.sig" ]; then
+            echo "::error::Không thấy ${installers[0]}.sig: bộ cài chưa được ký cho tự cập nhật"
+            exit 1
+          fi
+          mkdir -p "$RELEASE_DIR"
+          cp "${installers[0]}" "${installers[0]}.sig" "$RELEASE_DIR/"
+          # latest.json: app đọc ở releases/latest/download/latest.json (chỉ sau khi bấm Publish).
+          # Ghi chú hiện trong app lấy từ docs/releases/<tag>.md nếu có.
+          node scripts/release/latest-json.mjs \
+            --installer "$RELEASE_DIR/$(basename "${installers[0]}")" \
+            --tag "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --notes-file "docs/releases/$GITHUB_REF_NAME.md" \
+            --out "$RELEASE_DIR/latest.json"
+          ls -l "$RELEASE_DIR"
+
+      # Tổng SHA-256 của mọi file sẽ đăng (định dạng `sha256sum -c` đọc được).
+      - name: Write SHA256SUMS.txt
+        shell: bash
+        working-directory: ${{ env.RELEASE_DIR }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const crypto = require("crypto");
+            const lines = fs.readdirSync(".").filter((name) => name !== "SHA256SUMS.txt").sort()
+              .map((name) => crypto.createHash("sha256").update(fs.readFileSync(name)).digest("hex") + "  " + name);
+            fs.writeFileSync("SHA256SUMS.txt", lines.join("\n") + "\n");
+          '
+          cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: utd-${{ github.ref_name }}
+          path: ${{ env.RELEASE_DIR }}/
+          if-no-files-found: error
+
+      # Bản nháp: chủ dự án đọc lại rồi tự bấm Publish trên GitHub. Chạy lại job chỉ ghi đè file của bản còn nháp.
+      - name: Create draft GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if is_draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$is_draft" != "true" ]; then
+              echo "::error::Bản $tag đã phát hành, không ghi đè file"
+              exit 1
+            fi
+            gh release upload "$tag" "$RELEASE_DIR"/* --clobber
+          else
+            gh release create "$tag" "$RELEASE_DIR"/* --draft --verify-tag --title "UTD $tag" --generate-notes
+          fi

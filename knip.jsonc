@@ -1,0 +1,16 @@
+{
+  // knip tìm file và thư viện không dùng. Mẫu của kit CỐ Ý để sẵn vài thứ cho shadcn và AI dùng sau; chỉ những thứ đó được miễn:
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // cn() của shadcn: thành phần mới lấy cn thẳng từ gói "cn", file này chỉ là lối tắt cũ cho code AI viết sau.
+  // safe-log.ts: hàm ghi nhật ký an toàn (AC-30) có sẵn cho code AI viết sau; màn đầu trống chưa ghi log nào nên chưa ai import.
+  "ignore": ["src/lib/utils.ts", "src/shared/safe-log.ts"],
+  // Thành phần shadcn (nút…) do shadcn sinh sẵn; màn đầu còn trống nên chưa ai dùng. Coi chúng là điểm vào để không bị báo thừa
+  // (cùng các thư viện của chúng: base-ui, class-variance-authority, cn).
+  "entry": ["src/components/ui/**/*.{ts,tsx}"],
+  "ignoreDependencies": [
+    "lucide-react", // icon theo AI_RULES.md; dùng khi có màn cần icon
+    "jscpd" // chạy bằng lệnh của máy kiểm (flow-check), không import trong code
+  ],
+  // Thành phần shadcn sinh ra (src/components/**) xuất sẵn nhiều thứ; chỉ soát phần code do app viết.
+  "ignoreIssues": { "src/components/**": ["exports", "types"] }
+}

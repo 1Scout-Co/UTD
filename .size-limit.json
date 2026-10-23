@@ -1,0 +1,4 @@
+[
+  { "name": "mã chạy (JS, nén gzip)", "path": "dist/assets/*.js", "gzip": true, "limit": "200 kB" },
+  { "name": "kiểu dáng (CSS, nén gzip)", "path": "dist/assets/*.css", "gzip": true, "limit": "20 kB" }
+]

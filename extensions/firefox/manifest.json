@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "UTD Download Manager",
+  "version": "0.1.0",
+  "description": "Gửi link sang UTD để tải nhanh, có kiểm tra an toàn.",
+  "permissions": ["contextMenus", "nativeMessaging", "storage", "activeTab"],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "action": {
+    "default_title": "Tải bằng UTD",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "32": "icons/32.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "32": "icons/32.png",
+    "128": "icons/128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "utd@utd.app",
+      "strict_min_version": "109.0"
+    }
+  }
+}

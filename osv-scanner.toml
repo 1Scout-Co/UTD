@@ -1,0 +1,8 @@
+# osv-scanner (quét lỗ hổng thư viện). Chỉ miễn MỘT lỗ hổng chưa có bản vá, có hạn: hết hạn thì máy kiểm báo lại.
+# braces <= 3.0.3 (DoS khi gặp mẫu {} lồng quá sâu) đi theo gói shadcn → fast-glob → micromatch. Chưa có bản braces nào cao hơn 3.0.3
+# nên không override được. Chỉ chạy lúc dev (shadcn CLI), không nằm trong bản build gửi người dùng.
+# Khi braces ra bản vá: bỏ khối này và nâng (pnpm up braces).
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2027-01-31
+reason = "braces chưa có bản vá; chỉ nằm trong công cụ dev của shadcn, không vào bản build"

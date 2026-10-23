@@ -1,0 +1,6 @@
+{
+  "start": "pnpm dev --strictPort",
+  "url": "http://localhost:{PORT}",
+  "routes": ["/"],
+  "states": [{ "route": "/", "s": "S-01" }]
+}

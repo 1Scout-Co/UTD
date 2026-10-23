@@ -1,0 +1,26 @@
+UTD
+Copyright 2026 UTD contributors
+
+This product includes software developed by third parties under their own
+licenses. Media sidecars (yt-dlp, ffmpeg) are not bundled with UTD and are
+installed or supplied separately by the user.
+
+Third-party media tools (not distributed in the UTD installer)
+---------------------------------------------------------------
+UTD uses a yt-dlp or ffmpeg that is already installed on the computer
+(UTD's own tools folder, PATH, WinGet, Scoop or Chocolatey). Only when the
+user clicks "Tải yt-dlp", "Tải ffmpeg" or "Cập nhật" in Settings does UTD
+download the tool from its upstream GitHub release over HTTPS, check its
+SHA-256 against the checksum file published in the same release, and place
+it in %LOCALAPPDATA%\UTD-Data\bin. Nothing is downloaded otherwise.
+
+- yt-dlp (https://github.com/yt-dlp/yt-dlp): released under the Unlicense.
+  The Windows yt-dlp.exe build bundles third-party components, some under
+  GPLv3+; see THIRD_PARTY_LICENSES.txt in the yt-dlp repository.
+- FFmpeg (https://ffmpeg.org), Windows "win64-gpl" builds from
+  https://github.com/yt-dlp/FFmpeg-Builds: licensed under the GNU GPL
+  version 3. The build's LICENSE.txt is copied next to the binaries as
+  ffmpeg-LICENSE.txt. Source code is available from FFmpeg and from the
+  FFmpeg-Builds repository.
+
+UTD runs these tools as separate processes and does not link to them.

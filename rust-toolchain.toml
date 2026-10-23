@@ -1,0 +1,3 @@
+# Windows-first: MSVC handles Unicode project paths; macOS port will override this.
+[toolchain]
+channel = "stable-x86_64-pc-windows-msvc"

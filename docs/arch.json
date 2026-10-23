@@ -1,0 +1,78 @@
+{
+  "$comment": "Kiến trúc máy đọc. Thêm module: thêm một mục vào modules + một dòng Codemap trong docs/ARCHITECTURE.md (kiểm bằng: node ~/.claude/hooks/arch.mjs sync). Mỗi forbidden bắt buộc có reason + fix. Sửa xong chạy: node ~/.claude/hooks/arch.mjs gen",
+  "version": 1,
+  "parts": [
+    {
+      "name": "web",
+      "stack": "web",
+      "root": "src",
+      "modules": [
+        {
+          "name": "components",
+          "path": "src/components",
+          "desc": "Thành phần giao diện của shadcn (nút, ô nhập…); KHÔNG chứa logic nghiệp vụ.",
+          "mayDependOn": [
+            "lib",
+            "shared"
+          ]
+        },
+        {
+          "name": "features/home",
+          "path": "src/features/home",
+          "desc": "Màn đầu (S-01, giữ chỗ): chỉ hiện tên app; thay bằng màn thật khi có SPEC; KHÔNG gọi dịch vụ ngoài từ ui, KHÔNG import tính năng khác.",
+          "mayDependOn": [
+            "components",
+            "lib",
+            "shared"
+          ]
+        },
+        {
+          "name": "lib",
+          "path": "src/lib",
+          "desc": "Hàm tiện ích của shadcn (cn); KHÔNG chứa logic nghiệp vụ.",
+          "mayDependOn": [
+            "components",
+            "shared"
+          ]
+        },
+        {
+          "name": "shared",
+          "path": "src/shared",
+          "desc": "Code dùng chung (kiểu dữ liệu, tiện ích, thành phần giao diện chung). KHÔNG biết tính năng nào.",
+          "mayDependOn": [
+            "components",
+            "lib"
+          ]
+        }
+      ],
+      "shared": [
+        "src/shared"
+      ],
+      "limits": {
+        "fileLines": 400,
+        "fnLines": 60,
+        "complexity": 15
+      },
+      "forbidden": [
+        {
+          "from": "src/features/*/{model,api}/**",
+          "to": "src/features/*/ui/**",
+          "reason": "Phần dữ liệu và gọi máy chủ không được biết giao diện.",
+          "fix": "Chuyển phần dùng chung sang model hoặc shared; ui mới là bên gọi model/api, không ngược lại."
+        },
+        {
+          "from": "src/features/*/{ui,model}/**",
+          "to": "node_modules/{@supabase,@stripe,stripe}/**",
+          "reason": "Gọi dịch vụ ngoài (Supabase, Stripe…) chỉ được làm trong api của tính năng hoặc shared/lib.",
+          "fix": "Thêm một hàm trong features/<tên>/api (hoặc shared/lib) bọc lời gọi, rồi gọi hàm đó."
+        },
+        {
+          "from": "src/shared/**",
+          "to": "src/features/**",
+          "reason": "shared không được biết tính năng nào, nếu không các tính năng sẽ dính nhau qua shared.",
+          "fix": "Chuyển đoạn code đó vào đúng tính năng, hoặc để tính năng truyền dữ liệu vào shared qua tham số."
+        }
+      ]
+    }
+  ]
+}

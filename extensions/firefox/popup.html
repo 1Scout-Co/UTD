@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>UTD</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #0f1b2d;
+        --muted: #52647a;
+        --primary: #006bd6;
+        --line: #e5edf8;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        width: 300px;
+        margin: 0;
+        padding: 14px;
+        color: var(--ink);
+        background: #f6faff;
+        font:
+          13px/1.5 Inter,
+          system-ui,
+          sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        gap: 5px;
+        margin-bottom: 12px;
+      }
+      strong {
+        font-size: 19px;
+        letter-spacing: -0.04em;
+      }
+      span {
+        color: var(--muted);
+      }
+      button {
+        width: 100%;
+        height: 34px;
+        border: 0;
+        border-radius: 9px;
+        color: #fff;
+        background: var(--primary);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      p {
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+      .ok {
+        color: #0a7a4b;
+      }
+      .error {
+        color: #b42318;
+      }
+      .card {
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <header><strong>utd</strong><span>desktop</span></header>
+    <div class="card">
+      <button id="send" type="button">Tải trang này bằng UTD</button>
+      <p id="status">Chuột phải vào link hoặc video để tải nhanh.</p>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
