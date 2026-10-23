@@ -90,11 +90,7 @@ impl ConnectionGate {
 
     fn try_enter(&self) -> bool {
         let target = self.target();
-        self.active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                (active < target).then_some(active + 1)
-            })
-            .is_ok()
+        update_if(&self.active, |active| (active < target).then_some(active + 1))
     }
 
     fn release(&self) {
@@ -134,6 +130,19 @@ impl ConnectionGate {
     }
 }
 
+/// Như `fetch_update` (Rust mới đổi tên thành `try_update`, bản cũ chưa có): ghi khi `next` trả `Some`.
+/// Viết tay để build được trên mọi bản stable mà không dính cảnh báo deprecated.
+fn update_if(value: &AtomicUsize, mut next: impl FnMut(usize) -> Option<usize>) -> bool {
+    let mut current = value.load(Ordering::Acquire);
+    while let Some(new) = next(current) {
+        match value.compare_exchange_weak(current, new, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+    false
+}
+
 /// Chỗ của một worker trong cổng; tự trả khi drop.
 pub(crate) struct GateSlot {
     gate: Arc<ConnectionGate>,
@@ -147,12 +156,9 @@ impl GateSlot {
             return false;
         }
         let gate = &self.gate;
-        let shrunk = gate
-            .active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                (active > gate.target()).then(|| active - 1)
-            })
-            .is_ok();
+        let shrunk = update_if(&gate.active, |active| {
+            (active > gate.target()).then(|| active - 1)
+        });
         if shrunk {
             self.released.store(true, Ordering::Release);
         }

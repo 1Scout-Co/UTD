@@ -113,12 +113,7 @@ async fn handle(mut stream: TcpStream, state: Arc<Inner>) {
     let total = state.body.len();
     let is_probe = request.head || matches!(request.range, Some((0, Some(0))));
 
-    if !is_probe
-        && state
-            .retries_left
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| value.checked_sub(1))
-            .is_ok()
-    {
+    if !is_probe && take(&state.retries_left) {
         let _ = stream
             .write_all(
                 b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -245,10 +240,16 @@ async fn write_chunked(stream: &mut TcpStream, body: &[u8], config: &ServerConfi
     let _ = stream.write_all(b"0\r\n\r\n").await;
 }
 
+/// Trừ 1 nếu còn (không dùng `fetch_update`: Rust mới đánh dấu deprecated).
 fn take(counter: &AtomicUsize) -> bool {
-    counter
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| value.checked_sub(1))
-        .is_ok()
+    let mut current = counter.load(Ordering::SeqCst);
+    while let Some(next) = current.checked_sub(1) {
+        match counter.compare_exchange_weak(current, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+    false
 }
 
 async fn read_request(stream: &mut TcpStream) -> Option<Request> {
