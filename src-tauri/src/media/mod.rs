@@ -1,5 +1,13 @@
+mod fast;
+mod finish;
 mod install;
+mod mux;
+mod output;
+/// `parts::discard_parts`: dọn luồng con trước khi xoá task media khỏi danh sách.
+pub(crate) mod parts;
 mod probe;
+mod resolve;
+mod rollup;
 mod runner;
 mod tools;
 

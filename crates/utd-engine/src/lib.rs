@@ -1,6 +1,7 @@
 pub mod db;
 pub mod engine;
 pub mod fetch;
+pub mod headers;
 pub mod model;
 pub mod safety;
 
@@ -8,6 +9,9 @@ pub use db::Journal;
 pub use engine::{
     DownloadControl, DownloadEngine, DownloadOutcome, DownloadRequest, EngineEvent, EngineOptions,
     ProgressSnapshot,
+};
+pub use headers::{
+    allowed_request_headers, validate_request_headers, RequestHeader, MAX_REQUEST_HEADERS,
 };
 pub use model::*;
 

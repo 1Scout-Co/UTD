@@ -8,6 +8,7 @@ import {
   defaultDownloadDir,
   diskSpace,
   isDesktopApp,
+  isMediaPageError,
   listDownloads,
   pauseDownload,
   removeDownload,
@@ -26,7 +27,7 @@ import type {
 } from "../model/types"
 import { AddDownloadDialog } from "./add-download-dialog"
 import { DoctorDialog } from "./doctor-dialog"
-import { MediaPickerDialog } from "./media-picker-dialog"
+import { MediaPickerDialog, useMediaRequests } from "./media-picker-dialog"
 import { SettingsDialog } from "./settings-dialog"
 import { useUpdateAvailable } from "./use-update-available"
 import { Soniox } from "./variants/soniox"
@@ -40,6 +41,11 @@ export function HomeScreen() {
   const update = useUpdateAvailable(desktop)
   const [mediaBusy, setMediaBusy] = useState(false)
   const [mediaError, setMediaError] = useState<string | null>(null)
+  // Link video chuyển từ hộp Thêm hoặc trình duyệt; `key` đổi ⇒ hộp Tải media dựng lại và tự phân tích.
+  const [mediaRequest, setMediaRequest] = useState<{
+    url: string
+    key: number
+  } | null>(null)
   const [diagnoseId, setDiagnoseId] = useState<string | null>(null)
   const [tasks, setTasks] = useState<EngineTask[]>([])
   const [progress, setProgress] = useState<Record<string, EngineProgress>>({})
@@ -144,6 +150,15 @@ export function HomeScreen() {
         usedPercent: demoStats.storageUsed,
       }
 
+  const openMediaWith = useCallback((url: string) => {
+    setAddOpen(false)
+    setSettingsOpen(false)
+    setMediaError(null)
+    setMediaRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1 }))
+    setMediaOpen(true)
+  }, [])
+  useMediaRequests(desktop, openMediaWith)
+
   const openAdd = () => {
     setAddError(null)
     setAddOpen(true)
@@ -179,7 +194,8 @@ export function HomeScreen() {
       setAddOpen(false)
       refreshStorage()
     } catch (error) {
-      setAddError(error instanceof Error ? error.message : String(error))
+      if (isMediaPageError(error)) openMediaWith(payload.url)
+      else setAddError(error instanceof Error ? error.message : String(error))
     } finally {
       setAddBusy(false)
     }
@@ -295,8 +311,11 @@ export function HomeScreen() {
         busy={addBusy}
         error={addError}
         onSubmit={submitAdd}
+        onMedia={openMediaWith}
       />
       <MediaPickerDialog
+        key={mediaRequest?.key ?? 0}
+        initialUrl={mediaRequest?.url}
         open={mediaOpen}
         onOpenChange={setMediaOpen}
         desktop={desktop}

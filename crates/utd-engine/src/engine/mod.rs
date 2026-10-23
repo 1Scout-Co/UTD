@@ -1,8 +1,10 @@
 mod adaptive;
+mod content;
 mod file;
 mod http;
 mod limiter;
 mod session;
+mod transport;
 mod verify;
 mod worker;
 
@@ -12,6 +14,7 @@ use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
+use crate::headers::RequestHeader;
 use crate::model::{DownloadTask, HashState, TaskStatus};
 
 pub use session::DownloadEngine;
@@ -99,6 +102,14 @@ pub struct DownloadRequest {
     /// Trần số kết nối (mặc định = tự động tới mức tối đa của engine).
     pub connections: u16,
     pub expected_sha256: Option<String>,
+    /// Mỗi yêu cầu HTTP xin tối đa chừng này byte (≥ `MIN_REQUEST_BYTES`); mỗi kết nối gửi
+    /// nhiều yêu cầu nối nhau trên cùng kết nối keep-alive. `None` = một yêu cầu mỗi đoạn.
+    pub max_request_bytes: Option<u64>,
+    /// Header riêng cho mọi yêu cầu, chỉ gửi tới đúng origin của `url` (bỏ khi chuyển hướng
+    /// sang origin khác). Lọc nguồn ngoài bằng `allowed_request_headers`.
+    pub request_headers: Vec<RequestHeader>,
+    /// Có ⇒ task con ẩn (loại `MediaPart`) của task này; cha phải có sẵn trong journal.
+    pub parent_id: Option<String>,
 }
 
 impl DownloadRequest {
@@ -109,6 +120,9 @@ impl DownloadRequest {
             file_name: None,
             connections: AUTO_CONNECTIONS,
             expected_sha256: None,
+            max_request_bytes: None,
+            request_headers: Vec::new(),
+            parent_id: None,
         }
     }
 }

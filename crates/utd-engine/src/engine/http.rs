@@ -2,12 +2,13 @@ use std::time::{Duration, SystemTime};
 
 use percent_encoding::percent_decode_str;
 use reqwest::header::{
-    HeaderMap, ACCEPT_ENCODING, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, ETAG,
-    LAST_MODIFIED, RANGE, RETRY_AFTER,
+    HeaderMap, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
+    LAST_MODIFIED, RETRY_AFTER,
 };
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Method, Response, StatusCode};
 use url::Url;
 
+use super::transport::Transport;
 use crate::model::{validate_file_name, ErrorClass, TaskError};
 
 pub(crate) struct Probe {
@@ -17,6 +18,9 @@ pub(crate) struct Probe {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub file_name: Option<String>,
+    pub content_type: Option<String>,
+    /// Server gửi `Content-Disposition` đặt tên file / attachment: chắc chắn là file.
+    pub attachment: bool,
 }
 
 pub(crate) struct RequestFailure {
@@ -37,33 +41,29 @@ pub(crate) struct ContentRange {
 }
 
 pub(crate) async fn probe(
-    client: &Client,
+    transport: &Transport,
     url: &Url,
     timeout: Duration,
 ) -> Result<Probe, RequestFailure> {
-    let head = client
-        .head(url.clone())
-        .header(ACCEPT_ENCODING, "identity")
-        .timeout(timeout)
-        .send()
-        .await;
+    let head = transport.send(Method::HEAD, url, None, Some(timeout)).await;
+    let mut head_probe = None;
     if let Ok(response) = head
         && response.status().is_success()
     {
         let headers = response.headers();
         let length = content_length(headers);
         let advertised = accepts_ranges(headers);
-        if length.is_some() && (advertised || length == Some(0)) {
-            return Ok(probe_from(&response, advertised, length));
+        let probe = probe_from(&response, advertised, length);
+        // HEAD báo 0 byte không đáng tin (trang YouTube trả HTML kèm Content-Length: 0):
+        // hỏi lại bằng GET để biết chắc file rỗng.
+        if advertised && length.is_some_and(|length| length > 0) {
+            return Ok(probe);
         }
+        head_probe = Some(probe);
     }
 
-    let response = client
-        .get(url.clone())
-        .header(ACCEPT_ENCODING, "identity")
-        .header(RANGE, "bytes=0-0")
-        .timeout(timeout)
-        .send()
+    let response = transport
+        .send(Method::GET, url, Some("bytes=0-0"), Some(timeout))
         .await
         .map_err(|error| classify_error(&error))?;
     let status = response.status();
@@ -74,7 +74,7 @@ pub(crate) async fn probe(
             .and_then(|value| value.to_str().ok())
             .and_then(parse_content_range_total);
         if total == Some(0) {
-            return Ok(probe_from(&response, true, total));
+            return Ok(empty_file(&response, head_probe));
         }
         return Err(failure_from_status(status, response.headers()));
     }
@@ -103,7 +103,31 @@ fn probe_from(response: &Response, supports_ranges: bool, total_bytes: Option<u6
         etag: header_text(headers, ETAG),
         last_modified: header_text(headers, LAST_MODIFIED),
         file_name: file_name_from(headers, response.url()),
+        content_type: header_text(headers, CONTENT_TYPE),
+        attachment: is_attachment(headers),
     }
+}
+
+/// File rỗng thật: server trả 416 `bytes */0` cho Range. Thân 416 của nginx/Apache là trang lỗi
+/// HTML ⇒ kiểu nội dung và tên lấy từ HEAD; không có HEAD thì để trống (xem đầu file lúc xong).
+fn empty_file(response: &Response, head: Option<Probe>) -> Probe {
+    let mut probe = probe_from(response, true, Some(0));
+    probe.content_type = head.as_ref().and_then(|head| head.content_type.clone());
+    probe.attachment = head.as_ref().is_some_and(|head| head.attachment);
+    if let Some(name) = head.and_then(|head| head.file_name) {
+        probe.file_name = Some(name);
+    }
+    probe
+}
+
+fn is_attachment(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_DISPOSITION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.trim().to_ascii_lowercase().starts_with("attachment")
+                || disposition_file_name(value).is_some()
+        })
 }
 
 pub(crate) fn failure_from_status(status: StatusCode, headers: &HeaderMap) -> RequestFailure {

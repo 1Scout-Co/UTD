@@ -10,8 +10,10 @@ async function sendToUtd(payload) {
       throw new Error(response?.message || "UTD không phản hồi.")
     }
     await api.action.setBadgeText({ text: "" })
-    await api.storage.local.set({ lastResult: "ok", lastAt: Date.now() })
-    return { ok: true, taskId: response.taskId }
+    // UTD có thể gửi kèm câu báo, vd. link video thì "Đã mở UTD để chọn chất lượng".
+    const note = typeof response.message === "string" ? response.message : null
+    await api.storage.local.set({ lastResult: "ok", lastNote: note, lastAt: Date.now() })
+    return { ok: true, taskId: response.taskId, message: note }
   } catch (error) {
     const message =
       error?.message ||

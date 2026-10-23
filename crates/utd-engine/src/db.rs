@@ -5,13 +5,14 @@ use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
+use crate::headers::RequestHeader;
 use crate::model::{
     now_ms, validate_segments, DownloadTask, HashState, MediaJob, Segment, SegmentStatus,
     TaskError, TaskKind, TaskStatus,
 };
 use crate::{Error, Result};
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 struct Migration {
     version: u32,
@@ -83,11 +84,26 @@ const MIGRATIONS: &[Migration] = &[
             );
         "#,
     },
+    Migration {
+        version: 3,
+        // Task con ẩn (luồng media), trần byte mỗi yêu cầu, header riêng (JSON).
+        sql: r#"
+            ALTER TABLE tasks ADD COLUMN parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE;
+            ALTER TABLE tasks ADD COLUMN max_request_bytes INTEGER
+                CHECK (max_request_bytes IS NULL OR max_request_bytes > 0);
+            ALTER TABLE tasks ADD COLUMN request_headers_json TEXT;
+            CREATE INDEX idx_tasks_parent ON tasks(parent_id);
+        "#,
+    },
 ];
 
 const TASK_COLUMNS: &str = "id, url, final_url, file_name, dest_dir, temp_path, kind, status, \
      total_bytes, downloaded_bytes, etag, last_modified, expected_sha256, hash_state, connections, \
-     error_json, created_at, updated_at, completed_at";
+     error_json, created_at, updated_at, completed_at, parent_id, max_request_bytes, \
+     request_headers_json";
+
+/// Danh sách cho giao diện, đếm trạng thái, khôi phục: chỉ task gốc (task con đi theo cha).
+const TOP_LEVEL: &str = "parent_id IS NULL";
 
 #[derive(Debug)]
 pub struct Journal {
@@ -149,13 +165,21 @@ impl Journal {
         let etag = task.etag.as_deref();
         let last_modified = task.last_modified.as_deref();
         let expected_sha256 = task.expected_sha256.as_deref();
+        let max_request_bytes = task.max_request_bytes.map(to_i64).transpose()?;
+        let headers_json = if task.request_headers.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&task.request_headers)?)
+        };
         let conn = self.conn()?;
         conn.execute(
             "INSERT INTO tasks (
                 id, url, final_url, file_name, dest_dir, temp_path, kind, status,
                 total_bytes, downloaded_bytes, etag, last_modified, expected_sha256,
-                hash_state, connections, error_json, created_at, updated_at, completed_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                hash_state, connections, error_json, created_at, updated_at, completed_at,
+                parent_id, max_request_bytes, request_headers_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                ?18, ?19, ?20, ?21, ?22)
              ON CONFLICT(id) DO UPDATE SET
                 url = excluded.url,
                 final_url = excluded.final_url,
@@ -174,7 +198,10 @@ impl Journal {
                 error_json = excluded.error_json,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
-                completed_at = excluded.completed_at",
+                completed_at = excluded.completed_at,
+                parent_id = excluded.parent_id,
+                max_request_bytes = excluded.max_request_bytes,
+                request_headers_json = excluded.request_headers_json",
             params![
                 &task.id,
                 &task.url,
@@ -195,6 +222,9 @@ impl Journal {
                 task.created_at,
                 task.updated_at,
                 task.completed_at,
+                task.parent_id.as_deref(),
+                max_request_bytes,
+                headers_json,
             ],
         )?;
         Ok(())
@@ -210,22 +240,43 @@ impl Journal {
         }
     }
 
+    /// Task gốc cho danh sách (không gồm task con ẩn).
     pub fn list_tasks(&self) -> Result<Vec<DownloadTask>> {
         let conn = self.conn()?;
-        collect_tasks(&conn, "SELECT {columns} FROM tasks ORDER BY created_at DESC, id ASC")
+        collect_tasks(
+            &conn,
+            &format!("SELECT {{columns}} FROM tasks WHERE {TOP_LEVEL} ORDER BY created_at DESC, id ASC"),
+            [],
+        )
+    }
+
+    /// Task con của `parent_id`, theo thứ tự tạo.
+    pub fn list_children(&self, parent_id: &str) -> Result<Vec<DownloadTask>> {
+        let conn = self.conn()?;
+        collect_tasks(
+            &conn,
+            "SELECT {columns} FROM tasks WHERE parent_id = ?1 ORDER BY created_at ASC, id ASC",
+            [parent_id],
+        )
     }
 
     pub fn recoverable_tasks(&self) -> Result<Vec<DownloadTask>> {
         let conn = self.conn()?;
         collect_tasks(
             &conn,
-            "SELECT {columns} FROM tasks WHERE status IN ('queued', 'paused') ORDER BY created_at ASC",
+            &format!(
+                "SELECT {{columns}} FROM tasks WHERE status IN ('queued', 'paused') AND {TOP_LEVEL}
+                 ORDER BY created_at ASC"
+            ),
+            [],
         )
     }
 
     pub fn status_counts(&self) -> Result<Vec<(TaskStatus, u64)>> {
         let conn = self.conn()?;
-        let mut statement = conn.prepare("SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
+        let mut statement = conn.prepare(&format!(
+            "SELECT status, COUNT(*) FROM tasks WHERE {TOP_LEVEL} GROUP BY status"
+        ))?;
         let mut counts: Vec<(TaskStatus, u64)> =
             TaskStatus::ALL.into_iter().map(|status| (status, 0)).collect();
         let mut rows = statement.query([])?;
@@ -239,6 +290,7 @@ impl Journal {
         Ok(counts)
     }
 
+    /// Xoá task; task con (và đoạn của chúng) xoá theo nhờ khoá ngoại.
     pub fn delete_task(&self, id: &str) -> Result<()> {
         let conn = self.conn()?;
         let changed = conn.execute("DELETE FROM tasks WHERE id = ?1", [id])?;
@@ -246,6 +298,23 @@ impl Journal {
             return Err(Error::NotFound(format!("task {id}")));
         }
         Ok(())
+    }
+
+    /// Như `delete_task` nhưng trả về các task con vừa xoá để dọn file tạm của chúng.
+    pub fn delete_task_with_children(&self, id: &str) -> Result<Vec<DownloadTask>> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction()?;
+        let children = collect_tasks(
+            &transaction,
+            "SELECT {columns} FROM tasks WHERE parent_id = ?1 ORDER BY created_at ASC, id ASC",
+            [id],
+        )?;
+        let changed = transaction.execute("DELETE FROM tasks WHERE id = ?1", [id])?;
+        if changed == 0 {
+            return Err(Error::NotFound(format!("task {id}")));
+        }
+        transaction.commit()?;
+        Ok(children)
     }
 
     pub fn set_task_status(&self, id: &str, status: TaskStatus) -> Result<()> {
@@ -478,10 +547,14 @@ impl Journal {
     }
 }
 
-fn collect_tasks(conn: &Connection, query: &str) -> Result<Vec<DownloadTask>> {
+fn collect_tasks(
+    conn: &Connection,
+    query: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<DownloadTask>> {
     let query = query.replace("{columns}", TASK_COLUMNS);
     let mut statement = conn.prepare(&query)?;
-    let mut rows = statement.query([])?;
+    let mut rows = statement.query(params)?;
     let mut tasks = Vec::new();
     while let Some(row) = rows.next()? {
         tasks.push(task_from_row(row)?);
@@ -500,6 +573,14 @@ fn task_from_row(row: &Row<'_>) -> Result<DownloadTask> {
     let error = match row.get::<_, Option<String>>(15)? {
         Some(json) => Some(serde_json::from_str::<TaskError>(&json)?),
         None => None,
+    };
+    let max_request_bytes = row
+        .get::<_, Option<i64>>(20)?
+        .map(|value| from_i64(value, "max_request_bytes"))
+        .transpose()?;
+    let request_headers = match row.get::<_, Option<String>>(21)? {
+        Some(json) => serde_json::from_str::<Vec<RequestHeader>>(&json)?,
+        None => Vec::new(),
     };
     let task = DownloadTask {
         id: row.get(0)?,
@@ -521,6 +602,9 @@ fn task_from_row(row: &Row<'_>) -> Result<DownloadTask> {
         created_at: row.get(16)?,
         updated_at: row.get(17)?,
         completed_at: row.get(18)?,
+        parent_id: row.get(19)?,
+        max_request_bytes,
+        request_headers,
     };
     task.validate()?;
     Ok(task)

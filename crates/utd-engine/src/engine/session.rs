@@ -12,9 +12,14 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::adaptive::{ConnectionGate, Controller, Sample, Tuning};
+use super::content::{
+    empty_response, file_is_page, looks_like_html, not_a_file, page_check, sniff_remote,
+    PageCheck,
+};
 use super::file::{move_no_clobber, target_path, PartFile};
 use super::http::{host_key, probe, sanitize_suggested_name, Probe};
 use super::limiter::Limiter;
+use super::transport::{plain_policy, scoped_policy, Transport};
 use super::verify::{sha256_file, HashOutcome};
 use super::worker::{
     run_segment, RetryPolicy, SegmentFailure, SegmentJob, SegmentRuntime, StreamJob,
@@ -39,6 +44,8 @@ const MIN_IDLE_PIECE: u64 = MIN_SEGMENT_BYTES;
 pub struct DownloadEngine {
     journal: Arc<Journal>,
     client: Client,
+    /// Cho task có header riêng: dừng ở chuyển hướng sang origin khác (xem `Transport`).
+    scoped_client: Client,
     limiter: Arc<Limiter>,
     options: EngineOptions,
 }
@@ -47,11 +54,21 @@ enum SessionEnd {
     Completed,
     Paused,
     Failed(TaskError),
+    /// Không phải file (AC-06): bỏ file tạm rồi báo lỗi.
+    Rejected(TaskError),
+}
+
+/// Kết quả soát "link là trang web" sau khi dò.
+enum Screen {
+    /// Là file; `true` ⇒ xem đầu file lúc tải xong.
+    Pass(bool),
+    Reject(TaskError),
+    Cancelled,
 }
 
 #[derive(Clone)]
 struct SegmentContext {
-    client: Client,
+    transport: Transport,
     total: u64,
     url: Url,
     host: String,
@@ -70,7 +87,7 @@ impl SegmentContext {
         segment: Arc<SegmentRuntime>,
     ) {
         let job = SegmentJob {
-            client: self.client.clone(),
+            transport: self.transport.clone(),
             total: self.total,
             url: self.url.clone(),
             host: self.host.clone(),
@@ -92,16 +109,8 @@ impl SegmentContext {
 impl DownloadEngine {
     pub fn new(journal: Arc<Journal>, options: EngineOptions) -> Result<Self> {
         options.validate()?;
-        // HTTP/1.1: mỗi đoạn một kết nối TCP riêng như IDM. HTTP/2 dồn mọi đoạn vào một
-        // kết nối, server giới hạn tốc độ theo kết nối thì thêm "kết nối" cũng không nhanh hơn.
-        let client = Client::builder()
-            .user_agent(&options.user_agent)
-            .connect_timeout(options.connect_timeout)
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .pool_max_idle_per_host(usize::from(options.max_connections))
-            .http1_only()
-            .build()
-            .map_err(|error| Error::InvalidInput(format!("http client: {error}")))?;
+        let client = build_client(&options, plain_policy())?;
+        let scoped_client = build_client(&options, scoped_policy())?;
         let limiter = Arc::new(Limiter::new(
             usize::from(options.global_connections),
             usize::from(options.host_connections),
@@ -109,9 +118,20 @@ impl DownloadEngine {
         Ok(Self {
             journal,
             client,
+            scoped_client,
             limiter,
             options,
         })
+    }
+
+    fn transport(&self, task: &DownloadTask, url: &Url) -> Result<Transport> {
+        Transport::new(
+            &self.client,
+            &self.scoped_client,
+            url,
+            &task.request_headers,
+            task.max_request_bytes,
+        )
     }
 
     pub fn options(&self) -> &EngineOptions {
@@ -147,6 +167,11 @@ impl DownloadEngine {
             task.expected_sha256 = Some(hash.to_ascii_lowercase());
             task.hash_state = HashState::Pending;
         }
+        if let Some(parent_id) = request.parent_id {
+            task = task.with_parent(parent_id);
+        }
+        task.max_request_bytes = request.max_request_bytes;
+        task.request_headers = request.request_headers;
         task.validate()?;
         self.journal.save_task(&task)?;
         Ok(task)
@@ -205,7 +230,8 @@ impl DownloadEngine {
         emit_task(&control, &task);
 
         let url = validate_url(&task.url)?;
-        let probe = match self.probe_with_retry(&url, &control).await {
+        let transport = self.transport(&task, &url)?;
+        let probe = match self.probe_with_retry(&transport, &url, &control).await {
             Ok(probe) => probe,
             Err(error) => {
                 if control.cancel.is_cancelled() {
@@ -245,6 +271,12 @@ impl DownloadEngine {
         task.validate()?;
         self.journal.save_task(&task)?;
 
+        let sniff = match self.screen_page(&transport, &task, &probe, &control).await {
+            Screen::Pass(sniff) => sniff,
+            Screen::Reject(error) => return self.fail(task, error, &control),
+            Screen::Cancelled => return self.pause(task, &control),
+        };
+
         let target = target_path(&task.dest_dir, &task.file_name);
         if target.exists() {
             return self.fail(
@@ -263,7 +295,7 @@ impl DownloadEngine {
             task.downloaded_bytes = 0;
             let file = self.open_part(&task, Some(0)).await?;
             file.reset(Some(0))?;
-            return self.finish(task, &control).await;
+            return self.finish(task, &control, sniff).await;
         }
 
         // `task.connections` chỉ là trần; số kết nối thật do bộ điều khiển tự chọn.
@@ -314,7 +346,7 @@ impl DownloadEngine {
             self.journal.save_task(&task)?;
             emit_task(&control, &task);
             if task.downloaded_bytes >= total {
-                return self.finish(task, &control).await;
+                return self.finish(task, &control, sniff).await;
             }
             let end = self
                 .run_segmented(
@@ -322,12 +354,13 @@ impl DownloadEngine {
                     &control,
                     segments,
                     file,
+                    transport,
                     probe.url,
                     total,
                     max_connections,
                 )
                 .await?;
-            return self.conclude(task, control, end).await;
+            return self.conclude(task, control, end, sniff).await;
         }
 
         self.journal.reset_task_progress(&task.id)?;
@@ -339,26 +372,69 @@ impl DownloadEngine {
         let file = self.open_part(&task, task.total_bytes).await?;
         file.reset(task.total_bytes)?;
         let end = self
-            .run_single(&mut task, &control, file, probe.url)
+            .run_single(&mut task, &control, file, transport, probe)
             .await?;
-        self.conclude(task, control, end).await
+        self.conclude(task, control, end, sniff).await
     }
 
     async fn conclude(
         &self,
-        task: DownloadTask,
+        mut task: DownloadTask,
         control: DownloadControl,
         end: SessionEnd,
+        sniff: bool,
     ) -> Result<DownloadOutcome> {
         match end {
-            SessionEnd::Completed => self.finish(task, &control).await,
+            SessionEnd::Completed => self.finish(task, &control, sniff).await,
             SessionEnd::Paused => self.pause(task, &control),
             SessionEnd::Failed(error) => self.fail(task, error, &control),
+            SessionEnd::Rejected(error) => {
+                self.discard_part(&mut task).await?;
+                self.fail(task, error, &control)
+            }
         }
+    }
+
+    /// AC-06: server nói HTML (mà tên không phải trang web) ⇒ đọc thử đầu nội dung; là trang
+    /// thật hoặc rỗng thì từ chối trước khi tải. Server không nói kiểu ⇒ xem đầu file khi xong.
+    async fn screen_page(
+        &self,
+        transport: &Transport,
+        task: &DownloadTask,
+        probe: &Probe,
+        control: &DownloadControl,
+    ) -> Screen {
+        match page_check(&task.file_name, probe.content_type.as_deref(), probe.attachment) {
+            PageCheck::Skip => Screen::Pass(false),
+            PageCheck::Finish => Screen::Pass(true),
+            PageCheck::Probe if task.total_bytes == Some(0) => Screen::Reject(not_a_file()),
+            PageCheck::Probe => {
+                let sniffed = tokio::select! {
+                    sniffed = sniff_remote(transport, &probe.url, self.options.connect_timeout) => sniffed,
+                    _ = control.cancel.cancelled() => return Screen::Cancelled,
+                };
+                match sniffed {
+                    Some(prefix) if prefix.is_empty() || looks_like_html(&prefix) => {
+                        Screen::Reject(not_a_file())
+                    }
+                    Some(_) => Screen::Pass(false),
+                    None => Screen::Pass(true),
+                }
+            }
+        }
+    }
+
+    /// Bỏ file tạm và tiến độ của một lượt tải không ra file.
+    async fn discard_part(&self, task: &mut DownloadTask) -> Result<()> {
+        let _ = tokio::fs::remove_file(&task.temp_path).await;
+        self.journal.reset_task_progress(&task.id)?;
+        task.downloaded_bytes = 0;
+        Ok(())
     }
 
     async fn probe_with_retry(
         &self,
+        transport: &Transport,
         url: &Url,
         control: &DownloadControl,
     ) -> std::result::Result<Probe, TaskError> {
@@ -366,7 +442,7 @@ impl DownloadEngine {
         let mut attempts = 0;
         loop {
             let probed = tokio::select! {
-                result = probe(&self.client, url, self.options.connect_timeout) => result,
+                result = probe(transport, url, self.options.connect_timeout) => result,
                 _ = control.cancel.cancelled() => return Err(cancelled_error()),
             };
             match probed {
@@ -403,6 +479,7 @@ impl DownloadEngine {
         control: &DownloadControl,
         segments: Vec<Segment>,
         file: Arc<PartFile>,
+        transport: Transport,
         url: Url,
         total: u64,
         max_connections: u16,
@@ -431,7 +508,7 @@ impl DownloadEngine {
             total_downloaded(&runtimes),
         );
         let context = SegmentContext {
-            client: self.client.clone(),
+            transport,
             total,
             url,
             host,
@@ -653,14 +730,16 @@ impl DownloadEngine {
         task: &mut DownloadTask,
         control: &DownloadControl,
         file: Arc<PartFile>,
-        url: Url,
+        transport: Transport,
+        probe: Probe,
     ) -> Result<SessionEnd> {
         let cancel = control.cancel.clone();
         let downloaded = Arc::new(AtomicU64::new(0));
-        let host = host_key(&url);
+        let host = host_key(&probe.url);
         let job = StreamJob {
-            client: self.client.clone(),
-            url,
+            transport,
+            url: probe.url,
+            ranged: probe.supports_ranges,
             host,
             file,
             limiter: self.limiter.clone(),
@@ -729,6 +808,10 @@ impl DownloadEngine {
         }
         task.downloaded_bytes = bytes;
         if task.total_bytes.is_none() {
+            // Server không báo rõ 0 byte mà cũng không gửi gì (AC-06).
+            if bytes == 0 {
+                return Ok(SessionEnd::Rejected(empty_response()));
+            }
             task.total_bytes = Some(bytes);
         }
         if task.total_bytes.is_some_and(|total| total != bytes) {
@@ -763,10 +846,12 @@ impl DownloadEngine {
         Ok(())
     }
 
+    /// `sniff`: server không nói kiểu nội dung ⇒ file mở đầu như trang HTML thì không lưu (AC-06).
     async fn finish(
         &self,
         mut task: DownloadTask,
         control: &DownloadControl,
+        sniff: bool,
     ) -> Result<DownloadOutcome> {
         let total = task.total_bytes.unwrap_or(task.downloaded_bytes);
         task.total_bytes = Some(total);
@@ -811,6 +896,11 @@ impl DownloadEngine {
             }
         } else {
             task.hash_state = HashState::Unavailable;
+            if sniff && file_is_page(&temp).await {
+                self.discard_part(&mut task).await?;
+                task.hash_state = HashState::Pending;
+                return self.fail(task, not_a_file(), control);
+            }
         }
 
         let guard = safety::inspect(&temp, &task.file_name).map_err(Error::Io)?;
@@ -924,6 +1014,19 @@ impl DownloadEngine {
         emit_task(control, &task);
         Ok(DownloadOutcome::Failed(task))
     }
+}
+
+/// HTTP/1.1: mỗi đoạn một kết nối TCP riêng như IDM. HTTP/2 dồn mọi đoạn vào một kết nối,
+/// server giới hạn tốc độ theo kết nối thì thêm "kết nối" cũng không nhanh hơn.
+fn build_client(options: &EngineOptions, redirect: reqwest::redirect::Policy) -> Result<Client> {
+    Client::builder()
+        .user_agent(&options.user_agent)
+        .connect_timeout(options.connect_timeout)
+        .redirect(redirect)
+        .pool_max_idle_per_host(usize::from(options.max_connections))
+        .http1_only()
+        .build()
+        .map_err(|error| Error::InvalidInput(format!("http client: {error}")))
 }
 
 fn metadata_changed(task: &DownloadTask, probe: &Probe) -> bool {

@@ -118,3 +118,31 @@ export async function pickFolder(defaultPath?: string): Promise<string | null> {
   })
   return typeof picked === "string" ? picked : null
 }
+
+/** Mã đầu lỗi của `add_download` khi URL là trang video (src-tauri/src/media_pages.rs). */
+const MEDIA_PAGE_ERROR = "media_page:"
+
+/** `add_download` từ chối vì URL là trang video: mở hộp Tải media thay vì báo lỗi. */
+export function isMediaPageError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.startsWith(MEDIA_PAGE_ERROR)
+}
+
+/** Link trang video gửi từ trình duyệt (chuột phải / popup của extension). */
+interface MediaRequest {
+  url: string
+  pageUrl?: string
+}
+
+export async function subscribeMediaRequest(
+  onRequest: (request: MediaRequest) => void,
+): Promise<UnlistenFn> {
+  return listen<MediaRequest>("utd://media-request", (event) =>
+    onRequest(event.payload),
+  )
+}
+
+/** Link trình duyệt gửi tới lúc giao diện chưa kịp nghe (UTD vừa mở); gọi một lần sau khi đã nghe. */
+export async function takeMediaRequest(): Promise<MediaRequest | null> {
+  return invoke<MediaRequest | null>("take_media_request")
+}

@@ -3,18 +3,16 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc;
 use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
-use utd_engine::{
-    now_ms, validate_file_name, DownloadTask, ErrorClass, HashState, Journal,
-    ProgressSnapshot, TaskError, TaskStatus,
-};
+use utd_engine::{now_ms, ErrorClass, Journal, TaskError, TaskStatus};
 
-use crate::events::{PROGRESS_EVENT, TASK_EVENT};
-use crate::media::{ffmpeg_location, tokio_command, tools};
+use crate::media::finish::{clamp, emit_progress, emit_task, error, fail, finalize, pause};
+use crate::media::{fast, ffmpeg_location, tokio_command, tools};
+use crate::state::AppState;
 
 enum StreamMessage {
     Out(String),
@@ -84,6 +82,36 @@ pub async fn run(
         let downloaded = task.downloaded_bytes;
         pause(&app, &journal, &mut task, downloaded)?;
         return Ok(());
+    }
+
+    // Luồng http(s) thường: engine UTD tự tải nhiều kết nối, nhanh hơn yt-dlp (một kết nối/luồng).
+    let resolver = fast::YtDlp(&tools);
+    let fast_path = fast::Fast {
+        engine: app.state::<AppState>().engine.clone(),
+        journal: journal.clone(),
+        sink: &app,
+        resolver: &resolver,
+        ffmpeg: tools.ffmpeg.clone(),
+        cancel: cancel.clone(),
+    };
+    match fast::run(&fast_path, &mut task, &job).await {
+        Ok(fast::FastEnd::Handled) => return Ok(()),
+        Ok(fast::FastEnd::Fallback) => {}
+        // Lỗi journal/kiểm dữ liệu: báo lỗi trên task (Tiếp tục được), không để kẹt ở "đang dò".
+        Err(problem) => {
+            log::warn!("media: đường tải thẳng lỗi ({problem})");
+            fail(
+                &app,
+                &journal,
+                &mut task,
+                error(
+                    ErrorClass::Transient,
+                    "media.failed",
+                    "Không tải được luồng media. Bấm Tiếp tục để thử lại.",
+                ),
+            )?;
+            return Ok(());
+        }
     }
 
     task.status = TaskStatus::Downloading;
@@ -292,109 +320,7 @@ pub async fn run(
             }
         },
     };
-    let destination_canonical = destination
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
-    let file_canonical = path.canonicalize().map_err(|error| error.to_string())?;
-    if !file_canonical.starts_with(&destination_canonical) {
-        fail(
-            &app,
-            &journal,
-            &mut task,
-            TaskError {
-                class: ErrorClass::Security,
-                code: "media.path_escape".into(),
-                message: "File media được ghi ra ngoài thư mục đã chọn.".into(),
-            },
-        )?;
-        return Ok(());
-    }
-    let size = std::fs::metadata(&file_canonical)
-        .map_err(|error| error.to_string())?
-        .len();
-    if size == 0 {
-        fail(
-            &app,
-            &journal,
-            &mut task,
-            TaskError {
-                class: ErrorClass::Permanent,
-                code: "media.empty_output".into(),
-                message: "File media tải về rỗng.".into(),
-            },
-        )?;
-        return Ok(());
-    }
-    let actual_name = file_canonical
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(&task.file_name)
-        .to_string();
-    if validate_file_name(&actual_name).is_ok() {
-        task.file_name = actual_name;
-    }
-    let guard = match utd_engine::safety::inspect(&file_canonical, &task.file_name) {
-        Ok(report) => report,
-        Err(_) => {
-            fail(
-                &app,
-                &journal,
-                &mut task,
-                TaskError {
-                    class: ErrorClass::Permanent,
-                    code: "guard.read".into(),
-                    message: "Không đọc được file để kiểm tra an toàn.".into(),
-                },
-            )?;
-            return Ok(());
-        }
-    };
-    if guard.action == utd_engine::safety::GuardAction::Quarantine {
-        let quarantine = crate::ipc::data_dir()
-            .map(|directory| directory.join("quarantine"))
-            .ok();
-        if utd_engine::safety::quarantine(&file_canonical, &task.file_name, quarantine.as_deref())
-            .is_err()
-        {
-            task.status = TaskStatus::Failed;
-            task.error = Some(TaskError {
-                class: ErrorClass::Permanent,
-                code: "guard.quarantine_failed".into(),
-                message: "Không chuyển được file nguy hiểm vào khu cách ly.".into(),
-            });
-            task.updated_at = now_ms();
-            journal.save_task(&task).map_err(|error| error.to_string())?;
-            emit_task(&app, &task);
-            return Ok(());
-        }
-        task.status = TaskStatus::Quarantined;
-        task.total_bytes = Some(size);
-        task.downloaded_bytes = size;
-        task.error = Some(TaskError {
-            class: ErrorClass::Security,
-            code: guard.code,
-            message: guard.reason,
-        });
-        task.updated_at = now_ms();
-        journal.save_task(&task).map_err(|error| error.to_string())?;
-        emit_task(&app, &task);
-        return Ok(());
-    }
-    let _ = utd_engine::safety::mark_of_the_web(&file_canonical);
-    task.status = TaskStatus::Completed;
-    task.total_bytes = Some(size);
-    task.downloaded_bytes = size;
-    task.hash_state = HashState::Unavailable;
-    task.completed_at = Some(now_ms());
-    task.updated_at = now_ms();
-    task.error = None;
-    journal.save_task(&task).map_err(|error| error.to_string())?;
-    emit_task(&app, &task);
-    if let Ok(metadata) = std::fs::metadata(&task.temp_path)
-        && metadata.is_file()
-    {
-        let _ = std::fs::remove_file(&task.temp_path);
-    }
+    finalize(&app, &journal, &mut task, &destination, &path)?;
     let _ = out_task.await;
     let _ = err_task.await;
     Ok(())
@@ -496,11 +422,8 @@ fn parse_u64(value: &str) -> Option<u64> {
     value.parse::<f64>().ok().map(|number| number.max(0.0) as u64)
 }
 
-fn clamp(downloaded: u64, total: Option<u64>) -> u64 {
-    total.map_or(downloaded, |total| downloaded.min(total))
-}
-
-fn classify_failure(stderr: &str) -> TaskError {
+/// Câu lỗi ngắn tiếng Việt (mã `media.*` Doctor hiểu) từ stderr của yt-dlp.
+pub(super) fn classify_failure(stderr: &str) -> TaskError {
     let message = stderr.to_ascii_lowercase();
     if message.contains("drm") {
         return error(
@@ -580,69 +503,6 @@ fn classify_failure(stderr: &str) -> TaskError {
         "media.failed",
         "Không tải được media. Kiểm tra URL rồi thử lại.",
     )
-}
-
-fn error(class: ErrorClass, code: &str, message: &str) -> TaskError {
-    TaskError {
-        class,
-        code: code.into(),
-        message: message.into(),
-    }
-}
-
-fn emit_task(app: &AppHandle, task: &DownloadTask) {
-    let _ = app.emit(TASK_EVENT, task);
-}
-
-fn emit_progress(
-    app: &AppHandle,
-    task: &DownloadTask,
-    downloaded: u64,
-    speed: u64,
-) {
-    let _ = app.emit(
-        PROGRESS_EVENT,
-        ProgressSnapshot {
-            task_id: task.id.clone(),
-            status: task.status,
-            downloaded_bytes: downloaded,
-            total_bytes: task.total_bytes,
-            bytes_per_second: speed,
-            connections: 1,
-            segments_done: 0,
-            segments_total: 0,
-            hash_state: task.hash_state,
-        },
-    );
-}
-
-fn fail(
-    app: &AppHandle,
-    journal: &Journal,
-    task: &mut DownloadTask,
-    task_error: TaskError,
-) -> Result<(), String> {
-    task.status = TaskStatus::Failed;
-    task.error = Some(task_error);
-    task.updated_at = now_ms();
-    journal.save_task(task).map_err(|error| error.to_string())?;
-    emit_task(app, task);
-    Ok(())
-}
-
-fn pause(
-    app: &AppHandle,
-    journal: &Journal,
-    task: &mut DownloadTask,
-    downloaded: u64,
-) -> Result<(), String> {
-    task.status = TaskStatus::Paused;
-    task.downloaded_bytes = clamp(downloaded, task.total_bytes);
-    task.updated_at = now_ms();
-    task.error = None;
-    journal.save_task(task).map_err(|error| error.to_string())?;
-    emit_task(app, task);
-    Ok(())
 }
 
 #[cfg(test)]

@@ -262,6 +262,7 @@ fn delete_task(journal: &Journal, data: &Path, task_id: &str) -> Result<(), Stri
     if paths::part_name(&task).is_ok() {
         doomed.extend(paths::part_file(&task)?);
     }
+    doomed.extend(media_part_files(journal, &task)?);
     if !doomed.is_empty() {
         shell::with_com(|| shell::recycle(&doomed))?;
     }
@@ -269,6 +270,27 @@ fn delete_task(journal: &Journal, data: &Path, task_id: &str) -> Result<(), Stri
         Ok(()) | Err(utd_engine::Error::NotFound(_)) => Ok(()),
         Err(_) => Err(text::SAVE_FAILED.into()),
     }
+}
+
+/// Task media: file của các luồng con ẩn (`.part`, luồng đã tải xong) cũng là của task này. Dòng
+/// của chúng journal tự xoá theo task cha. Luồng chưa xong mà có file trùng tên thì không đụng.
+fn media_part_files(journal: &Journal, task: &DownloadTask) -> Result<Vec<PathBuf>, String> {
+    if task.kind != TaskKind::Media {
+        return Ok(Vec::new());
+    }
+    let children = journal
+        .list_children(&task.id)
+        .map_err(|_| text::FAILED.to_string())?;
+    let mut files = Vec::new();
+    for child in &children {
+        if child.status == TaskStatus::Completed {
+            files.extend(paths::final_file(child)?);
+        }
+        if paths::part_name(child).is_ok() {
+            files.extend(paths::part_file(child)?);
+        }
+    }
+    Ok(files)
 }
 
 /// Icon thật của file cho từng task: `task_id → data:image/png;base64,…`. Chỉ trả task lấy được icon.
@@ -348,9 +370,19 @@ async fn blocking<T: Send + 'static>(
 mod tests {
     use super::*;
 
+    /// Thư mục thử, xoá sau cùng (journal SQLite phải đóng trước thì Windows mới cho xoá).
+    struct TempRoot(PathBuf);
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     struct Fixture {
         root: PathBuf,
         journal: Journal,
+        _cleanup: TempRoot,
     }
 
     impl Fixture {
@@ -358,7 +390,11 @@ mod tests {
             let root = std::env::temp_dir().join(format!("utd-files-cmd-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(root.join("Tải về")).unwrap();
             let journal = Journal::open(root.join("data").join("utd.db")).unwrap();
-            Self { root, journal }
+            Self {
+                _cleanup: TempRoot(root.clone()),
+                root,
+                journal,
+            }
         }
 
         fn downloads(&self) -> PathBuf {
@@ -377,12 +413,6 @@ mod tests {
             }
             self.journal.save_task(&task).unwrap();
             task
-        }
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.root);
         }
     }
 
@@ -495,6 +525,43 @@ mod tests {
             assert!(Busy::claim(&running, "t2").is_err());
         }
         assert!(!running.contains("t2"));
+    }
+
+    #[test]
+    fn media_delete_also_takes_its_hidden_stream_files() {
+        let fx = Fixture::new();
+        let mut media = fx.task("Clip.mp4", TaskStatus::Paused);
+        media.kind = TaskKind::Media;
+        fx.journal.save_task(&media).unwrap();
+        let dir = fx.downloads().to_string_lossy().into_owned();
+        let child = |name: &str| {
+            DownloadTask::new("https://rr1.googlevideo.com/videoplayback", name, dir.clone(), 16)
+                .unwrap()
+                .with_parent(media.id.clone())
+        };
+        let video = child("Clip.f399.mp4");
+        let mut audio = child("Clip.f251.webm");
+        audio.status = TaskStatus::Completed;
+        audio.hash_state = utd_engine::HashState::Unavailable;
+        audio.total_bytes = Some(4);
+        audio.downloaded_bytes = 4;
+        fx.journal.save_task(&video).unwrap();
+        fx.journal.save_task(&audio).unwrap();
+        std::fs::write(&video.temp_path, b"part").unwrap();
+        // Luồng hình chưa xong mà có file trùng tên: không phải của UTD.
+        std::fs::write(fx.downloads().join("Clip.f399.mp4"), b"user").unwrap();
+        std::fs::write(fx.downloads().join("Clip.f251.webm"), b"done").unwrap();
+
+        let mut names: Vec<String> = media_part_files(&fx.journal, &media)
+            .unwrap()
+            .iter()
+            .map(|file| file.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        let part = Path::new(&video.temp_path).file_name().unwrap();
+        assert_eq!(names, ["Clip.f251.webm", &*part.to_string_lossy()]);
+        let plain = fx.task("d.zip", TaskStatus::Paused);
+        assert!(media_part_files(&fx.journal, &plain).unwrap().is_empty());
     }
 
     #[test]

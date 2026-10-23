@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use utd_engine::{DownloadControl, DownloadEngine, DownloadRequest, DownloadTask, TaskKind};
+use utd_engine::{
+    DownloadControl, DownloadEngine, DownloadRequest, DownloadTask, Journal, TaskKind,
+};
 
 use crate::events::{emit_engine_event, BridgeError, ERROR_EVENT};
 use crate::state::{AppState, RunningTasks};
@@ -41,6 +43,10 @@ pub(crate) fn enqueue_download(
     running: Arc<RunningTasks>,
     input: AddDownloadInput,
 ) -> Result<DownloadTask, String> {
+    // Trang video tải bằng HTTP chỉ được trang HTML: trả mã `media_page` để giao diện mở hộp Tải media.
+    if crate::media_pages::is_media_page(&input.url) {
+        return Err(crate::media_pages::media_page_error());
+    }
     let dest_dir = match input.dest_dir.filter(|value| !value.trim().is_empty()) {
         Some(value) => checked_dest_dir(&value, &app_data_dir(&app)?)?,
         None => suggested_download_dir(&app)?,
@@ -125,16 +131,23 @@ pub fn remove_download(
     if state.running.contains(&task_id) {
         return Err("pause the download before removing it".into());
     }
-    let task = state
-        .journal
-        .load_task(&task_id)
+    remove_task(&state.journal, &task_id, delete_files.unwrap_or(false))
+}
+
+/// Bỏ task khỏi journal. Task media luôn dọn luồng tạm của nó (`.part` và luồng đã tải của task
+/// con ẩn): file nội bộ, không hiện trong danh sách, bỏ lại thì không ai dọn.
+fn remove_task(journal: &Journal, task_id: &str, delete_files: bool) -> Result<(), String> {
+    let task = journal
+        .load_task(task_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "download not found".to_string())?;
-    state
-        .journal
-        .delete_task(&task_id)
+    if task.kind == TaskKind::Media {
+        crate::media::parts::discard_parts(journal, task_id);
+    }
+    journal
+        .delete_task(task_id)
         .map_err(|error| error.to_string())?;
-    if delete_files.unwrap_or(false) {
+    if delete_files {
         let target = Path::new(&task.dest_dir).join(&task.file_name);
         let _ = std::fs::remove_file(target);
         let _ = std::fs::remove_file(&task.temp_path);
@@ -624,6 +637,45 @@ mod tests {
                 );
             }
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn removing_a_paused_media_task_cleans_its_hidden_streams() {
+        let root = scratch();
+        let folder = root.join("Tải về");
+        std::fs::create_dir_all(&folder).unwrap();
+        let journal = Journal::open(root.join("data").join("utd.db")).unwrap();
+        let dir = text(&folder);
+        let media = DownloadTask::new("https://www.youtube.com/watch?v=x", "Clip.mp4", &*dir, 1)
+            .unwrap()
+            .with_kind(TaskKind::Media);
+        journal.save_task(&media).unwrap();
+        let child = |name: &str| {
+            DownloadTask::new("https://rr1.googlevideo.com/videoplayback", name, &*dir, 16)
+                .unwrap()
+                .with_parent(media.id.clone())
+        };
+        let video = child("Clip.f399.mp4");
+        let mut audio = child("Clip.f251.webm");
+        audio.status = utd_engine::TaskStatus::Completed;
+        audio.hash_state = utd_engine::HashState::Unavailable;
+        audio.total_bytes = Some(4);
+        audio.downloaded_bytes = 4;
+        journal.save_task(&video).unwrap();
+        journal.save_task(&audio).unwrap();
+        std::fs::write(&video.temp_path, b"part").unwrap();
+        std::fs::write(folder.join("Clip.f251.webm"), b"done").unwrap();
+
+        remove_task(&journal, &media.id, false).unwrap();
+        assert_eq!(
+            std::fs::read_dir(&folder).unwrap().count(),
+            0,
+            "luồng tạm đã dọn"
+        );
+        assert!(journal.load_task(&media.id).unwrap().is_none());
+        assert!(journal.list_children(&media.id).unwrap().is_empty());
+        drop(journal);
         let _ = std::fs::remove_dir_all(&root);
     }
 

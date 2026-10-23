@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use reqwest::header::{ACCEPT_ENCODING, CONTENT_RANGE, RANGE};
-use reqwest::{Client, Response, StatusCode};
+use reqwest::header::CONTENT_RANGE;
+use reqwest::{Method, Response, StatusCode};
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -12,6 +12,7 @@ use super::adaptive::{is_throttle, ConnectionGate, GateSlot};
 use super::file::PartFile;
 use super::http::{classify_error, failure_from_status, parse_content_range, RequestFailure};
 use super::limiter::Limiter;
+use super::transport::Transport;
 use crate::model::{ErrorClass, Segment, SegmentStatus, TaskError};
 
 #[derive(Debug, Clone, Copy)]
@@ -141,7 +142,7 @@ impl SegmentRuntime {
 }
 
 pub(crate) struct SegmentJob {
-    pub client: Client,
+    pub transport: Transport,
     pub total: u64,
     pub url: Url,
     pub host: String,
@@ -170,11 +171,10 @@ pub(crate) async fn run_segment(job: SegmentJob) -> Result<(), SegmentFailure> {
         let Some(slot) = job.gate.enter(&job.cancel).await else {
             return Ok(());
         };
-        let Some(next) = job.segment.next_offset() else {
+        if job.segment.is_done() {
             job.segment.mark_status(SegmentStatus::Done);
             return Ok(());
-        };
-        let end = job.segment.end();
+        }
         let Some(limit) = job.limiter.acquire(&job.host, &job.cancel).await else {
             return Ok(());
         };
@@ -183,12 +183,12 @@ pub(crate) async fn run_segment(job: SegmentJob) -> Result<(), SegmentFailure> {
             continue;
         }
         let live = job.gate.connect();
-        let outcome = job.attempt(next, end, &slot).await;
+        let outcome = job.attempt(&slot).await;
         drop(live);
         drop(limit);
         drop(slot);
         match outcome {
-            Attempt::Complete | Attempt::Yielded => attempts = 0,
+            Attempt::Complete | Attempt::Yielded | Attempt::RangeDone => attempts = 0,
             Attempt::Progress(failure) => {
                 job.gate.report(&failure);
                 attempts = 0;
@@ -219,15 +219,40 @@ pub(crate) async fn run_segment(job: SegmentJob) -> Result<(), SegmentFailure> {
 }
 
 impl SegmentJob {
-    async fn attempt(&self, next: u64, end: u64, slot: &GateSlot) -> Attempt {
-        let request = self
-            .client
-            .get(self.url.clone())
-            .header(ACCEPT_ENCODING, "identity")
-            .header(RANGE, format!("bytes={next}-{end}"));
-        let response = match request.send().await {
+    /// Một lượt giữ kết nối: tải tiếp đoạn bằng các yêu cầu nối nhau (mỗi yêu cầu không quá
+    /// trần byte của task), dùng lại cùng kết nối keep-alive giữa các yêu cầu.
+    async fn attempt(&self, slot: &GateSlot) -> Attempt {
+        let mut wrote = false;
+        loop {
+            let Some(next) = self.segment.next_offset() else {
+                return Attempt::Complete;
+            };
+            let end = self.transport.request_end(next, self.segment.end());
+            match self.request(next, end, slot).await {
+                Attempt::RangeDone => {
+                    wrote = true;
+                    if self.cancel.is_cancelled() {
+                        return Attempt::Cancelled;
+                    }
+                    if slot.yield_if_over() {
+                        return Attempt::Yielded;
+                    }
+                }
+                // Lượt này đã tải được một phần: như rớt giữa chừng, thử lại ngay không tính lượt.
+                Attempt::Retry(failure) if wrote && !is_throttle(&failure) => {
+                    return Attempt::Progress(failure);
+                }
+                other => return other,
+            }
+        }
+    }
+
+    async fn request(&self, next: u64, end: u64, slot: &GateSlot) -> Attempt {
+        let range = format!("bytes={next}-{end}");
+        let sent = send_within(&self.transport, &self.url, Some(&range), self.retry.idle_timeout);
+        let response = match sent.await {
             Ok(response) => response,
-            Err(error) => return Attempt::Retry(classify_error(&error)),
+            Err(failure) => return Attempt::Retry(failure),
         };
         let status = response.status();
         if status == StatusCode::PARTIAL_CONTENT {
@@ -257,7 +282,7 @@ impl SegmentJob {
                     "The file size changed on the server.",
                 ));
             }
-            return self.stream(response, slot).await;
+            return self.stream(response, slot, end).await;
         }
         if status.is_success() {
             return Attempt::Fatal(task_error(
@@ -269,7 +294,8 @@ impl SegmentJob {
         Attempt::Retry(failure_from_status(status, response.headers()))
     }
 
-    async fn stream(&self, mut response: Response, slot: &GateSlot) -> Attempt {
+    /// Nhận thân của yêu cầu đã xin tới byte `stop` (gồm).
+    async fn stream(&self, mut response: Response, slot: &GateSlot, stop: u64) -> Attempt {
         let mut wrote = false;
         loop {
             let chunk = tokio::select! {
@@ -278,10 +304,12 @@ impl SegmentJob {
                     Err(_) => return retry_or_progress(idle_failure(), wrote),
                     Ok(Err(error)) => return retry_or_progress(classify_error(&error), wrote),
                     Ok(Ok(None)) => {
-                        return if self.segment.is_done() {
-                            Attempt::Complete
-                        } else {
-                            retry_or_progress(closed_failure(), wrote)
+                        // Thân kết thúc đúng như server khai: hết phần đã xin, hoặc server trả
+                        // một khúc ngắn hơn ⇒ xin tiếp từ chỗ đang dở, không phải lỗi mạng.
+                        return match self.segment.next_offset() {
+                            None => Attempt::Complete,
+                            Some(next) if next > stop || wrote => Attempt::RangeDone,
+                            Some(_) => Attempt::Retry(closed_failure()),
                         };
                     }
                     Ok(Ok(Some(chunk))) => chunk,
@@ -325,7 +353,7 @@ impl SegmentJob {
 }
 
 pub(crate) struct StreamJob {
-    pub client: Client,
+    pub transport: Transport,
     pub url: Url,
     pub host: String,
     pub file: Arc<PartFile>,
@@ -334,10 +362,12 @@ pub(crate) struct StreamJob {
     pub retry: RetryPolicy,
     pub downloaded: Arc<AtomicU64>,
     pub total: Option<u64>,
+    /// Server nhận Range: theo trần byte mỗi yêu cầu của task (nếu có).
+    pub ranged: bool,
 }
 
 impl StreamJob {
-    pub async fn run(self) -> Result<(), SegmentFailure> {
+    pub async fn run(mut self) -> Result<(), SegmentFailure> {
         let mut attempts = 0u32;
         let mut restarts = 0u32;
         loop {
@@ -351,18 +381,23 @@ impl StreamJob {
             let Some(limit) = self.limiter.acquire(&self.host, &self.cancel).await else {
                 return Ok(());
             };
-            let mut request = self
-                .client
-                .get(self.url.clone())
-                .header(ACCEPT_ENCODING, "identity");
-            if position > 0 {
-                request = request.header(RANGE, format!("bytes={position}-"));
-            }
-            let mut response = match request.send().await {
+            let stop = self.request_stop(position);
+            let range = match stop {
+                Some(stop) => Some(format!("bytes={position}-{stop}")),
+                None if position > 0 => Some(format!("bytes={position}-")),
+                None => None,
+            };
+            let sent = send_within(
+                &self.transport,
+                &self.url,
+                range.as_deref(),
+                self.retry.idle_timeout,
+            )
+            .await;
+            let mut response = match sent {
                 Ok(response) => response,
-                Err(error) => {
+                Err(failure) => {
                     drop(limit);
-                    let failure = classify_error(&error);
                     attempts += 1;
                     if attempts >= self.retry.max_attempts {
                         return Err(SegmentFailure { error: failure.error });
@@ -377,7 +412,11 @@ impl StreamJob {
             };
             let status = response.status();
             if status == StatusCode::RANGE_NOT_SATISFIABLE {
-                if self.total.is_some_and(|total| position >= total) {
+                // Có trần mà chưa biết tổng: file hết đúng ở mốc vừa xin.
+                let at_end = self
+                    .total
+                    .map_or(stop.is_some() && position > 0, |total| position >= total);
+                if at_end {
                     return Ok(());
                 }
                 return Err(SegmentFailure {
@@ -388,7 +427,9 @@ impl StreamJob {
                     ),
                 });
             }
+            let mut requested_stop = None;
             if status == StatusCode::PARTIAL_CONTENT {
+                requested_stop = stop;
                 let range = response
                     .headers()
                     .get(CONTENT_RANGE)
@@ -412,16 +453,19 @@ impl StreamJob {
                         ),
                     });
                 }
-                if let (Some(total), Some(server_total)) = (self.total, range.total)
-                    && total != server_total
-                {
-                    return Err(SegmentFailure {
-                        error: task_error(
-                            ErrorClass::Permanent,
-                            "http.size_mismatch",
-                            "The file size changed on the server.",
-                        ),
-                    });
+                match (self.total, range.total) {
+                    (Some(total), Some(server_total)) if total != server_total => {
+                        return Err(SegmentFailure {
+                            error: task_error(
+                                ErrorClass::Permanent,
+                                "http.size_mismatch",
+                                "The file size changed on the server.",
+                            ),
+                        });
+                    }
+                    // Lúc dò chưa biết tổng mà phản hồi Range nói rõ: biết chỗ hết file.
+                    (None, Some(server_total)) => self.total = Some(server_total),
+                    _ => {}
                 }
             } else if status.is_success() {
                 if position > 0 {
@@ -455,12 +499,12 @@ impl StreamJob {
                 continue;
             }
 
-            let outcome = self.stream(&mut response).await;
+            let outcome = self.stream(&mut response, requested_stop).await;
             drop(limit);
             match outcome {
                 Attempt::Complete | Attempt::Yielded => return Ok(()),
                 Attempt::Cancelled => return Ok(()),
-                Attempt::Progress(_) => attempts = 0,
+                Attempt::RangeDone | Attempt::Progress(_) => attempts = 0,
                 Attempt::Retry(failure) => {
                     attempts += 1;
                     if attempts >= self.retry.max_attempts {
@@ -477,7 +521,15 @@ impl StreamJob {
         }
     }
 
-    async fn stream(&self, response: &mut Response) -> Attempt {
+    /// Byte cuối (gồm) cho yêu cầu kế tiếp khi task có trần byte và server nhận Range.
+    fn request_stop(&self, position: u64) -> Option<u64> {
+        let cap = self.transport.max_request().filter(|_| self.ranged)?;
+        let stop = position.saturating_add(cap - 1);
+        Some(self.total.map_or(stop, |total| stop.min(total.saturating_sub(1))))
+    }
+
+    /// Nhận thân; `stop` là byte cuối đã xin khi yêu cầu có trần.
+    async fn stream(&self, response: &mut Response, stop: Option<u64>) -> Attempt {
         let mut wrote = false;
         loop {
             let chunk = tokio::select! {
@@ -485,14 +537,7 @@ impl StreamJob {
                 result = timeout(self.retry.idle_timeout, response.chunk()) => match result {
                     Err(_) => return retry_or_progress(idle_failure(), wrote),
                     Ok(Err(error)) => return retry_or_progress(classify_error(&error), wrote),
-                    Ok(Ok(None)) => {
-                        let position = self.downloaded.load(Ordering::Relaxed);
-                        return if self.total.is_some_and(|total| position < total) {
-                            retry_or_progress(closed_failure(), wrote)
-                        } else {
-                            Attempt::Complete
-                        };
-                    }
+                    Ok(Ok(None)) => return self.body_ended(stop, wrote),
                     Ok(Ok(Some(chunk))) => chunk,
                 },
             };
@@ -515,10 +560,31 @@ impl StreamJob {
             wrote = true;
         }
     }
+
+    fn body_ended(&self, stop: Option<u64>, wrote: bool) -> Attempt {
+        let position = self.downloaded.load(Ordering::Relaxed);
+        let finished = match (self.total, stop) {
+            (Some(total), _) => position >= total,
+            // Chưa biết tổng: khúc ngắn hơn phần đã xin chưa chắc là hết file (CDN trả mỗi lần
+            // một khúc) ⇒ xin tiếp; hết thật thì yêu cầu sau nhận 416 hoặc khúc rỗng.
+            (None, Some(_)) => !wrote,
+            (None, None) => true,
+        };
+        if finished {
+            Attempt::Complete
+        } else if stop.is_some_and(|stop| position > stop || wrote) {
+            // Hết phần đã xin, hoặc server trả gọn một khúc ngắn hơn: xin tiếp.
+            Attempt::RangeDone
+        } else {
+            retry_or_progress(closed_failure(), wrote)
+        }
+    }
 }
 
 enum Attempt {
     Complete,
+    /// Xong phần của một yêu cầu có trần, đoạn/file còn tiếp: gửi yêu cầu kế trên cùng kết nối.
+    RangeDone,
     /// Đã tải được một phần rồi kết nối hỏng: thử lại ngay, không tính lượt.
     Progress(RequestFailure),
     /// Nhả kết nối vì đang thừa so với mục tiêu.
@@ -532,6 +598,21 @@ enum WriteResult {
     Complete,
     Progress,
     Disk,
+}
+
+/// Gửi GET, chờ đầu phản hồi tối đa `idle`: kết nối chết lặng (NAT rớt, server treo) không giữ
+/// đoạn mãi; quá hạn thì báo như rớt mạng để thử lại.
+async fn send_within(
+    transport: &Transport,
+    url: &Url,
+    range: Option<&str>,
+    idle: Duration,
+) -> Result<Response, RequestFailure> {
+    match timeout(idle, transport.send(Method::GET, url, range, None)).await {
+        Ok(Ok(response)) => Ok(response),
+        Ok(Err(error)) => Err(classify_error(&error)),
+        Err(_) => Err(idle_failure()),
+    }
 }
 
 fn retry_or_progress(failure: RequestFailure, wrote: bool) -> Attempt {

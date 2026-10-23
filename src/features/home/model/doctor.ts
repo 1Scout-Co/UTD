@@ -16,6 +16,35 @@ export interface DoctorReport {
   category: DoctorCategory
 }
 
+// Đường tải thẳng của media: ghép bằng ffmpeg hỏng, hoặc mất file luồng đã tải.
+function mergeReport(code: string, message: string): DoctorReport | null {
+  if (code === "media.mux") {
+    return {
+      title: "Không ghép được media",
+      summary: message || "ffmpeg không ghép được hình và tiếng đã tải.",
+      steps: [
+        "Cập nhật ffmpeg ở Cài đặt → Công cụ media.",
+        "Xoá mục này rồi tải lại; có thể chọn chất lượng khác.",
+      ],
+      retryable: false,
+      category: "tool",
+    }
+  }
+  if (code === "media.no_output") {
+    return {
+      title: "Mất file luồng đã tải",
+      summary: message || "Không thấy file hình/tiếng UTD đã tải để ghép.",
+      steps: [
+        "Bấm Tiếp tục để tải lại phần bị mất.",
+        "Không xoá file tạm trong thư mục tải khi media chưa xong.",
+      ],
+      retryable: true,
+      category: "disk",
+    }
+  }
+  return null
+}
+
 export function diagnose(item: DownloadItem): DoctorReport {
   const code = item.errorCode ?? ""
   const message = item.note ?? ""
@@ -49,9 +78,15 @@ export function diagnose(item: DownloadItem): DoctorReport {
       category: "security",
     }
   }
-  if (code.startsWith("network.") || code === "http.408" || code === "http.429") {
+  const limited = code === "http.429" || code === "media.rate_limited"
+  if (
+    code.startsWith("network.") ||
+    code === "http.408" ||
+    code === "media.network" ||
+    limited
+  ) {
     return {
-      title: code === "http.429" ? "Máy chủ đang giới hạn" : "Mạng bị gián đoạn",
+      title: limited ? "Máy chủ đang giới hạn" : "Mạng bị gián đoạn",
       summary:
         message ||
         "Kết nối tới máy chủ không ổn định. UTD đã thử lại nhưng chưa xong.",
@@ -63,7 +98,12 @@ export function diagnose(item: DownloadItem): DoctorReport {
       category: "network",
     }
   }
-  if (code === "http.401" || code === "http.403" || code === "media.login") {
+  if (
+    code === "http.401" ||
+    code === "http.403" ||
+    code === "media.forbidden" ||
+    code === "media.login"
+  ) {
     return {
       title: "Cần quyền truy cập",
       summary:
@@ -78,7 +118,12 @@ export function diagnose(item: DownloadItem): DoctorReport {
       category: "access",
     }
   }
-  if (code === "http.404" || code === "http.410" || code === "media.unavailable") {
+  if (
+    code === "http.404" ||
+    code === "http.410" ||
+    code === "media.not_found" ||
+    code === "media.unavailable"
+  ) {
     return {
       title: "Nguồn không còn tồn tại",
       summary: message || "Máy chủ không tìm thấy file hoặc video đã bị gỡ.",
@@ -118,6 +163,8 @@ export function diagnose(item: DownloadItem): DoctorReport {
       category: "tool",
     }
   }
+  const merge = mergeReport(code, message)
+  if (merge) return merge
   if (code.startsWith("disk.")) {
     return {
       title: "Lỗi ghi đĩa",

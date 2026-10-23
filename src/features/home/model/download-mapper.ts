@@ -177,6 +177,14 @@ function mapStatus(status: EngineTaskStatus): DownloadStatus {
   return status
 }
 
+// Media "verifying" = ffmpeg đang ghép hình + tiếng hoặc chuyển định dạng âm thanh sau khi tải xong.
+function verifyingLabel(task: EngineTask): string {
+  if (task.kind !== "media") return "Đang xác minh SHA-256"
+  return /\.(mp3|m4a)$/i.test(task.fileName)
+    ? "Đang chuyển định dạng âm thanh"
+    : "Đang ghép hình và tiếng"
+}
+
 function describe(task: EngineTask, progress?: EngineProgress): string {
   if (task.status === "failed" || task.status === "quarantined") {
     return task.error?.message ?? "Đã dừng do lỗi"
@@ -186,7 +194,7 @@ function describe(task: EngineTask, progress?: EngineProgress): string {
       ? "Đã xác minh SHA-256"
       : "Hoàn tất"
   }
-  if (task.status === "verifying") return "Đang xác minh SHA-256"
+  if (task.status === "verifying") return verifyingLabel(task)
   if (task.status === "paused") return "Tạm dừng · tiếp tục bất cứ lúc nào"
   if (task.status === "queued") return "Đang chờ lượt"
   if (task.status === "resolving") return "Đang kiểm tra máy chủ"

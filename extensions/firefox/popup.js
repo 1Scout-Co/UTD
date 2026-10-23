@@ -8,10 +8,10 @@ async function currentTab() {
 }
 
 async function refresh() {
-  const stored = await api.storage.local.get(["lastResult", "lastAt"])
+  const stored = await api.storage.local.get(["lastResult", "lastNote", "lastAt"])
   if (!stored.lastAt || Date.now() - stored.lastAt > 60_000) return
   if (stored.lastResult === "ok") {
-    status.textContent = "Đã gửi sang UTD."
+    status.textContent = stored.lastNote || "Đã gửi sang UTD."
     status.className = "ok"
   } else if (stored.lastResult) {
     status.textContent = stored.lastResult
@@ -31,7 +31,7 @@ button.addEventListener("click", async () => {
     }
     const response = await api.runtime.sendMessage({ type: "utd.send-page", url })
     if (!response?.ok) throw new Error(response?.message || "Không gửi được.")
-    status.textContent = "Đã gửi sang UTD."
+    status.textContent = response.message || "Đã gửi sang UTD."
     status.className = "ok"
   } catch (error) {
     status.textContent =

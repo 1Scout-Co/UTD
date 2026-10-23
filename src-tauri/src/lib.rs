@@ -5,6 +5,7 @@ mod files;
 mod ipc;
 mod legacy;
 mod media;
+mod media_pages;
 pub mod native_host;
 mod state;
 mod updater;
@@ -116,6 +117,8 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            // Trước pipe server: link từ trình duyệt tới khi giao diện chưa nghe thì giữ ở đây.
+            app.manage(media_pages::PendingMedia::default());
             let directory = data_dir(app.handle());
             std::fs::create_dir_all(&directory)?;
             let migration = legacy::migrate(&directory).unwrap_or_else(|error| {
@@ -188,6 +191,7 @@ pub fn run() {
             media::cancel_media_tool_install,
             media::media_probe,
             media::add_media_download,
+            media_pages::take_media_request,
             updater::check_for_update,
             updater::install_update,
             updater::get_update_check,

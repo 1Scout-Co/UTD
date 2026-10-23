@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 
 import { AlertCircle, Download } from "lucide-react"
 
@@ -11,7 +11,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
-import { mediaProbe } from "../api/downloads"
+import {
+  mediaProbe,
+  subscribeMediaRequest,
+  takeMediaRequest,
+} from "../api/downloads"
 import type { AddMediaPayload, MediaProbe } from "../model/types"
 import {
   FormatList,
@@ -21,12 +25,51 @@ import {
   UrlField,
 } from "./media-picker-parts"
 
+const DESKTOP_ONLY = "Mở app UTD để phân tích và tải media."
+
+/**
+ * Link trang video từ trình duyệt (chuột phải / popup): `onUrl` cần ổn định (useCallback). Link tới
+ * trước khi kịp nghe (UTD vừa mở) được app giữ lại: lấy một lần ngay sau khi nghe.
+ */
+export function useMediaRequests(
+  desktop: boolean,
+  onUrl: (url: string) => void,
+) {
+  useEffect(() => {
+    if (!desktop) return
+    let disposed = false
+    let unlisten: (() => void) | undefined
+    subscribeMediaRequest((request) => {
+      if (!disposed) onUrl(request.url)
+    })
+      .then(async (off) => {
+        if (disposed) {
+          off()
+          return
+        }
+        unlisten = off
+        const early = await takeMediaRequest()
+        if (early && !disposed) onUrl(early.url)
+      })
+      .catch((reason: unknown) => console.error("UTD media request:", reason))
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [desktop, onUrl])
+}
+
+/**
+ * `initialUrl`: mở sẵn link này và tự phân tích (từ hộp Thêm hoặc trình duyệt). Đổi link thì đổi `key`
+ * để dựng lại hộp với trạng thái mới.
+ */
 export function MediaPickerDialog({
   open,
   onOpenChange,
   desktop,
   busy,
   error,
+  initialUrl,
   onSubmit,
 }: {
   open: boolean
@@ -34,13 +77,18 @@ export function MediaPickerDialog({
   desktop: boolean
   busy: boolean
   error: string | null
+  initialUrl?: string | null
   onSubmit: (payload: AddMediaPayload) => void | Promise<void>
 }) {
-  const [url, setUrl] = useState("")
+  const autoAnalyze = Boolean(initialUrl) && desktop
+  const [url, setUrl] = useState(initialUrl ?? "")
   const [probe, setProbe] = useState<MediaProbe | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [localError, setLocalError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(autoAnalyze)
+  const [localError, setLocalError] = useState<string | null>(
+    initialUrl && !desktop ? DESKTOP_ONLY : null,
+  )
+  const autoStarted = useRef(false)
 
   const selected =
     probe?.formats.find((format) => format.id === selectedId) ??
@@ -66,26 +114,15 @@ export function MediaPickerDialog({
       ?.readText()
       .then((text) => {
         updateUrl(text.trim())
-        if (text.trim()) void analyze(text)
+        if (text.trim()) analyze(text)
       })
       .catch(() => undefined)
   }
 
-  const analyze = async (value = url) => {
-    if (!desktop) {
-      setLocalError("Mở app UTD để phân tích và tải media.")
-      return
-    }
-    if (!/^https?:\/\//i.test(value.trim())) {
-      setLocalError("Nhập URL HTTP/HTTPS của video hoặc luồng media.")
-      return
-    }
-    setLoading(true)
-    setLocalError(null)
-    setProbe(null)
-    setSelectedId(null)
+  // Chỉ đổi state sau `await`: gọi được từ effect tự phân tích bên dưới.
+  const runProbe = useCallback(async (value: string) => {
     try {
-      const result = await mediaProbe(value.trim())
+      const result = await mediaProbe(value)
       setProbe(result)
       setSelectedId(
         result.formats.find((format) => format.recommended)?.id ??
@@ -97,6 +134,29 @@ export function MediaPickerDialog({
     } finally {
       setLoading(false)
     }
+  }, [])
+
+  // Mở với link sẵn ⇒ phân tích ngay (ref chặn chạy hai lần ở StrictMode).
+  useEffect(() => {
+    if (!autoAnalyze || !initialUrl || autoStarted.current) return
+    autoStarted.current = true
+    void runProbe(initialUrl.trim())
+  }, [autoAnalyze, initialUrl, runProbe])
+
+  const analyze = (value = url) => {
+    if (!desktop) {
+      setLocalError(DESKTOP_ONLY)
+      return
+    }
+    if (!/^https?:\/\//i.test(value.trim())) {
+      setLocalError("Nhập URL HTTP/HTTPS của video hoặc luồng media.")
+      return
+    }
+    setLoading(true)
+    setLocalError(null)
+    setProbe(null)
+    setSelectedId(null)
+    void runProbe(value.trim())
   }
 
   const submit = (event: FormEvent) => {
@@ -131,7 +191,7 @@ export function MediaPickerDialog({
             disabled={busy || loading}
             loading={loading}
             onChange={updateUrl}
-            onAnalyze={() => void analyze()}
+            onAnalyze={() => analyze()}
             onPaste={paste}
           />
 
@@ -155,10 +215,11 @@ export function MediaPickerDialog({
               ) : null}
             </>
           ) : null}
+          {/* text-red-700: text-destructive trên nền này chỉ đạt 4,49:1, dưới mức 4,5:1 của WCAG AA. */}
           {localError || error ? (
             <p
               role="alert"
-              className="rounded-lg bg-destructive/5 px-3 py-2 text-sm text-destructive"
+              className="rounded-lg bg-destructive/5 px-3 py-2 text-sm text-red-700"
             >
               {localError ?? error}
             </p>

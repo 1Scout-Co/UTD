@@ -5,12 +5,15 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
+use crate::headers::{validate_request_headers, RequestHeader};
 use crate::{Error, Result};
 
 pub const MIN_SEGMENT_BYTES: u64 = 1024 * 1024;
 pub const MAX_SEGMENTS: usize = 64;
 pub const MAX_CONNECTIONS: u16 = 32;
 pub const MAX_FILE_NAME_CHARS: usize = 180;
+/// Trần byte mỗi yêu cầu HTTP nhỏ nhất được nhận (nhỏ hơn thì quá nhiều yêu cầu).
+pub const MIN_REQUEST_BYTES: u64 = 64 * 1024;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -26,6 +29,8 @@ pub enum TaskKind {
     Hls,
     Dash,
     Media,
+    /// Một luồng (video/âm thanh) của task media, engine tải nhiều kết nối; task con ẩn.
+    MediaPart,
 }
 
 impl TaskKind {
@@ -35,6 +40,7 @@ impl TaskKind {
             Self::Hls => "hls",
             Self::Dash => "dash",
             Self::Media => "media",
+            Self::MediaPart => "media_part",
         }
     }
 
@@ -44,6 +50,7 @@ impl TaskKind {
             "hls" => Ok(Self::Hls),
             "dash" => Ok(Self::Dash),
             "media" => Ok(Self::Media),
+            "media_part" => Ok(Self::MediaPart),
             other => Err(Error::Corrupt(format!("unknown task kind: {other:?}"))),
         }
     }
@@ -283,6 +290,16 @@ pub struct DownloadTask {
     pub created_at: i64,
     pub updated_at: i64,
     pub completed_at: Option<i64>,
+    /// Có ⇒ task con ẩn (luồng của một task media): không vào danh sách, xoá theo cha.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Mỗi yêu cầu HTTP xin tối đa chừng này byte (YouTube bóp yêu cầu lớn hơn ~10 MiB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_request_bytes: Option<u64>,
+    /// Header riêng cho mọi yêu cầu của task, chỉ gửi tới đúng origin của `url`.
+    /// Không đưa ra JSON (giao diện không cần, tránh lộ giá trị).
+    #[serde(default, skip_serializing)]
+    pub request_headers: Vec<RequestHeader>,
 }
 
 impl DownloadTask {
@@ -322,6 +339,9 @@ impl DownloadTask {
             created_at: timestamp,
             updated_at: timestamp,
             completed_at: None,
+            parent_id: None,
+            max_request_bytes: None,
+            request_headers: Vec::new(),
         };
         task.validate()?;
         Ok(task)
@@ -330,6 +350,17 @@ impl DownloadTask {
     pub fn with_kind(mut self, kind: TaskKind) -> Self {
         self.kind = kind;
         self
+    }
+
+    /// Biến thành task con ẩn của `parent_id` (loại `MediaPart`).
+    pub fn with_parent(mut self, parent_id: impl Into<String>) -> Self {
+        self.parent_id = Some(parent_id.into());
+        self.kind = TaskKind::MediaPart;
+        self
+    }
+
+    pub fn is_child(&self) -> bool {
+        self.parent_id.is_some()
     }
 
     pub fn with_total_bytes(mut self, total_bytes: u64) -> Self {
@@ -398,6 +429,7 @@ impl DownloadTask {
         if let Some(error) = &self.error {
             error.validate()?;
         }
+        self.validate_extras()?;
         if self.updated_at < self.created_at {
             return Err(Error::InvalidInput("updated_at precedes created_at".into()));
         }
@@ -419,6 +451,28 @@ impl DownloadTask {
             }
         }
         Ok(())
+    }
+
+    fn validate_extras(&self) -> Result<()> {
+        if let Some(parent) = &self.parent_id
+            && (parent.is_empty() || parent.len() > 64 || *parent == self.id)
+        {
+            return Err(Error::InvalidInput(
+                "parent id must be 1-64 characters and differ from the task id".into(),
+            ));
+        }
+        if self.kind == TaskKind::MediaPart && self.parent_id.is_none() {
+            return Err(Error::InvalidInput("a media part needs a parent task".into()));
+        }
+        if self
+            .max_request_bytes
+            .is_some_and(|bytes| bytes < MIN_REQUEST_BYTES)
+        {
+            return Err(Error::InvalidInput(format!(
+                "max_request_bytes must be at least {MIN_REQUEST_BYTES}"
+            )));
+        }
+        validate_request_headers(&self.request_headers)
     }
 }
 
@@ -819,6 +873,43 @@ mod tests {
         assert!(!json.contains("file_name"));
         let decoded: DownloadTask = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, task);
+    }
+
+    #[test]
+    fn child_tasks_need_a_distinct_parent() {
+        let child = task().with_parent("parent-1");
+        assert_eq!(child.kind, TaskKind::MediaPart);
+        assert!(child.is_child());
+        child.validate().expect("valid child");
+        assert_eq!(TaskKind::parse("media_part").unwrap(), TaskKind::MediaPart);
+
+        let mut orphan = task();
+        orphan.kind = TaskKind::MediaPart;
+        assert!(orphan.validate().is_err());
+
+        let mut own = task();
+        own.parent_id = Some(own.id.clone());
+        assert!(own.validate().is_err());
+    }
+
+    #[test]
+    fn request_cap_and_headers_are_validated_and_kept_out_of_json() {
+        let mut value = task();
+        value.max_request_bytes = Some(MIN_REQUEST_BYTES - 1);
+        assert!(value.validate().is_err());
+        value.max_request_bytes = Some(10 * 1024 * 1024);
+        value.request_headers = vec![RequestHeader::new("User-Agent", "Secret-UA/1").unwrap()];
+        value.validate().expect("valid");
+        let json = serde_json::to_string(&value).expect("serialize");
+        assert!(!json.contains("Secret-UA"));
+        assert!(json.contains("\"maxRequestBytes\""));
+        assert!(!format!("{value:?}").contains("Secret-UA"));
+
+        value.request_headers.push(RequestHeader {
+            name: "Cookie".into(),
+            value: "a".into(),
+        });
+        assert!(value.validate().is_err());
     }
 
     #[test]

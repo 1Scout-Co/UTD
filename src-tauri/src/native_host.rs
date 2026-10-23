@@ -12,7 +12,7 @@ struct HostRequest {
     kind: String,
     url: String,
     #[serde(rename = "pageUrl")]
-    _page_url: Option<String>,
+    page_url: Option<String>,
     suggested_name: Option<String>,
 }
 
@@ -84,6 +84,12 @@ fn forward() -> Result<HostResponse, String> {
         .as_deref()
         .map(str::trim)
         .filter(|name| !name.is_empty() && name.chars().count() <= 180);
+    // Trang đang mở (để UTD mở đúng luồng media); bỏ qua nếu lạ thay vì từ chối cả yêu cầu.
+    let page_url = request
+        .page_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|page| page.len() <= 8192 && (page.starts_with("http://") || page.starts_with("https://")));
 
     let (config, _) = crate::ipc::read_config()?;
     let mut stream = std::fs::OpenOptions::new()
@@ -95,6 +101,7 @@ fn forward() -> Result<HostResponse, String> {
         "token": config.token,
         "url": url,
         "suggestedName": suggested_name,
+        "pageUrl": page_url,
     });
     let payload = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
     stream
@@ -126,7 +133,7 @@ fn forward() -> Result<HostResponse, String> {
         Ok(HostResponse {
             ok: true,
             task_id: response.task_id,
-            message: None,
+            message: response.message,
         })
     } else {
         Err(response

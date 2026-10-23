@@ -36,7 +36,7 @@ fn completed_task(mut task: DownloadTask, total: u64) -> DownloadTask {
 #[test]
 fn opens_in_wal_mode_with_schema_and_clean_integrity() {
     let (_directory, journal) = setup();
-    assert_eq!(journal.schema_version().expect("version"), 2);
+    assert_eq!(journal.schema_version().expect("version"), 3);
     assert!(journal.integrity_check().expect("integrity").is_empty());
 
     let connection = Connection::open(journal.path()).expect("open raw");
@@ -262,7 +262,7 @@ fn backs_up_legacy_database_before_migrating() {
     }
 
     let journal = Journal::open(&path).expect("migrate");
-    assert_eq!(journal.schema_version().expect("version"), 2);
+    assert_eq!(journal.schema_version().expect("version"), 3);
 
     let backup = PathBuf::from(format!("{}.bak", path.display()));
     assert!(backup.exists(), "backup was not created");
@@ -286,7 +286,7 @@ fn rejects_a_newer_schema() {
     match Journal::open(&path) {
         Err(Error::UnsupportedSchema { found, max }) => {
             assert_eq!(found, 99);
-            assert_eq!(max, 2);
+            assert_eq!(max, 3);
         }
         other => panic!("expected UnsupportedSchema, got {other:?}"),
     }

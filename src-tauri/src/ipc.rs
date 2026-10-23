@@ -18,6 +18,29 @@ struct PipeRequest {
     token: String,
     url: String,
     suggested_name: Option<String>,
+    /// Trang đang mở khi chuột phải; native host cũ không gửi trường này.
+    page_url: Option<String>,
+}
+
+/// Việc làm với một yêu cầu qua pipe. Token và giới hạn kiểm trước, rồi mới xem có phải trang video.
+#[derive(Debug, PartialEq)]
+enum Route {
+    Reject(&'static str),
+    /// Trang video: không tạo task HTTP (chỉ được trang HTML), mở hộp Tải media trong UTD.
+    Media,
+    Download,
+}
+
+fn route(request: &PipeRequest, token: &str) -> Route {
+    if !secure_eq(&request.token, token) {
+        Route::Reject("Token IPC không hợp lệ.")
+    } else if request.url.len() > 8192 {
+        Route::Reject("URL quá dài.")
+    } else if crate::media_pages::is_media_page(&request.url) {
+        Route::Media
+    } else {
+        Route::Download
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,6 +57,15 @@ impl PipeResponse {
             ok: true,
             task_id: Some(task_id),
             message: None,
+        }
+    }
+
+    /// Đã nhận nhưng không có task (link video chuyển sang hộp Tải media).
+    fn note(message: &str) -> Self {
+        Self {
+            ok: true,
+            task_id: None,
+            message: Some(message.into()),
         }
     }
 
@@ -184,21 +216,28 @@ async fn handle_connection(
 
     let request: PipeRequest =
         serde_json::from_str(&line).map_err(|_| "IPC payload không hợp lệ".to_string())?;
-    let response = if !secure_eq(&request.token, token) {
-        PipeResponse::error("Token IPC không hợp lệ.")
-    } else if request.url.len() > 8192 {
-        PipeResponse::error("URL quá dài.")
-    } else {
-        let input = crate::commands::AddDownloadInput {
-            url: request.url,
-            dest_dir: None,
-            file_name: request.suggested_name,
-            connections: None,
-            expected_sha256: None,
-        };
-        match crate::commands::enqueue_download(app, engine, running, input) {
-            Ok(task) => PipeResponse::ok(task.id),
-            Err(message) => PipeResponse::error(message),
+    let response = match route(&request, token) {
+        Route::Reject(message) => PipeResponse::error(message),
+        Route::Media => {
+            let media = crate::events::MediaRequest {
+                url: request.url.trim().to_string(),
+                page_url: crate::media_pages::clean_page_url(request.page_url),
+            };
+            crate::media_pages::open_media_flow(&app, media);
+            PipeResponse::note(crate::media_pages::MEDIA_PAGE_NOTE)
+        }
+        Route::Download => {
+            let input = crate::commands::AddDownloadInput {
+                url: request.url,
+                dest_dir: None,
+                file_name: request.suggested_name,
+                connections: None,
+                expected_sha256: None,
+            };
+            match crate::commands::enqueue_download(app, engine, running, input) {
+                Ok(task) => PipeResponse::ok(task.id),
+                Err(message) => PipeResponse::error(message),
+            }
         }
     };
 
@@ -221,4 +260,60 @@ fn secure_eq(left: &str, right: &str) -> bool {
         difference |= a ^ b;
     }
     difference == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+    fn request(token: &str, url: &str) -> PipeRequest {
+        serde_json::from_value(serde_json::json!({ "token": token, "url": url })).unwrap()
+    }
+
+    #[test]
+    fn video_page_from_the_browser_opens_the_media_flow() {
+        let watch = "https://www.youtube.com/watch?v=09OGSRptb0M";
+        assert_eq!(route(&request(TOKEN, watch), TOKEN), Route::Media);
+        assert_eq!(
+            route(&request(TOKEN, "https://vt.tiktok.com/ZSabc123/"), TOKEN),
+            Route::Media
+        );
+        let file = "https://example.com/releases/app-1.2.3.zip";
+        assert_eq!(route(&request(TOKEN, file), TOKEN), Route::Download);
+        assert_eq!(
+            route(&request(TOKEN, "https://www.youtube.com/"), TOKEN),
+            Route::Download,
+            "trang chủ vẫn đi đường tải thường"
+        );
+    }
+
+    #[test]
+    fn token_and_length_are_checked_before_the_media_branch() {
+        let watch = "https://www.youtube.com/watch?v=09OGSRptb0M";
+        let wrong = "f".repeat(TOKEN.len());
+        assert_eq!(
+            route(&request(&wrong, watch), TOKEN),
+            Route::Reject("Token IPC không hợp lệ.")
+        );
+        let long = format!("{watch}&x={}", "a".repeat(8192));
+        assert_eq!(route(&request(TOKEN, &long), TOKEN), Route::Reject("URL quá dài."));
+    }
+
+    #[test]
+    fn page_url_is_optional_and_note_is_ok() {
+        let parsed: PipeRequest = serde_json::from_str(
+            r#"{"token":"t","url":"https://youtu.be/x","suggestedName":null,"pageUrl":"https://www.youtube.com/"}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.page_url.as_deref(), Some("https://www.youtube.com/"));
+        assert_eq!(request(TOKEN, "https://youtu.be/x").page_url, None);
+
+        let note = serde_json::to_value(PipeResponse::note("Đã mở")).unwrap();
+        assert_eq!(
+            note,
+            serde_json::json!({ "ok": true, "taskId": null, "message": "Đã mở" })
+        );
+    }
 }

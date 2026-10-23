@@ -8,6 +8,17 @@ pub const ERROR_EVENT: &str = "utd://error";
 pub const TOOL_PROGRESS_EVENT: &str = "utd://tool-progress";
 pub const UPDATE_PROGRESS_EVENT: &str = "utd://update-progress";
 pub const UPDATE_AVAILABLE_EVENT: &str = "utd://update-available";
+/// Link trang video gửi từ trình duyệt: giao diện mở hộp Tải media với link này (media_pages.rs).
+pub const MEDIA_REQUEST_EVENT: &str = "utd://media-request";
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaRequest {
+    pub url: String,
+    /// Trang đang mở khi chuột phải (nếu trình duyệt gửi kèm).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_url: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
