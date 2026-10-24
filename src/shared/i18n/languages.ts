@@ -21,11 +21,11 @@ export const LANGUAGES = [
   { code: "ar", name: "العربية", flag: "SA", locale: "ar", rtl: true },
 ] as const
 
-export type Language = (typeof LANGUAGES)[number]
+type Language = (typeof LANGUAGES)[number]
 export type LanguageCode = Language["code"]
 
 /** Không khớp ngôn ngữ nào của hệ điều hành ⇒ English. */
-export const FALLBACK_LANGUAGE: LanguageCode = "en"
+const FALLBACK_LANGUAGE: LanguageCode = "en"
 
 export function languageOf(code: LanguageCode): Language {
   return LANGUAGES.find((language) => language.code === code) ?? LANGUAGES[0]

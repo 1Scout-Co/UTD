@@ -10,10 +10,6 @@ export function setFormatLocale(next: string) {
   locale = next
 }
 
-export function currentLocale(): string {
-  return locale
-}
-
 function numberFormat(options: Intl.NumberFormatOptions): Intl.NumberFormat {
   const key = `${locale}|${JSON.stringify(options)}`
   let format = numberFormats.get(key)

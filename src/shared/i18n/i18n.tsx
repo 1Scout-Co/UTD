@@ -111,7 +111,7 @@ function fill(text: string, vars: Vars): string {
 }
 
 /** Khoá ghép lúc chạy (mã lỗi từ Rust…): undefined khi không có. */
-export function lookup(key: string, vars?: Vars): string | undefined {
+function lookup(key: string, vars?: Vars): string | undefined {
   const text =
     pick(messages, key, vars?.count) ?? pick(fallback, key, vars?.count)
   return text === undefined ? undefined : vars ? fill(text, vars) : text

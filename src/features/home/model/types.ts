@@ -226,25 +226,6 @@ export interface DownloadItem {
   sortTime: number
 }
 
-export interface MediaFormat {
-  id: string
-  label: string
-  detail: string
-  size: string
-  bitrate: string
-  badge?: string
-}
-
-export interface MediaShelfItem {
-  id: string
-  title: string
-  meta: string
-  duration: string
-  quality: string
-  art: string
-  accent: string
-}
-
 export interface HomeScreenProps {
   state: ScreenState
   items: DownloadItem[]
