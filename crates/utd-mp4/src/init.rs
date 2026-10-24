@@ -1,11 +1,19 @@
 //! Đọc moov: mỗi trak lấy timescale/language (mdhd), kích thước/matrix (tkhd) và chép nguyên byte
-//! stsd, hdlr, dinf, vmhd/smhd. File thường đọc luôn bảng mẫu stbl; fMP4 lấy mặc định từ trex.
+//! stsd, hdlr, dinf, vmhd/smhd. File thường đọc luôn bảng mẫu stbl; fMP4 lấy mặc định từ trex và
+//! edit list một mục của init (media_time ≥ 0).
 
 use crate::Kind;
 use crate::boxes::{Child, Cursor, FourCc, broken, children, find, name, single};
 use crate::frag::Defaults;
 use crate::table::Track;
 use crate::{Error, stbl, unsupported};
+
+/// File đang đọc là đầu vào (kiểm đủ luật ghép) hay file ra của crate (đọc lại để tự kiểm).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Role {
+    Input,
+    Output,
+}
 
 pub(crate) struct Movie {
     /// Có mvex: mẫu nằm trong các moof.
@@ -15,10 +23,14 @@ pub(crate) struct Movie {
     pub trex: Vec<(u32, Defaults)>,
 }
 
-pub(crate) fn read_moov(body: &[u8]) -> Result<Movie, Error> {
+pub(crate) fn read_moov(body: &[u8], role: Role) -> Result<Movie, Error> {
     let boxes = children(body)?;
     if find(&boxes, b"pssh").is_some() {
         return Err(unsupported("mã hoá (pssh)"));
+    }
+    // Thẻ priming của iTunes: mov.c lấy làm start_pad của AAC, dời giờ bắt đầu.
+    if body.windows(8).any(|window| window == b"iTunSMPB") {
+        return Err(unsupported("có iTunSMPB"));
     }
     let mut mvhd = Cursor::new(single(&boxes, b"mvhd")?.body);
     let (version, _) = mvhd.full()?;
@@ -36,7 +48,7 @@ pub(crate) fn read_moov(body: &[u8]) -> Result<Movie, Error> {
     let tracks = boxes
         .iter()
         .filter(|child| &child.kind == b"trak")
-        .map(|trak| read_trak(trak.body, timescale, fragmented))
+        .map(|trak| read_trak(trak.body, timescale, fragmented, role))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Movie {
         fragmented,
@@ -65,21 +77,31 @@ fn read_trex(mvex: &[u8]) -> Result<Vec<(u32, Defaults)>, Error> {
         .collect()
 }
 
-fn read_trak(body: &[u8], movie_timescale: u32, fragmented: bool) -> Result<Track, Error> {
+fn read_trak(
+    body: &[u8],
+    movie_timescale: u32,
+    fragmented: bool,
+    role: Role,
+) -> Result<Track, Error> {
     let boxes = children(body)?;
     let (mut track, stbl) = read_media(single(&boxes, b"mdia")?.body)?;
     read_tkhd(single(&boxes, b"tkhd")?.body, &mut track)?;
-    let edts = find(&boxes, b"edts");
+    let edts = find(&boxes, b"edts")
+        .map(|_| single(&boxes, b"edts"))
+        .transpose()?;
+    stbl::check_sdtp(&stbl)?;
     if fragmented {
         if stbl::sample_count(&stbl)? != 0 {
             return Err(unsupported("fMP4 có mẫu ngay trong moov"));
         }
-        if edts.is_some() {
-            return Err(unsupported("init có edts"));
+        if let Some(edts) = edts {
+            read_init_edit(edts.body, &mut track)?;
         }
     } else {
         (track.samples, track.runs) = stbl::read(&stbl)?;
-        check_edit(edts, movie_timescale, &track)?;
+        if role == Role::Input {
+            check_plain(edts, movie_timescale, &track)?;
+        }
     }
     Ok(track)
 }
@@ -157,6 +179,8 @@ fn read_media(body: &[u8]) -> Result<(Track, Vec<Child<'_>>), Error> {
         codec,
         aac,
         trim: 0,
+        edit: 0,
+        priming: false,
         stsd: stsd.whole.to_vec(),
         hdlr: hdlr.whole.to_vec(),
         dinf: dinf.whole.to_vec(),
@@ -207,16 +231,16 @@ fn is_aac(entry: &Child<'_>) -> Result<bool, Error> {
     if version != [0, 0] {
         return Err(unsupported("mp4a bản QuickTime"));
     }
-    let boxes = children(entry.body.get(28..).ok_or_else(|| broken("mp4a"))?)?;
-    let esds = single(&boxes, b"esds")?;
-    let object_type = esds_object_type(esds.body)?;
+    let (object_type, _) = esds(entry)?;
     // 0x40 MPEG-4 Audio; 0x66–0x68 AAC của MPEG-2 (ffmpeg cũng coi là AAC).
     Ok(matches!(object_type, 0x40 | 0x66..=0x68))
 }
 
-/// objectTypeIndication trong ES_Descriptor → DecoderConfigDescriptor.
-fn esds_object_type(body: &[u8]) -> Result<u8, Error> {
-    let mut cursor = Cursor::new(body);
+/// objectTypeIndication trong ES_Descriptor → DecoderConfigDescriptor, kèm DecoderSpecificInfo
+/// (AudioSpecificConfig) nếu có.
+fn esds<'a>(entry: &Child<'a>) -> Result<(u8, Option<&'a [u8]>), Error> {
+    let boxes = children(entry.body.get(28..).ok_or_else(|| broken("mp4a"))?)?;
+    let mut cursor = Cursor::new(single(&boxes, b"esds")?.body);
     cursor.full()?;
     descriptor(&mut cursor, 0x03)?;
     cursor.skip(2)?;
@@ -232,25 +256,39 @@ fn esds_object_type(body: &[u8]) -> Result<u8, Error> {
         cursor.skip(2)?;
     }
     descriptor(&mut cursor, 0x04)?;
-    cursor.u8()
+    let object_type = cursor.u8()?;
+    // streamType, bufferSizeDB, maxBitrate, avgBitrate; DecoderSpecificInfo có thể vắng.
+    let config = cursor
+        .skip(12)
+        .and_then(|()| descriptor(&mut cursor, 0x05))
+        .and_then(|length| cursor.bytes(length as usize))
+        .ok();
+    Ok((object_type, config))
 }
 
 /// Thẻ descriptor và độ dài (1–4 byte, bit cao = còn tiếp).
-fn descriptor(cursor: &mut Cursor<'_>, tag: u8) -> Result<(), Error> {
+fn descriptor(cursor: &mut Cursor<'_>, tag: u8) -> Result<u32, Error> {
     if cursor.u8()? != tag {
         return Err(broken("esds"));
     }
+    let mut length = 0;
     for _ in 0..4 {
-        if cursor.u8()? & 0x80 == 0 {
-            return Ok(());
+        let byte = cursor.u8()?;
+        length = (length << 7) | u32::from(byte & 0x7F);
+        if byte & 0x80 == 0 {
+            return Ok(length);
         }
     }
     Err(broken("esds"))
 }
 
-/// File thường: chỉ nhận edit list "không làm gì" (một mục, media_time 0, tốc độ 1, phủ cả track),
-/// vì file ra luôn ghi lại elst (duration, 0).
-fn check_edit(edts: Option<Child<'_>>, movie_timescale: u32, track: &Track) -> Result<(), Error> {
+/// File thường: chưa nhận B-frame (mov.c sửa mốc theo edit list bằng mov_fix_index, có bỏ gói,
+/// khác hẳn fMP4) và chỉ nhận edit list "không làm gì" (một mục, media_time 0, tốc độ 1, phủ cả
+/// track), vì file ra tính lại elst như thể không có.
+fn check_plain(edts: Option<Child<'_>>, movie_timescale: u32, track: &Track) -> Result<(), Error> {
+    if track.samples.iter().any(|sample| sample.cts != 0) {
+        return Err(unsupported("có ctts (B-frame trong file thường)"));
+    }
     let Some(edts) = edts else {
         return Ok(());
     };
@@ -272,4 +310,67 @@ fn check_edit(edts: Option<Child<'_>>, movie_timescale: u32, track: &Track) -> R
         return Err(unsupported("edit list dịch hoặc cắt thời gian"));
     }
     Ok(())
+}
+
+/// Edit list của init fMP4. mov.c (fMP4 tắt advanced_editlist) chỉ lấy media_time của mục đầu
+/// làm time_offset (DTS lùi từng ấy) và bỏ qua segment_duration; với AAC còn lấy làm start_pad.
+/// Chỉ nhận một mục, media_time ≥ 0, tốc độ 1.
+fn read_init_edit(edts: &[u8], track: &mut Track) -> Result<(), Error> {
+    let boxes = children(edts)?;
+    if find(&boxes, b"elst").is_none() {
+        return Ok(());
+    }
+    let mut cursor = Cursor::new(single(&boxes, b"elst")?.body);
+    let (version, _) = cursor.full()?;
+    let count = cursor.u32()?;
+    let width = if version == 1 { 20 } else { 12 };
+    if cursor.remaining() as u64 != u64::from(count) * width {
+        return Err(broken("elst"));
+    }
+    match count {
+        0 => return Ok(()),
+        1 => {}
+        _ => return Err(unsupported("edit list nhiều mục")),
+    }
+    cursor.sized(version)?;
+    let media_time = cursor.sized(version)?;
+    let sign = if version == 1 { 63 } else { 31 };
+    if media_time >> sign != 0 {
+        return Err(unsupported("edit list có đoạn trống"));
+    }
+    if cursor.u32()? != 0x0001_0000 {
+        return Err(unsupported("edit list đổi tốc độ"));
+    }
+    if track.kind == Kind::Audio && media_time > 0 {
+        // demux.c cộng start_pad vào start_time theo tần số mẫu của codec: chỉ nhận khi tần số
+        // đó chắc chắn bằng timescale (AAC-LC không SBR, xem aac_lc_rate).
+        if !track.aac || aac_lc_rate(&track.stsd) != Some(track.timescale) {
+            return Err(unsupported("priming AAC với cấu hình chưa kiểm"));
+        }
+        track.priming = true;
+    }
+    track.edit = media_time;
+    Ok(())
+}
+
+/// Tần số mẫu ffmpeg đọc từ AudioSpecificConfig, chỉ khi chắc: AAC-LC (object type 2), tần số theo
+/// bảng, có kênh, không core coder; sau 16 bit đầu là byte 0 hoặc khối sync báo vắng SBR
+/// (`56 E5`, bit sbr = 0 — ffmpeg tự ghi khi mã hoá AAC). Cấu hình khác trả None.
+fn aac_lc_rate(stsd: &[u8]) -> Option<u32> {
+    const RATES: [u32; 13] = [
+        96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350,
+    ];
+    let boxes = children(stsd).ok()?;
+    let entries = children(single(&boxes, b"stsd").ok()?.body.get(8..)?).ok()?;
+    let (_, config) = esds(entries.first()?).ok()?;
+    let (&[first, second], rest) = config?.split_first_chunk::<2>()?;
+    let channels = (second >> 3) & 0x0F;
+    let no_sbr = rest.iter().all(|byte| *byte == 0)
+        || matches!(rest, [0x56, 0xE5, third, ..] if third & 0x80 == 0);
+    if first >> 3 != 2 || channels == 0 || second & 0x03 != 0 || !no_sbr {
+        return None;
+    }
+    RATES
+        .get(usize::from(((first & 0x07) << 1) | (second >> 7)))
+        .copied()
 }

@@ -8,18 +8,19 @@ use crate::boxes::children;
 use crate::table::{self, CHUNK_BYTES, Track};
 use crate::{Brand, Error, Input, Kind, Report, merge, read, write};
 
-const SYNC: u32 = 0x0200_0000;
-const NON_SYNC: u32 = 0x0001_0000;
+pub(super) const SYNC: u32 = 0x0200_0000;
+pub(super) const NON_SYNC: u32 = 0x0001_0000;
 
-fn trun(flags: u32, samples: Vec<Smp>) -> Trun {
+pub(super) fn trun(flags: u32, samples: Vec<Smp>) -> Trun {
     Trun {
+        version: 0,
         flags,
         first_flags: SYNC,
         samples,
     }
 }
 
-fn sizes(sizes: &[u32]) -> Vec<Smp> {
+pub(super) fn sizes(sizes: &[u32]) -> Vec<Smp> {
     sizes.iter().map(|size| smp(256, *size, NON_SYNC)).collect()
 }
 
@@ -173,7 +174,7 @@ fn follows_base_data_offset_and_runs_without_data_offset() {
     // Trun đầu không có data-offset bắt đầu ở base; trun sau nối tiếp trun trước.
     let mut first = Frag::new(
         0x01 | 0x08 | 0x10,
-        vec![trun(0, sizes(&[0; 3])), trun(0x200, sizes(&[5, 6]))],
+        vec![trun(0x004, sizes(&[0; 3])), trun(0x200, sizes(&[5, 6]))],
     );
     first.defaults = [256, 33, 0];
     video.fragment(&first);
@@ -261,7 +262,7 @@ fn accepts_zero_composition_offsets() {
 }
 
 /// Một file dựng hỏng hoặc lạ, kèm đoạn lý do phải có.
-fn refused(name: &str, built: &Built, kind: Kind, brand: Brand, reason: &str) {
+pub(super) fn refused(name: &str, built: &Built, kind: Kind, brand: Brand, reason: &str) {
     let scratch = Scratch::new(&format!("refuse-{name}"));
     let path = built.save(&scratch, "in");
     let output = scratch.0.join("out.mp4");
@@ -302,11 +303,6 @@ fn refuses_structures_it_has_not_checked() {
         mp4,
         "nhiều traf",
     );
-    let cts = one_fragment(Init::video(), |frag| {
-        frag.truns[0].flags |= 0x800;
-        frag.truns[0].samples[1].cts = 512;
-    });
-    refused("cts", &cts, video, mp4, "cts");
     let sdi = one_fragment(Init::video(), |frag| {
         frag.tfhd_flags |= 0x02;
         frag.sdi = 2;
@@ -333,15 +329,6 @@ fn refuses_structures_it_has_not_checked() {
         video,
         mp4,
         "tfdt đầu tiên",
-    );
-    let mut edts = Init::video();
-    edts.edts = true;
-    refused(
-        "edts",
-        &one_fragment(edts, |_| {}),
-        video,
-        mp4,
-        "init có edts",
     );
     let mut mp3 = Init::audio();
     mp3.object_type = 0x6B;
@@ -411,6 +398,7 @@ fn reads_plain_mp4_tables() {
         stz2: true,
         cts: 0,
         edts: Some(edit(1_000_000, 0)),
+        sdtp: Vec::new(),
     };
     let video = plain(&Init::video(), &samples, &options);
     let audio = audio();
@@ -431,6 +419,16 @@ fn reads_plain_mp4_tables() {
         },
     );
     refused("ctts", &ctts, Kind::Video, Brand::Mp4, "ctts");
+    // Mẫu thứ ba "không mẫu nào phụ thuộc": ffmpeg gắn cờ disposable, ghi sdtp.
+    let disposable = plain(
+        &Init::video(),
+        &samples,
+        &Plain {
+            sdtp: vec![0x20, 0x10, 0x18, 0x14, 0x10, 0x10, 0x10],
+            ..options.clone()
+        },
+    );
+    refused("sdtp", &disposable, Kind::Video, Brand::Mp4, "disposable");
     let shifted = plain(
         &Init::video(),
         &samples,

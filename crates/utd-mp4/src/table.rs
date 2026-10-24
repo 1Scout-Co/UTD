@@ -14,6 +14,8 @@ pub(crate) struct Sample {
     pub size: u32,
     pub duration: u32,
     pub sync: bool,
+    /// Lệch PTS − DTS (B-frame); chỉ nhận ≥ 0 và vừa i32.
+    pub cts: u32,
 }
 
 /// `count` mẫu kế tiếp nằm liền nhau từ `offset` ở file nguồn (một trun, hoặc một chunk của file thường).
@@ -42,6 +44,10 @@ pub(crate) struct Track {
     /// Số byte bỏ ở đầu mỗi mẫu khi chép (temporal delimiter của AV1). `samples` giữ kích thước
     /// ở file ra; ở nguồn mỗi mẫu dài thêm `trim` byte.
     pub trim: u32,
+    /// media_time của edit list trong init fMP4 (0 nếu không có): ffmpeg lùi DTS từng ấy.
+    pub edit: u64,
+    /// AAC có edit list: ffmpeg coi `edit` là priming bỏ khi giải mã, giờ bắt đầu vẫn là 0.
+    pub priming: bool,
     /// Box chép nguyên byte từ nguồn.
     pub stsd: Vec<u8>,
     pub hdlr: Vec<u8>,

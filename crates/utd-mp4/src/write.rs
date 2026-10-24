@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::av1::DELIMITER;
 use crate::boxes::{FourCc, Out};
 use crate::table::{Chunk, Run, Sample, Track};
+use crate::timing::{self, Timing};
 use crate::{Brand, Error, Kind, unsupported};
 
 const BUFFER: usize = 8 << 20;
@@ -39,6 +40,15 @@ pub(crate) fn head_with_limit(
     limit: u64,
 ) -> Result<Head, Error> {
     let ftyp = ftyp(brand, tracks);
+    let timings = tracks
+        .iter()
+        .map(|track| timing::timing(track, MOVIE_TIMESCALE))
+        .collect::<Result<Vec<_>, _>>()?;
+    let movie = Movie {
+        tracks,
+        timings: &timings,
+        chunks,
+    };
     let payload: u64 = chunks.iter().map(|chunk| chunk.size).sum();
     let large = payload + 8 > limit;
     let mdat_header = if large { 16 } else { 8 };
@@ -46,14 +56,14 @@ pub(crate) fn head_with_limit(
     // Kích thước moov không phụ thuộc giá trị offset, chỉ phụ thuộc stco hay co64.
     let mut co64 = false;
     let start = loop {
-        let moov = moov(tracks, chunks, 0, co64).len() as u64;
+        let moov = movie.moov(0, co64).len() as u64;
         let start = ftyp.len() as u64 + moov + mdat_header;
         if co64 || start + payload - last <= limit {
             break start;
         }
         co64 = true;
     };
-    let moov = moov(tracks, chunks, start, co64);
+    let moov = movie.moov(start, co64);
     if moov.len() as u64 > u64::from(u32::MAX) {
         return Err(unsupported("moov vượt 4 GiB"));
     }
@@ -113,43 +123,39 @@ pub(crate) fn chunk_runs(tracks: usize, chunks: &[Chunk], start: u64) -> Vec<Vec
     runs
 }
 
-fn moov(tracks: &[Track], chunks: &[Chunk], start: u64, co64: bool) -> Vec<u8> {
-    let mut out = Out::default();
-    let moov = out.open(b"moov");
-    let durations: Vec<u64> = tracks
-        .iter()
-        .map(|track| to_movie(track.duration(), track.timescale))
-        .collect();
-    mvhd(
-        &mut out,
-        durations.iter().copied().max().unwrap_or(0),
-        tracks.len() as u32 + 1,
-    );
-    let runs = chunk_runs(tracks.len(), chunks, start);
-    for (index, track) in tracks.iter().enumerate() {
-        trak(
-            &mut out,
-            track,
-            index as u32 + 1,
-            durations[index],
-            &runs[index],
-            co64,
-        );
+/// Những gì moov cần: track, mốc thời gian đã tính, chunk theo thứ tự ghi.
+struct Movie<'a> {
+    tracks: &'a [Track],
+    timings: &'a [Timing],
+    chunks: &'a [Chunk],
+}
+
+impl Movie<'_> {
+    fn moov(&self, start: u64, co64: bool) -> Vec<u8> {
+        let mut out = Out::default();
+        let moov = out.open(b"moov");
+        let longest = self.timings.iter().map(|timing| timing.track).max();
+        mvhd(&mut out, longest.unwrap_or(0), self.tracks.len() as u32 + 1);
+        let runs = chunk_runs(self.tracks.len(), self.chunks, start);
+        for (index, track) in self.tracks.iter().enumerate() {
+            let id = index as u32 + 1;
+            trak(
+                &mut out,
+                track,
+                id,
+                &self.timings[index],
+                &runs[index],
+                co64,
+            );
+        }
+        out.close(moov);
+        out.buf
     }
-    out.close(moov);
-    out.buf
 }
 
-/// Đổi sang timescale 1000 của movie, làm tròn lên như ffmpeg.
-fn to_movie(duration: u64, timescale: u32) -> u64 {
-    let scaled =
-        (u128::from(duration) * u128::from(MOVIE_TIMESCALE)).div_ceil(u128::from(timescale));
-    u64::try_from(scaled).unwrap_or(u64::MAX)
-}
-
-/// version 1 khi giá trị không vừa 32 bit.
+/// version 1 của mvhd/tkhd/mdhd khi giá trị ≥ INT32_MAX (ngưỡng của ffmpeg).
 fn version(value: u64) -> u8 {
-    u8::from(value > u64::from(u32::MAX))
+    u8::from(value >= i32::MAX as u64)
 }
 
 fn mvhd(out: &mut Out, duration: u64, next_track: u32) {
@@ -168,21 +174,12 @@ fn mvhd(out: &mut Out, duration: u64, next_track: u32) {
     out.close(start);
 }
 
-fn trak(out: &mut Out, track: &Track, id: u32, duration: u64, runs: &[Run], co64: bool) {
+fn trak(out: &mut Out, track: &Track, id: u32, timing: &Timing, runs: &[Run], co64: bool) {
     let trak = out.open(b"trak");
-    tkhd(out, track, id, duration);
-    // Edit list (duration, 0) giống ffmpeg: không dịch thời gian, chỉ khai độ dài.
-    let edts = out.open(b"edts");
-    let wide = version(duration);
-    let elst = out.open_full(b"elst", wide, 0);
-    out.u32(1);
-    out.sized(wide, duration);
-    out.sized(wide, 0);
-    out.u32(0x0001_0000);
-    out.close(elst);
-    out.close(edts);
+    tkhd(out, track, id, timing.track);
+    edts(out, timing);
     let mdia = out.open(b"mdia");
-    mdhd(out, track);
+    mdhd(out, track, timing.media);
     out.bytes(&track.hdlr);
     let minf = out.open(b"minf");
     out.bytes(&track.media_header);
@@ -220,8 +217,21 @@ fn tkhd(out: &mut Out, track: &Track, id: u32, duration: u64) {
     out.close(start);
 }
 
-fn mdhd(out: &mut Out, track: &Track) {
-    let duration = track.duration();
+/// Edit list một mục như ffmpeg: media_time bỏ phần DTS âm (B-frame, priming AAC), segment tính
+/// theo PTS.
+fn edts(out: &mut Out, timing: &Timing) {
+    let edts = out.open(b"edts");
+    let wide = u8::from(timing.wide);
+    let elst = out.open_full(b"elst", wide, 0);
+    out.u32(1);
+    out.sized(wide, timing.segment);
+    out.sized(wide, timing.media_time);
+    out.u32(0x0001_0000);
+    out.close(elst);
+    out.close(edts);
+}
+
+fn mdhd(out: &mut Out, track: &Track, duration: u64) {
     let version = version(duration);
     let start = out.open_full(b"mdhd", version, 0);
     out.sized(version, 0);
@@ -239,6 +249,9 @@ fn stbl(out: &mut Out, track: &Track, runs: &[Run], co64: bool) {
     stts(out, &track.samples);
     if !track.samples.iter().all(|sample| sample.sync) {
         stss(out, &track.samples);
+    }
+    if track.kind == Kind::Video && track.samples.iter().any(|sample| sample.cts != 0) {
+        ctts(out, &track.samples);
     }
     stsc(out, runs);
     stsz(out, &track.samples);
@@ -268,6 +281,20 @@ fn stss(out: &mut Out, samples: &[Sample]) {
     let mut entries = 0;
     for (index, _) in samples.iter().enumerate().filter(|(_, sample)| sample.sync) {
         out.u32(index as u32 + 1);
+        entries += 1;
+    }
+    out.patch(count, entries);
+    out.close(start);
+}
+
+/// ctts version 0 (lệch luôn ≥ 0), gộp mẫu liền nhau cùng lệch như ffmpeg.
+fn ctts(out: &mut Out, samples: &[Sample]) {
+    let start = out.open_full(b"ctts", 0, 0);
+    let count = out.slot();
+    let mut entries = 0;
+    for group in samples.chunk_by(|left, right| left.cts == right.cts) {
+        out.u32(group.len() as u32);
+        out.u32(group[0].cts);
         entries += 1;
     }
     out.patch(count, entries);
