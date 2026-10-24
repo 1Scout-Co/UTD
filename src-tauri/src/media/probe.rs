@@ -69,6 +69,11 @@ pub async fn probe(
             "--encoding",
             "utf-8",
             "--no-playlist",
+            // Link là kênh (kể cả link rút gọn `vm.tiktok.com` trỏ tới kênh): chỉ đọc đầu danh sách để
+            // chuyển sang hộp Tải cả kênh, không phân tích từng video.
+            "--flat-playlist",
+            "--playlist-items",
+            "0",
             "--no-warnings",
             "--skip-download",
             "--socket-timeout",
@@ -101,6 +106,14 @@ fn build_result(
 ) -> Result<MediaProbeResult, String> {
     if value.get("_has_drm").and_then(Value::as_bool) == Some(true) {
         return Err("Nội dung có DRM; UTD không vượt qua bảo vệ bản quyền.".into());
+    }
+    if value.get("_type").and_then(Value::as_str) == Some("playlist") {
+        let link = value
+            .get("webpage_url")
+            .and_then(Value::as_str)
+            .filter(|link| utd_engine::validate_url(link).is_ok())
+            .unwrap_or(original_url);
+        return Err(crate::media_pages::channel_page_error(link));
     }
     if value.get("is_live").and_then(Value::as_bool) == Some(true)
         || value
@@ -518,7 +531,7 @@ fn sum_size(video: Option<u64>, audio: Option<u64>) -> Option<u64> {
     }
 }
 
-fn classify_stderr(stderr: &str) -> String {
+pub(super) fn classify_stderr(stderr: &str) -> String {
     let message = stderr.to_ascii_lowercase();
     if message.contains("drm") {
         return "Nội dung có DRM; UTD không vượt qua bảo vệ bản quyền.".into();
@@ -961,6 +974,19 @@ mod tests {
         let mut live = sample_info();
         live["is_live"] = json!(true);
         assert!(build_result("https://example.com", &live, true).is_err());
+    }
+
+    #[test]
+    fn playlists_point_to_the_channel_flow() {
+        let playlist = json!({
+            "_type": "playlist",
+            "id": "MS4wLjABAAAA",
+            "title": "tiktok",
+            "entries": [],
+            "webpage_url": "https://www.tiktok.com/@tiktok",
+        });
+        let error = build_result("https://vm.tiktok.com/ZMabc/", &playlist, true).unwrap_err();
+        assert_eq!(error, "channel_page: https://www.tiktok.com/@tiktok");
     }
 
     #[test]

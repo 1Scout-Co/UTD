@@ -209,6 +209,8 @@ pub fn run() {
             media::cancel_media_tool_install,
             media::media_probe,
             media::add_media_download,
+            media::channel::channel_list,
+            media::channel::channel_list_cancel,
             media_pages::take_media_request,
             updater::check_for_update,
             updater::install_update,

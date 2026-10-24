@@ -47,6 +47,10 @@ pub(crate) fn enqueue_download(
     if crate::media_pages::is_media_page(&input.url) {
         return Err(crate::media_pages::media_page_error());
     }
+    // Trang kênh: mở hộp Tải cả kênh với link đó.
+    if crate::media_pages::is_channel_page(&input.url) {
+        return Err(crate::media_pages::channel_page_error(&input.url));
+    }
     let dest_dir = match input.dest_dir.filter(|value| !value.trim().is_empty()) {
         Some(value) => checked_dest_dir(&value, &app_data_dir(&app)?)?,
         None => suggested_download_dir(&app)?,

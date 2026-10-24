@@ -1,3 +1,5 @@
+/// Tải cả kênh: `channel::channel_list`, `channel::channel_list_cancel`.
+pub(crate) mod channel;
 mod fast;
 mod finish;
 mod install;
@@ -37,6 +39,10 @@ pub struct AddMediaInput {
     pub selector: String,
     pub audio_format: Option<String>,
     pub page_url: Option<String>,
+    /// Tải cả kênh: thư mục con (tên kênh) trong thư mục tải.
+    pub subfolder: Option<String>,
+    /// Tải cả kênh: video này của kênh nào, để lần sau "Tải video mới" bỏ qua.
+    pub channel: Option<channel::ChannelPick>,
 }
 
 /// Dò công cụ có chạy `--version` nên làm ngoài luồng giao diện.
@@ -109,7 +115,7 @@ fn enqueue_media(app: AppHandle, input: AddMediaInput) -> Result<DownloadTask, S
         validate_url(page_url).map_err(|error| error.to_string())?;
     }
 
-    let destination = crate::commands::suggested_download_dir(&app)?;
+    let destination = media_destination(&app, input.subfolder.as_deref())?;
     std::fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
     let title = input.title.trim();
     let title = if title.is_empty() { "Media" } else { title };
@@ -153,7 +159,21 @@ fn enqueue_media(app: AppHandle, input: AddMediaInput) -> Result<DownloadTask, S
         let _ = journal.delete_task(&task.id);
         return Err(error);
     }
+    if let Some(pick) = &input.channel
+        && let Err(error) = channel::remember(&journal, pick, &task.id)
+    {
+        log::warn!("channel: không nhớ được video đã tải ({error})");
+    }
     Ok(task)
+}
+
+/// Thư mục tải, cộng thư mục con (tên kênh) khi tải cả kênh; tên con được làm sạch thành một tầng.
+fn media_destination(app: &AppHandle, subfolder: Option<&str>) -> Result<std::path::PathBuf, String> {
+    let destination = crate::commands::suggested_download_dir(app)?;
+    match subfolder.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => Ok(destination.join(safe_base(name))),
+        None => Ok(destination),
+    }
 }
 
 pub(crate) fn spawn_media_run(

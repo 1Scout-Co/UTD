@@ -23,11 +23,13 @@ struct PipeRequest {
 }
 
 /// Việc làm với một yêu cầu qua pipe. Token và giới hạn kiểm trước, rồi mới xem có phải trang video.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Route {
     Reject(&'static str),
     /// Trang video: không tạo task HTTP (chỉ được trang HTML), mở hộp Tải media trong UTD.
     Media,
+    /// Trang kênh: cùng sự kiện với trang video, giao diện nhận ra link kênh và mở hộp Tải cả kênh.
+    Channel,
     Download,
 }
 
@@ -38,6 +40,8 @@ fn route(request: &PipeRequest, token: &str) -> Route {
         Route::Reject("URL quá dài.")
     } else if crate::media_pages::is_media_page(&request.url) {
         Route::Media
+    } else if crate::media_pages::is_channel_page(&request.url) {
+        Route::Channel
     } else {
         Route::Download
     }
@@ -228,15 +232,21 @@ async fn handle_connection(
 
     let request: PipeRequest =
         serde_json::from_str(&line).map_err(|_| "IPC payload không hợp lệ".to_string())?;
-    let response = match route(&request, token) {
+    let routed = route(&request, token);
+    let response = match routed {
         Route::Reject(message) => PipeResponse::error(message),
-        Route::Media => {
+        Route::Media | Route::Channel => {
+            let note = if routed == Route::Channel {
+                crate::media_pages::CHANNEL_PAGE_NOTE
+            } else {
+                crate::media_pages::MEDIA_PAGE_NOTE
+            };
             let media = crate::events::MediaRequest {
                 url: request.url.trim().to_string(),
                 page_url: crate::media_pages::clean_page_url(request.page_url),
             };
             crate::media_pages::open_media_flow(&app, media);
-            PipeResponse::note(crate::media_pages::MEDIA_PAGE_NOTE)
+            PipeResponse::note(note)
         }
         Route::Download => {
             let input = crate::commands::AddDownloadInput {
@@ -298,6 +308,10 @@ mod tests {
             route(&request(TOKEN, "https://www.youtube.com/"), TOKEN),
             Route::Download,
             "trang chủ vẫn đi đường tải thường"
+        );
+        assert_eq!(
+            route(&request(TOKEN, "https://www.tiktok.com/@tiktok"), TOKEN),
+            Route::Channel
         );
     }
 

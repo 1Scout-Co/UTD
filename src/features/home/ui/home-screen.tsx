@@ -5,6 +5,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event"
 import {
   addDownload,
   addMediaDownload,
+  channelPageUrl,
   defaultDownloadDir,
   diskSpace,
   isDesktopApp,
@@ -16,6 +17,7 @@ import {
   subscribeEngine,
 } from "../api/downloads"
 import { formatBytes, mapEngineTask } from "../model/download-mapper"
+import { isChannelPage } from "../model/media-pages"
 import { downloads as demoDownloads, stats as demoStats } from "../model/mock-data"
 import type {
   AddDownloadPayload,
@@ -26,6 +28,7 @@ import type {
   StorageInfo,
 } from "../model/types"
 import { AddDownloadDialog } from "./add-download-dialog"
+import { ChannelFlow, useChannelFlow } from "./channel-flow"
 import { DoctorDialog } from "./doctor-dialog"
 import { MediaPickerDialog, useMediaRequests } from "./media-picker-dialog"
 import { SettingsDialog } from "./settings-dialog"
@@ -150,13 +153,40 @@ export function HomeScreen() {
         usedPercent: demoStats.storageUsed,
       }
 
-  const openMediaWith = useCallback((url: string) => {
-    setAddOpen(false)
-    setSettingsOpen(false)
-    setMediaError(null)
-    setMediaRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1 }))
-    setMediaOpen(true)
+  // Task mới (thêm từ hộp Tải cả kênh) lên đầu danh sách.
+  const showTask = useCallback((task: EngineTask) => {
+    setTasks((previous) => [task, ...previous.filter((item) => item.id !== task.id)])
+    setScreenState("data")
   }, [])
+  const channel = useChannelFlow(tasks, showTask)
+  const { openChannel } = channel
+
+  // Mã `channel_page:` của app (kể cả link rút gọn trỏ tới kênh) mở thẳng hộp Tải cả kênh.
+  const openChannelWith = useCallback(
+    (url: string) => {
+      setAddOpen(false)
+      setSettingsOpen(false)
+      setMediaOpen(false)
+      openChannel(url)
+    },
+    [openChannel],
+  )
+
+  // Link trang video ⇒ hộp Tải media; link kênh (TikTok @user, kênh/playlist YouTube) ⇒ hộp Tải cả kênh.
+  const openMediaWith = useCallback(
+    (url: string) => {
+      if (isChannelPage(url)) {
+        openChannelWith(url)
+        return
+      }
+      setAddOpen(false)
+      setSettingsOpen(false)
+      setMediaError(null)
+      setMediaRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1 }))
+      setMediaOpen(true)
+    },
+    [openChannelWith],
+  )
   useMediaRequests(desktop, openMediaWith)
 
   const openAdd = () => {
@@ -194,7 +224,9 @@ export function HomeScreen() {
       setAddOpen(false)
       refreshStorage()
     } catch (error) {
-      if (isMediaPageError(error)) openMediaWith(payload.url)
+      const channelUrl = channelPageUrl(error)
+      if (channelUrl) openChannelWith(channelUrl)
+      else if (isMediaPageError(error)) openMediaWith(payload.url)
       else setAddError(error instanceof Error ? error.message : String(error))
     } finally {
       setAddBusy(false)
@@ -322,7 +354,9 @@ export function HomeScreen() {
         busy={mediaBusy}
         error={mediaError}
         onSubmit={submitMedia}
+        onChannel={openChannelWith}
       />
+      <ChannelFlow desktop={desktop} flow={channel} />
       <DoctorDialog
         item={diagnoseItem}
         open={diagnoseItem !== null}
