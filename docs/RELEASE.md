@@ -88,7 +88,7 @@ Tải vào thư mục được bảo vệ (`~/Downloads`, Desktop, Documents, �
   RUSTUP_TOOLCHAIN=stable pnpm tauri build
   ```
   Ra `target/release/bundle/macos/UTD.app` và `target/release/bundle/dmg/UTD_<số>_aarch64.dmg` (chỉ chip của máy đang dựng). Muốn bản universal như CI: `rustup target add aarch64-apple-darwin x86_64-apple-darwin` rồi thêm `--target universal-apple-darwin`.
-- Chạy thử song song với bản thật: đặt `UTD_DATA_DIR=<thư mục tuyệt đối>` (dữ liệu riêng). Trên Mac: `open -n --env UTD_DATA_DIR=$HOME/utd-thu target/release/bundle/macos/UTD.app`.
+- Chạy thử song song với bản thật: đặt `UTD_DATA_DIR=<thư mục tuyệt đối>` (dữ liệu riêng). Trên Mac: `open -n --env UTD_DATA_DIR=$HOME/utd-thu target/release/bundle/macos/UTD.app`. Bản thử không cài tích hợp trình duyệt (đăng ký native host là của chung cả máy, ghi đè thì hỏng bản đã cài); muốn thử chính việc cài trên máy không có bản thật thì đặt thêm `UTD_TEST_BROWSER_INTEGRATION=1`.
 - Cấu hình riêng cho Mac nằm ở `src-tauri/tauri.macos.conf.json` (`.app` + `.dmg`, ký ad-hoc, macOS 11+, không gắn điều khoản giấy phép vào .dmg) và `src-tauri/Info.plist` (câu giải thích khi xin quyền thư mục).
 
 ## Ký mã (code signing)

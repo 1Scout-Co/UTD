@@ -83,8 +83,28 @@ pub const HOST_FILE: &str = "utd-native-host.exe";
 #[cfg(not(windows))]
 pub const HOST_FILE: &str = "utd-native-host";
 
+/// Thử chính tính năng cài tích hợp ở bản chạy thử, trên máy không có bản UTD thật: đặt thêm biến này = 1.
+const TEST_INTEGRATION_ENV: &str = "UTD_TEST_BROWSER_INTEGRATION";
+
+/// Đăng ký native host là của chung cả máy (HKCU, `~/Library/.../NativeMessagingHosts`): bản chạy thử
+/// (`UTD_DATA_DIR`) ghi đè thì trình duyệt thật mất host khi dọn thư mục thử (Windows) hoặc gửi link sang
+/// bản thử (macOS). Nên bản thử không cài, trừ khi bật `UTD_TEST_BROWSER_INTEGRATION=1`.
+fn check_isolated_install(isolated: bool, allowed: bool) -> Result<(), String> {
+    if isolated && !allowed {
+        return Err(
+            "Bản chạy thử (UTD_DATA_DIR) không cài tích hợp trình duyệt, để khỏi ghi đè bản UTD đã cài."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn install_browser_integration() -> Result<BrowserIntegrationStatus, String> {
+    check_isolated_install(
+        crate::ipc::isolated_data_dir().is_some(),
+        std::env::var_os(TEST_INTEGRATION_ENV).is_some_and(|value| value == "1"),
+    )?;
     let directory = crate::ipc::data_dir()?;
     refresh_extensions()?;
     let host_directory = directory.join("native-messaging");
@@ -310,5 +330,13 @@ mod tests {
         assert_eq!(fresh, include_bytes!("../../extensions/chromium/background.js"));
         assert!(directory.join("firefox").join("popup.js").is_file());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_builds_do_not_register_with_the_real_browser() {
+        assert!(check_isolated_install(false, false).is_ok());
+        let refused = check_isolated_install(true, false).unwrap_err();
+        assert!(refused.contains("Bản chạy thử"), "{refused}");
+        assert!(check_isolated_install(true, true).is_ok(), "thử tính năng trên máy không có bản thật");
     }
 }
