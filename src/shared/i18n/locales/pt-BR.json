@@ -27,7 +27,7 @@
   "stats.queued": "Na fila",
 
   "toolbar.search": "Pesquisar downloads",
-  "toolbar.searchPlaceholder": "Pesquisar arquivos, descrições…",
+  "toolbar.searchPlaceholder": "Buscar arquivos…",
   "toolbar.clearSearch": "Limpar pesquisa",
   "toolbar.filter": "Filtrar downloads",
   "toolbar.add": "Adicionar URL",

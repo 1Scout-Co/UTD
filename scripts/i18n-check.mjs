@@ -185,7 +185,18 @@ function checkHardcoded() {
   walk(join(root, "src"))
 }
 
+// File dịch được fetch từ chính app (dist/assets): CSP của Tauri thiếu 'self' ở connect-src thì app desktop
+// chỉ hiện khoá trần, còn bản xem trước trên trình duyệt (không có CSP này) vẫn chạy nên e2e không bắt được.
+function checkCsp() {
+  const config = JSON.parse(read(join(root, "src-tauri/tauri.conf.json")))
+  const connect = config.app?.security?.csp?.["connect-src"] ?? ""
+  if (!connect.split(/\s+/).includes("'self'")) {
+    fail(`src-tauri/tauri.conf.json: CSP "connect-src" cần 'self' để tải file dịch (đang là "${connect}").`)
+  }
+}
+
 const languages = readLanguages()
+checkCsp()
 const source = checkLanguages(languages)
 checkRustCodes(source)
 checkExtension(languages)

@@ -27,7 +27,7 @@
   "stats.queued": "В очереди",
 
   "toolbar.search": "Поиск загрузок",
-  "toolbar.searchPlaceholder": "Поиск по файлам, описаниям…",
+  "toolbar.searchPlaceholder": "Поиск файлов…",
   "toolbar.clearSearch": "Очистить поиск",
   "toolbar.filter": "Фильтр загрузок",
   "toolbar.add": "Добавить URL",

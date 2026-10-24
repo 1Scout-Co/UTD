@@ -16,6 +16,9 @@ Luật cho AI sửa app này. Người dùng không viết code: giữ giao di�
 | Kiểu dáng | class Tailwind | CSS tự viết, style inline |
 | Gọi dữ liệu / dịch vụ ngoài | `src/features/<tên>/api` | gọi từ `ui` |
 | Tiền, ngày | hàm định dạng chung trong `src/shared` (tạo khi cần) | định dạng rải rác |
+| Chữ giao diện (2026-10-24, thêm khi làm đa ngôn ngữ) | `t("khoá")` từ `src/shared/i18n/i18n`; câu tiếng Việt vào `locales/vi.json` rồi thêm cùng khoá vào 15 file dịch còn lại; lỗi Rust dịch theo `err.<code>` | chuỗi viết cứng trong JSX (`pnpm lint` chặn chữ tiếng Việt) |
+| Số, dung lượng, tốc độ, ngày (2026-10-24) | `src/shared/i18n/format.ts` (Intl theo ngôn ngữ đang chọn) | `Intl.*("vi-VN")` hay ghép "MB/s" tay |
+| Trái/phải (2026-10-24, có tiếng Ả Rập RTL) | class logical `ms-/me-/ps-/pe-/start-/end-/text-start/text-end` | `ml-/mr-/pl-/pr-/left-/right-/text-left/text-right` |
 
 ## Cấu trúc (docs/arch.json là luật máy đọc)
 - Mỗi tính năng một thư mục `src/features/<tên>/{ui,model,api}`; tính năng KHÔNG import tính năng khác; dùng chung đặt ở `src/shared`.

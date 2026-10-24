@@ -27,7 +27,7 @@
   "stats.queued": "Queued",
 
   "toolbar.search": "Search downloads",
-  "toolbar.searchPlaceholder": "Search files, descriptions…",
+  "toolbar.searchPlaceholder": "Search files…",
   "toolbar.clearSearch": "Clear search",
   "toolbar.filter": "Filter downloads",
   "toolbar.add": "Add URL",

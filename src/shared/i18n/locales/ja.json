@@ -27,7 +27,7 @@
   "stats.queued": "待機中",
 
   "toolbar.search": "ダウンロードを検索",
-  "toolbar.searchPlaceholder": "ファイル名、説明を検索…",
+  "toolbar.searchPlaceholder": "ファイルを検索…",
   "toolbar.clearSearch": "検索をクリア",
   "toolbar.filter": "ダウンロードを絞り込み",
   "toolbar.add": "URLを追加",

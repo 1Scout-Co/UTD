@@ -27,7 +27,7 @@
   "stats.queued": "รอคิว",
 
   "toolbar.search": "ค้นหาดาวน์โหลด",
-  "toolbar.searchPlaceholder": "ค้นหาไฟล์, คำอธิบาย…",
+  "toolbar.searchPlaceholder": "ค้นหาไฟล์…",
   "toolbar.clearSearch": "ล้างการค้นหา",
   "toolbar.filter": "กรองดาวน์โหลด",
   "toolbar.add": "เพิ่ม URL",

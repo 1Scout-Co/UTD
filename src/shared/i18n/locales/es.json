@@ -27,7 +27,7 @@
   "stats.queued": "En cola",
 
   "toolbar.search": "Buscar descargas",
-  "toolbar.searchPlaceholder": "Buscar archivos, descripciones…",
+  "toolbar.searchPlaceholder": "Buscar archivos…",
   "toolbar.clearSearch": "Borrar búsqueda",
   "toolbar.filter": "Filtrar descargas",
   "toolbar.add": "Añadir URL",
