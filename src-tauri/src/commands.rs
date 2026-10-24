@@ -231,15 +231,44 @@ fn measure_disk(app: &AppHandle, path: Option<String>) -> Result<DiskSpace, Stri
     std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
     let free_bytes = fs2::available_space(&path).map_err(|error| error.to_string())?;
     let total_bytes = fs2::total_space(&path).map_err(|error| error.to_string())?;
-    let label = path
-        .components()
-        .next()
-        .map(|component| component.as_os_str().to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Ổ đĩa".into());
     Ok(DiskSpace {
         free_bytes,
         total_bytes,
-        label,
+        label: disk_label(&path),
+    })
+}
+
+/// Tên ổ hiện cạnh dung lượng: `C:` trên Windows; trên macOS là tên Finder hiện ("Macintosh HD",
+/// tên USB), không có thì `/Volumes/<tên>`.
+fn disk_label(path: &Path) -> String {
+    #[cfg(target_os = "macos")]
+    if let Some(name) = mac_volume_name(path) {
+        return name;
+    }
+    if cfg!(target_os = "macos")
+        && let Some(name) = volume_root(path).strip_prefix("/Volumes").ok().and_then(Path::to_str)
+        && !name.is_empty()
+    {
+        return name.to_string();
+    }
+    path.components()
+        .next()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Ổ đĩa".into())
+}
+
+/// `NSURLVolumeLocalizedNameKey`: thư mục người dùng nằm ở ổ Data (firmlink) vẫn ra "Macintosh HD".
+#[cfg(target_os = "macos")]
+fn mac_volume_name(path: &Path) -> Option<String> {
+    use objc2_foundation::{NSString, NSURL, NSURLVolumeLocalizedNameKey};
+    objc2::rc::autoreleasepool(|_| {
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        let mut value = None;
+        // SAFETY: khoá là hằng của Foundation; `value` nhận đúng một đối tượng hoặc để None.
+        unsafe { url.getResourceValue_forKey_error(&mut value, NSURLVolumeLocalizedNameKey) }
+            .ok()?;
+        let name = value?.downcast::<NSString>().ok()?.to_string();
+        (!name.trim().is_empty()).then_some(name)
     })
 }
 
@@ -721,5 +750,21 @@ mod tests {
             volume_root(Path::new("/Volumes/USB/Phim")),
             PathBuf::from("/Volumes/USB")
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_disk_label_is_the_volume_name() {
+        let boot = disk_label(Path::new("/"));
+        assert!(!boot.is_empty() && boot != "/", "tên ổ khởi động, không phải \"/\": {boot}");
+        assert_eq!(disk_label(&std::env::temp_dir()), boot, "ổ Data vẫn mang tên ổ khởi động");
+        let usb = format!("utd-khong-co-{}", uuid::Uuid::new_v4().simple());
+        assert_eq!(disk_label(&Path::new("/Volumes").join(&usb).join("Phim")), usb);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_disk_label_is_the_drive() {
+        assert_eq!(disk_label(Path::new(r"C:\Users\ban\Downloads")), "C:");
     }
 }

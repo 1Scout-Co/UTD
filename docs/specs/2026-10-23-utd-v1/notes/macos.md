@@ -74,7 +74,7 @@ Sự cố nhỏ lúc kiểm (đã xử lý): lệnh `osascript` tới Finder là
 
 - Menu app tiếng Anh ("About UTD", "Hide UTD", "Quit UTD"…) dù macOS đặt tiếng Việt: menu mặc định của Tauri — phiên (1) đa ngôn ngữ có thể tự dựng menu theo ngôn ngữ.
 - Cài đặt → yt-dlp ghi "Giấy phép: Unlicense (bản .exe có phần GPLv3+)" cả trên Mac — phiên (2).
-- Ô dung lượng đĩa ghi nhãn `/` trên Mac (Windows ghi `C:`) — nên hiện tên ổ ("Macintosh HD").
+- ~~Ô dung lượng đĩa ghi nhãn `/` trên Mac~~ — đã sửa: hiện tên ổ như Finder (`NSURLVolumeLocalizedNameKey`: "Macintosh HD", cả với thư mục người dùng nằm ở ổ Data), không có thì `/Volumes/<tên>`; Windows vẫn `C:` (`commands.rs::disk_label`). Ô dung lượng ở thanh bên tự xuống dòng khi tên dài ("Macintosh HD" trên, "34,5 GB trống" dưới); nhãn ngắn như `C:` vẫn chung một dòng (`soniox.tsx::StorageCard`). Kiểm bằng mắt trên app Mac thật và bản web.
 
 ## Đã dọn trên Mac
 

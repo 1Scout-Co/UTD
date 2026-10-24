@@ -113,9 +113,12 @@ function NavItem({
 function StorageCard({ storage }: { storage: StorageSummary }) {
   return (
     <div className="rounded-xl bg-card p-3 shadow-soft ring-1 ring-foreground/5">
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">{storage.label}</span>
-        <span className="font-semibold">{storage.free} trống</span>
+      {/* Tên ổ dài ("Macintosh HD", tên USB) thì dung lượng xuống dòng dưới; "C:" vẫn chung một dòng. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs">
+        <span className="max-w-full truncate text-muted-foreground" title={storage.label}>
+          {storage.label}
+        </span>
+        <span className="shrink-0 font-semibold whitespace-nowrap">{storage.free} trống</span>
       </div>
       <Meter
         label="Dung lượng ổ đĩa"
