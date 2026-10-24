@@ -125,7 +125,14 @@ test('S-01: menu chuột phải và menu ⋯ không lấn vào dải thanh tiêu
     const row = rows.nth(index)
     const box = await row.boundingBox()
     if (!box || box.y + box.height > 680) break
-    await page.mouse.click(box.x + box.width - 40, box.y + box.height / 2, { button: 'right' })
+    const point = { x: box.x + box.width - 40, y: box.y + box.height / 2 }
+    // Hàng bị khung cuộn của bảng che (dưới mép khung) thì điểm bấm rơi vào nền card: dừng ở đó.
+    const onRow = await row.evaluate(
+      (element, { x, y }) => element.contains(document.elementFromPoint(x, y)),
+      point,
+    )
+    if (!onRow) break
+    await page.mouse.click(point.x, point.y, { button: 'right' })
     await expect(menu).toBeVisible()
     expect((await menu.boundingBox())!.y).toBeGreaterThanOrEqual(44)
     await page.keyboard.press('Escape')

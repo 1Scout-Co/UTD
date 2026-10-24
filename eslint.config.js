@@ -18,7 +18,7 @@ const shadcnRules = {
 
 export default defineConfig([
   // test-results / playwright-report: Playwright tạo và xoá thư mục này khi test chạy song song với eslint ⇒ eslint quét trúng thì lỗi ENOENT.
-  globalIgnores(['dist', 'target', 'test-results', 'playwright-report']),
+  globalIgnores(['dist', 'target', 'test-results', 'playwright-report', '.claude']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

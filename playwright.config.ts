@@ -12,6 +12,7 @@ const extraHTTPHeaders = process.env.SMOKE_EXTRA_HTTP_HEADERS ? (JSON.parse(proc
 export default defineConfig({
   testDir: 'e2e',
   reporter: 'list',
+  globalSetup: './e2e/warmup.ts',
   use: { baseURL, extraHTTPHeaders },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: process.env.BASE_URL

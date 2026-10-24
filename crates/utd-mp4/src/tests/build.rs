@@ -3,6 +3,7 @@
 //! trun → tfhd → trex độc lập với bộ đọc) và byte dữ liệu từng mẫu.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::Kind;
 use crate::table::Sample;
@@ -35,9 +36,17 @@ fn words(values: &[u32]) -> Vec<u8> {
 /// Thư mục tạm riêng mỗi test, tự xoá.
 pub(super) struct Scratch(pub PathBuf);
 
+/// Số thứ tự thư mục tạm: hai test chạy song song cùng `name` (vd cùng ca `refused`) không được
+/// dùng chung một thư mục, kẻo test này xoá thư mục test kia đang ghi.
+static NEXT_SCRATCH: AtomicUsize = AtomicUsize::new(0);
+
 impl Scratch {
     pub fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("utd-mp4-{}-{name}", std::process::id()));
+        let serial = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "utd-mp4-{}-{serial}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         Self(path)
