@@ -306,7 +306,8 @@ jobs:
           path: ${{ env.RELEASE_DIR }}/
           if-no-files-found: error
 
-      # Bản nháp: chủ dự án đọc lại rồi tự bấm Publish trên GitHub. Chạy lại job chỉ ghi đè file của bản còn nháp.
+      # Bản nháp: chủ dự án đọc lại rồi tự bấm Publish trên GitHub. Chạy lại job chỉ ghi đè file của bản còn nháp
+      # (giữ nguyên ghi chú đã sửa tay). Ghi chú lấy từ docs/releases/<tag>.md; không có thì GitHub tự liệt kê commit.
       - name: Create draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -320,5 +321,9 @@ jobs:
             fi
             gh release upload "$tag" "$RELEASE_DIR"/* --clobber
           else
-            gh release create "$tag" "$RELEASE_DIR"/* --draft --verify-tag --title "UTD $tag" --generate-notes
+            notes=(--generate-notes)
+            if [ -s "docs/releases/$tag.md" ]; then
+              notes=(--notes-file "docs/releases/$tag.md")
+            fi
+            gh release create "$tag" "$RELEASE_DIR"/* --draft --verify-tag --title "UTD $tag" "${notes[@]}"
           fi

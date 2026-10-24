@@ -7,26 +7,27 @@ Hướng dẫn ngắn cho chủ dự án. Máy CI trên GitHub làm hết phần
 1. **Đổi số phiên bản** (ví dụ `0.2.0`) ở cả 3 chỗ, cùng một số:
    - `src-tauri/tauri.conf.json` → `"version"` (số này in lên bộ cài và app)
    - `Cargo.toml` ở thư mục gốc → `[workspace.package]` → `version`
-   - `package.json` → `"version"` (hiện còn `0.0.1`, đặt cùng số cho gọn)
-2. **Commit** thay đổi rồi **gắn tag** có chữ `v` đứng trước:
+   - `package.json` → `"version"` (đặt cùng số cho gọn)
+2. **Viết ghi chú** `docs/releases/v0.2.0.md` (cách viết: [Phát bản cập nhật](#phát-bản-cập-nhật), mẫu: `docs/releases/v0.1.0.md`).
+3. **Commit** thay đổi rồi **gắn tag** có chữ `v` đứng trước:
    ```
    git tag v0.2.0
    git push origin main v0.2.0
    ```
-3. **CI tự chạy** (file `.github/workflows/ci.yml`, khoảng 20–30 phút):
+4. **CI tự chạy** (file `.github/workflows/ci.yml`, khoảng 20–30 phút):
    - kiểm tra trên Windows **và** macOS → kiểm số phiên bản và khoá ký bản cập nhật
    - dựng **song song**: bộ cài Windows (NSIS) và bản macOS (một file `.dmg` chạy cả Mac chip Apple lẫn Mac Intel)
    - viết `latest.json` (tự cập nhật cho cả hai nền tảng) → tính `SHA256SUMS.txt` → tạo **bản nháp** ở trang Releases.
 
    Tag khác số trong `tauri.conf.json` hoặc `Cargo.toml`, hoặc chưa có khoá ký bản cập nhật, thì CI dừng và báo lỗi (xem [Tự cập nhật](#tự-cập-nhật)).
-4. **Mở trang Releases** trên GitHub, đọc lại ghi chú, bấm **Publish release**. Chưa bấm thì người ngoài chưa thấy, và app của người dùng cũng chưa thấy bản mới.
-5. **Tự kiểm** (tuỳ chọn): tải file về rồi so mã với dòng tương ứng trong `SHA256SUMS.txt`:
+5. **Mở trang Releases** trên GitHub, đọc lại ghi chú, bấm **Publish release**. Chưa bấm thì người ngoài chưa thấy, và app của người dùng cũng chưa thấy bản mới.
+6. **Tự kiểm** (tuỳ chọn): tải file về rồi so mã với dòng tương ứng trong `SHA256SUMS.txt`:
    - Windows (PowerShell): `Get-FileHash .\UTD_0.2.0_x64-setup.exe`
    - macOS (Terminal): `shasum -a 256 UTD_0.2.0_universal.dmg`
 
 Chạy lại job khi bản còn nháp thì file được thay bằng file mới; bản đã Publish thì CI không ghi đè.
 
-### Bản nháp có 8 file (đừng xoá hay đổi tên)
+### Bản nháp có 7 file (đừng xoá hay đổi tên)
 
 | File | Cho ai |
 |---|---|
@@ -192,8 +193,12 @@ Lúc tạo khoá không đặt mật khẩu thì bỏ lệnh thứ hai, thay b�
 
 ### Phát bản cập nhật
 
-1. Làm như [Các bước](#các-bước) ở trên. Muốn ghi chú hiện trong app thì trước khi gắn tag tạo file `docs/releases/v0.2.0.md` (vài dòng ngắn, tối đa ~1500 ký tự); không có file thì app hiện "UTD 0.2.0" kèm link trang Releases.
-2. Kiểm bản nháp có đủ [8 file](#bản-nháp-có-8-file-đừng-xoá-hay-đổi-tên).
+1. Làm như [Các bước](#các-bước) ở trên. Ghi chú `docs/releases/v0.2.0.md` dùng cho hai chỗ:
+   - **3–4 dòng đầu** viết chữ thường, không markdown, không dòng trống: app hiện đúng 4 dòng đầu ở Cài đặt → Cập nhật (`latest.json` giữ tối đa 1500 ký tự đầu).
+   - **Cả file** (markdown) thành ghi chú của bản nháp trên trang Releases: tải file nào, có gì mới, cách mở lần đầu.
+
+   Không có file thì app hiện "UTD 0.2.0" kèm link, còn trang Releases tự liệt kê commit.
+2. Kiểm bản nháp có đủ [7 file](#bản-nháp-có-7-file-đừng-xoá-hay-đổi-tên).
 3. Bấm **Publish release** (để mặc định "Set as the latest release", không tick "pre-release"). Ngay lúc đó `releases/latest/download/latest.json` trỏ sang bản mới: app nào mở sau ~15 giây sẽ thấy, và nút **Kiểm tra** thấy ngay.
 
 Ghi chú: `pnpm tauri build` trên máy bạn không ký `.sig` và không cần khoá (chỉ CI bật `src-tauri/tauri.updater.conf.json`).
