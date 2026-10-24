@@ -248,14 +248,22 @@ fn measure_disk(app: &AppHandle, path: Option<String>) -> Result<DiskSpace, Stri
     Ok(DiskSpace {
         free_bytes,
         total_bytes,
-        label: volume_label(&path),
+        label: disk_label(&path),
     })
 }
 
-/// Tên ổ trên thẻ dung lượng: Windows `C:`; macOS tên ổ như Finder (không phải `/`).
-fn volume_label(path: &Path) -> String {
-    if cfg!(target_os = "macos") {
-        return mac_volume_label(path, Path::new("/Volumes"));
+/// Tên ổ hiện cạnh dung lượng: `C:` trên Windows; trên macOS là tên Finder hiện ("Macintosh HD",
+/// tên USB), không có thì `/Volumes/<tên>`.
+fn disk_label(path: &Path) -> String {
+    #[cfg(target_os = "macos")]
+    if let Some(name) = mac_volume_name(path) {
+        return name;
+    }
+    if cfg!(target_os = "macos")
+        && let Some(name) = volume_root(path).strip_prefix("/Volumes").ok().and_then(Path::to_str)
+        && !name.is_empty()
+    {
+        return name.to_string();
     }
     path.components()
         .next()
@@ -263,21 +271,19 @@ fn volume_label(path: &Path) -> String {
         .unwrap_or_else(|| "Ổ đĩa".into())
 }
 
-/// macOS: ổ ngoài là `/Volumes/<tên>`; ổ khởi động có liên kết trong `/Volumes` trỏ về `/` mang tên ổ
-/// (thường "Macintosh HD"). Không thấy thì gọi chung "Ổ đĩa".
-fn mac_volume_label(path: &Path, volumes: &Path) -> String {
-    if let Ok(rest) = path.strip_prefix(volumes)
-        && let Some(name) = rest.components().next()
-    {
-        return name.as_os_str().to_string_lossy().into_owned();
-    }
-    std::fs::read_dir(volumes)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .find(|entry| std::fs::read_link(entry.path()).is_ok_and(|target| target == Path::new("/")))
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Ổ đĩa".into())
+/// `NSURLVolumeLocalizedNameKey`: thư mục người dùng nằm ở ổ Data (firmlink) vẫn ra "Macintosh HD".
+#[cfg(target_os = "macos")]
+fn mac_volume_name(path: &Path) -> Option<String> {
+    use objc2_foundation::{NSString, NSURL, NSURLVolumeLocalizedNameKey};
+    objc2::rc::autoreleasepool(|_| {
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        let mut value = None;
+        // SAFETY: khoá là hằng của Foundation; `value` nhận đúng một đối tượng hoặc để None.
+        unsafe { url.getResourceValue_forKey_error(&mut value, NSURLVolumeLocalizedNameKey) }
+            .ok()?;
+        let name = value?.downcast::<NSString>().ok()?.to_string();
+        (!name.trim().is_empty()).then_some(name)
+    })
 }
 
 /// Thư mục người dùng chọn ở hộp Thêm (kiểm như Cài đặt, tạo nếu chưa có), không chọn ⇒ thư mục mặc định.
@@ -761,22 +767,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mac_disk_card_shows_the_volume_name_not_a_slash() {
-        let root = scratch();
-        let volumes = root.join("Volumes");
-        std::fs::create_dir_all(volumes.join("USB")).unwrap();
-        let film = volumes.join("USB").join("Phim");
-        assert_eq!(mac_volume_label(&film, &volumes), "USB");
-        assert_eq!(mac_volume_label(Path::new("/Users/ban/Downloads"), &volumes), "Ổ đĩa");
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink("/", volumes.join("Macintosh HD")).unwrap();
-            assert_eq!(mac_volume_label(Path::new("/Users/ban/Downloads"), &volumes), "Macintosh HD");
-        }
-        let _ = std::fs::remove_dir_all(root);
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn unplugged_mac_volume_falls_back_to_default() {
@@ -788,5 +778,21 @@ mod tests {
             volume_root(Path::new("/Volumes/USB/Phim")),
             PathBuf::from("/Volumes/USB")
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_disk_label_is_the_volume_name() {
+        let boot = disk_label(Path::new("/"));
+        assert!(!boot.is_empty() && boot != "/", "tên ổ khởi động, không phải \"/\": {boot}");
+        assert_eq!(disk_label(&std::env::temp_dir()), boot, "ổ Data vẫn mang tên ổ khởi động");
+        let usb = format!("utd-khong-co-{}", uuid::Uuid::new_v4().simple());
+        assert_eq!(disk_label(&Path::new("/Volumes").join(&usb).join("Phim")), usb);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_disk_label_is_the_drive() {
+        assert_eq!(disk_label(Path::new(r"C:\Users\ban\Downloads")), "C:");
     }
 }
