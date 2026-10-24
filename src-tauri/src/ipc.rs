@@ -78,7 +78,19 @@ impl PipeResponse {
     }
 }
 
+/// `UTD_DATA_DIR` (đường dẫn tuyệt đối): bản chạy thử dùng thư mục dữ liệu riêng, chạy song song với bản
+/// thật mà không đụng `UTD-Data` (journal, cài đặt, công cụ, tích hợp trình duyệt). Native host do
+/// trình duyệt chạy không có biến này nên luôn nói chuyện với bản thật.
+pub fn isolated_data_dir() -> Option<PathBuf> {
+    std::env::var_os("UTD_DATA_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
 pub fn data_dir() -> Result<PathBuf, String> {
+    if let Some(directory) = isolated_data_dir() {
+        return Ok(directory);
+    }
     #[cfg(windows)]
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         return Ok(PathBuf::from(local).join("UTD-Data"));

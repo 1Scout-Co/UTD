@@ -100,14 +100,26 @@ mod tests {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _arguments, _cwd| {
+    let isolated = ipc::isolated_data_dir();
+    if let Some(directory) = &isolated
+        && std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").is_none()
+    {
+        // Bản chạy thử cần WebView2 riêng: dùng chung thư mục với bản thật (khác tham số) thì không mở được.
+        // SAFETY: đầu `run`, chưa có luồng nào khác đọc biến môi trường.
+        unsafe { std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", directory.join("webview")) };
+    }
+    let mut builder = tauri::Builder::default();
+    // Bản chạy thử (`UTD_DATA_DIR`) chạy song song với bản thật nên không giữ một cửa sổ duy nhất.
+    if isolated.is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _arguments, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
-        }))
+        }));
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -121,10 +133,16 @@ pub fn run() {
             app.manage(media_pages::PendingMedia::default());
             let directory = data_dir(app.handle());
             std::fs::create_dir_all(&directory)?;
-            let migration = legacy::migrate(&directory).unwrap_or_else(|error| {
-                log::warn!("Legacy data migration failed: {error}");
+            let isolated = ipc::isolated_data_dir().is_some();
+            // Bản chạy thử không chép dữ liệu cũ của người dùng, không thay host của bản đã cài.
+            let migration = if isolated {
                 None
-            });
+            } else {
+                legacy::migrate(&directory).unwrap_or_else(|error| {
+                    log::warn!("Legacy data migration failed: {error}");
+                    None
+                })
+            };
             let journal = Arc::new(Journal::open(directory.join("utd.db"))?);
             journal.mark_interrupted()?;
             let quarantine_dir = directory.join("quarantine");
@@ -146,7 +164,7 @@ pub fn run() {
                 log::warn!("Browser integration refresh failed: {error}");
             }
             #[cfg(windows)]
-            {
+            if !isolated {
                 let directory = directory.clone();
                 std::thread::spawn(move || refresh_native_host(&directory));
             }
