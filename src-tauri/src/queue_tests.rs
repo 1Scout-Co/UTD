@@ -272,7 +272,7 @@ fn a_busy_task_neither_jumps_ahead_nor_blocks_ready_tasks() {
     let (running, media, moving, next) = (&ids[0], &ids[1], &ids[2], &ids[3]);
     fake.held.lock().unwrap().insert(media.clone());
     queue.submit(entries(&ids), Place::Back).unwrap();
-    assert_eq!(fake.launched(), [running.clone()]);
+    assert_eq!(fake.launched(), std::slice::from_ref(running));
     fake.busy.lock().unwrap().insert(moving.clone());
     queue.release(running);
     assert_eq!(fake.launched(), [running.clone(), next.clone()], "còn chỗ ⇒ task sau chạy");
