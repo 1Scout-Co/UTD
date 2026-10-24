@@ -229,13 +229,37 @@ impl Auto {
 
     /// Chờ công cụ đang/sắp được tự tải. `essential` (yt-dlp, ffmpeg khi tách âm thanh): chờ qua tối
     /// đa `passes` lượt tải xong kể từ lúc gọi, vẫn thiếu thì `Failed`. `optional` (deno, ffmpeg):
-    /// chỉ chờ một lượt; lỗi thì chạy tiếp không có nó.
+    /// chỉ chờ một lượt; lỗi thì chạy tiếp không có nó. Người dùng đang đợi (Phân tích, liệt kê kênh)
+    /// nên lần tự tải đã bị Huỷ được bật lại.
     pub(crate) async fn wait_for(
         &self,
         essential: &[Tool],
         optional: &[Tool],
         passes: u64,
         cancel: &CancellationToken,
+    ) -> Wait {
+        self.wait(essential, optional, passes, cancel, true).await
+    }
+
+    /// Như `wait_for`, cho task hàng đợi vừa chạy: lần tự tải đã bị Huỷ thì thôi chờ ngay, không bật lại
+    /// (hàng đợi thả task media ra chính vì người dùng bấm Huỷ; thêm hay tiếp tục task media mới bật lại).
+    pub(crate) async fn wait_for_task(
+        &self,
+        essential: &[Tool],
+        optional: &[Tool],
+        passes: u64,
+        cancel: &CancellationToken,
+    ) -> Wait {
+        self.wait(essential, optional, passes, cancel, false).await
+    }
+
+    async fn wait(
+        &self,
+        essential: &[Tool],
+        optional: &[Tool],
+        passes: u64,
+        cancel: &CancellationToken,
+        revive: bool,
     ) -> Wait {
         let mut receiver = self.inner.state.subscribe();
         let mut start: Option<u64> = None;
@@ -250,8 +274,8 @@ impl Auto {
             if needed && !state.checking && done >= passes.max(1) {
                 return Wait::Failed(state.error.unwrap_or_default());
             }
-            // Người dùng bấm Huỷ (Cài đặt) sau lúc mình nhờ tải: thôi chờ.
-            if state.paused && start.is_some() {
+            // Người dùng bấm Huỷ (Cài đặt) sau lúc mình nhờ tải, hoặc trước đó mà mình không được bật lại.
+            if state.paused && (start.is_some() || !revive) {
                 return if needed {
                     Wait::Failed("Đã huỷ tải công cụ.".into())
                 } else {
@@ -270,10 +294,11 @@ impl Auto {
         }
     }
 
-    /// Câu cho người dùng khi vẫn thiếu `tool` sau lúc chờ; tự tải tắt thì giữ câu `fallback`.
+    /// Câu cho người dùng khi vẫn thiếu `tool` sau lúc chờ; tự tải tắt hoặc đã bị Huỷ (UTD không tự thử
+    /// lại) thì giữ câu `fallback`.
     pub(crate) fn missing_message(&self, tool: Tool, fallback: String) -> String {
         let state = self.state();
-        if !state.enabled || !state.pending.contains(&tool) {
+        if !state.enabled || state.paused || !state.pending.contains(&tool) {
             return fallback;
         }
         match state.error {
@@ -791,6 +816,42 @@ mod tests {
         auto.set_enabled(false).unwrap();
         let off = auto.wait_for(&[Tool::Ffmpeg], &[], TASK_PASSES, &never);
         assert_eq!(off.await, Wait::Ready);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Bấm Huỷ lúc hàng đợi đang giữ task media: hàng đợi thả task ra, task không được bật lại lần tự
+    /// tải (trước đây task vừa thả gọi `kick` ⇒ tải lại ngay, task giữ chỗ chờ thêm tới 6 lượt).
+    #[tokio::test]
+    async fn cancel_is_not_undone_by_the_task_the_queue_just_released() {
+        let fake = Fake::new(None, vec![]);
+        let (auto, dir) = auto_with(&fake);
+        auto.update(|state| {
+            state.checking = false;
+            state.pending = vec![Tool::YtDlp, Tool::Deno, Tool::Ffmpeg];
+        });
+        assert!(auto.holds_media(false));
+        auto.update(|state| state.paused = true);
+        assert!(!auto.holds_media(false), "Huỷ ⇒ hàng đợi thả task media");
+        let never = CancellationToken::new();
+        let task = auto.wait_for_task(
+            &[Tool::YtDlp],
+            &[Tool::Deno, Tool::Ffmpeg],
+            TASK_PASSES,
+            &never,
+        );
+        let waited = tokio::time::timeout(Duration::from_millis(500), task).await;
+        assert_eq!(waited, Ok(Wait::Failed("Đã huỷ tải công cụ.".into())));
+        assert!(auto.state().paused, "vẫn tạm dừng, không tải lại");
+        assert!(!auto.holds_media(false), "task media khác không bị giữ lại");
+        assert_eq!(
+            auto.missing_message(Tool::YtDlp, "Thiếu yt-dlp.".into()),
+            "Thiếu yt-dlp.",
+            "đã Huỷ thì không hứa tự thử lại"
+        );
+        // Phân tích (người dùng đang đợi) thì bật lại lần tự tải.
+        let probe = auto.wait_for(&[Tool::YtDlp], &[], 1, &never);
+        assert!(tokio::time::timeout(Duration::from_millis(50), probe).await.is_err());
+        assert!(!auto.state().paused);
         let _ = std::fs::remove_dir_all(dir);
     }
 

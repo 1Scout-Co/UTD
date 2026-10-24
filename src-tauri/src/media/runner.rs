@@ -57,7 +57,8 @@ pub async fn run(
 /// khi tách âm thanh, chờ qua cả các lần thử lại); bấm Tạm dừng thì dừng. `false` = đã dừng.
 /// Thường hàng đợi đã giữ task (không giữ chỗ) tới lúc công cụ xong (`Auto::holds_media`), nên ở đây
 /// trả ngay; chỉ chờ thật khi trạng thái đổi đúng lúc task bắt đầu (vd vừa bật lại tự tải) — lúc đó
-/// task giữ chỗ trong hàng đợi, có giới hạn `TASK_PASSES` lượt rồi báo lỗi rõ.
+/// task giữ chỗ trong hàng đợi, có giới hạn `TASK_PASSES` lượt rồi báo lỗi rõ. Hàng đợi thả task vì
+/// người dùng bấm Huỷ ⇒ không bật lại lần tự tải (`wait_for_task`), task chạy và báo thiếu công cụ.
 async fn wait_tools(app: &AppHandle, cancel: &CancellationToken, audio: bool) -> bool {
     let Some(auto) = auto_tools(app) else {
         return true;
@@ -68,7 +69,7 @@ async fn wait_tools(app: &AppHandle, cancel: &CancellationToken, audio: bool) ->
         &[Tool::YtDlp]
     };
     let optional = [Tool::Deno, Tool::Ffmpeg];
-    auto.wait_for(essential, &optional, auto::TASK_PASSES, cancel)
+    auto.wait_for_task(essential, &optional, auto::TASK_PASSES, cancel)
         .await
         != Wait::Cancelled
 }
