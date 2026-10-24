@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "titlebar-macos",
+  "description": "Thanh tiêu đề phủ lên nền app trên macOS: kéo cửa sổ ở vùng đầu. Nhấp đúp do lệnh của app (title_bar_double_click, theo cài đặt hệ thống); đọc toàn màn hình/focus đã có trong core:default. Nút đèn giao thông là nút gốc, không cần quyền.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "macOS"
+  ],
+  "permissions": [
+    "core:window:allow-start-dragging"
+  ]
+}

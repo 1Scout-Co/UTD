@@ -8,10 +8,17 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc;
 use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
-use utd_engine::{now_ms, ErrorClass, Journal, TaskError, TaskStatus};
+use utd_engine::{now_ms, DownloadTask, ErrorClass, Journal, TaskError, TaskStatus};
 
-use crate::media::finish::{clamp, emit_progress, emit_task, error, fail, finalize, pause};
-use crate::media::{fast, ffmpeg_location, tokio_command, tools};
+use crate::media::auto::{self, Wait};
+use crate::media::finish::{
+    clamp, emit_progress, emit_task, error, fail, finalize, pause, set_status,
+};
+use crate::media::preset::{self, Settled};
+use crate::media::sources::Tool;
+use crate::media::{
+    auto_tools, fast, ffmpeg_location, js_runtime_args, kill_tree, tokio_command, tools,
+};
 use crate::state::AppState;
 
 enum StreamMessage {
@@ -27,26 +34,83 @@ struct ProgressLine {
     speed: Option<u64>,
 }
 
+/// Kết thúc một lượt chạy.
+#[derive(Debug, PartialEq, Eq)]
+enum Attempt {
+    Done,
+    /// yt-dlp lỗi kiểu extractor và vừa được cập nhật: chạy lại một lần bằng bản mới.
+    Outdated,
+}
+
 pub async fn run(
     app: AppHandle,
     journal: Arc<Journal>,
     task_id: String,
     cancel: CancellationToken,
 ) -> Result<(), String> {
+    if attempt(&app, &journal, &task_id, &cancel, true).await? == Attempt::Outdated {
+        log::info!("media: yt-dlp vừa cập nhật, chạy lại task={task_id}");
+        attempt(&app, &journal, &task_id, &cancel, false).await?;
+    }
+    Ok(())
+}
+
+/// Công cụ đang được tự tải (lần đầu mở app): task vẫn "đang chờ" tới khi xong (yt-dlp, và ffmpeg
+/// khi tách âm thanh, chờ qua cả các lần thử lại); bấm Tạm dừng thì dừng. `false` = đã dừng.
+/// Thường hàng đợi đã giữ task (không giữ chỗ) tới lúc công cụ xong (`Auto::holds_media`), nên ở đây
+/// trả ngay; chỉ chờ thật khi trạng thái đổi đúng lúc task bắt đầu (vd vừa bật lại tự tải) — lúc đó
+/// task giữ chỗ trong hàng đợi, có giới hạn `TASK_PASSES` lượt rồi báo lỗi rõ. Hàng đợi thả task vì
+/// người dùng bấm Huỷ ⇒ không bật lại lần tự tải (`wait_for_task`), task chạy và báo thiếu công cụ.
+async fn wait_tools(app: &AppHandle, cancel: &CancellationToken, audio: bool) -> bool {
+    let Some(auto) = auto_tools(app) else {
+        return true;
+    };
+    let essential: &[Tool] = if audio {
+        &[Tool::YtDlp, Tool::Ffmpeg]
+    } else {
+        &[Tool::YtDlp]
+    };
+    let optional = [Tool::Deno, Tool::Ffmpeg];
+    auto.wait_for_task(essential, &optional, auto::TASK_PASSES, cancel)
+        .await
+        != Wait::Cancelled
+}
+
+/// Câu báo thiếu công cụ: app đang tự tải (vd mất mạng) thì nói rõ UTD sẽ tự thử lại.
+fn missing_message(app: &AppHandle, tool: Tool, fallback: String) -> String {
+    match auto_tools(app) {
+        Some(auto) => auto.missing_message(tool, fallback),
+        None => fallback,
+    }
+}
+
+async fn attempt(
+    app: &AppHandle,
+    journal: &Arc<Journal>,
+    task_id: &str,
+    cancel: &CancellationToken,
+    allow_update: bool,
+) -> Result<Attempt, String> {
+    let (app, journal, cancel) = (app.clone(), journal.clone(), cancel.clone());
     let started = Instant::now();
     log::info!("media.timing task={task_id} start");
     let mut task = journal
-        .load_task(&task_id)
+        .load_task(task_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Không tìm thấy download.".to_string())?;
     if task.status == TaskStatus::Completed {
-        return Ok(());
+        return Ok(Attempt::Done);
     }
     let job = journal
-        .load_media_job(&task_id)
+        .load_media_job(task_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Không tìm thấy cấu hình media.".to_string())?;
 
+    if !wait_tools(&app, &cancel, job.audio_format.is_some()).await {
+        let downloaded = task.downloaded_bytes;
+        pause(&app, &journal, &mut task, downloaded)?;
+        return Ok(Attempt::Done);
+    }
     // Dò công cụ có chạy `--version` (cache nguội ~1 s): không chặn luồng async của tokio.
     let resolved = tauri::async_runtime::spawn_blocking(tools::resolve)
         .await
@@ -61,14 +125,27 @@ pub async fn run(
                 TaskError {
                     class: ErrorClass::User,
                     code: "tool.ytdlp_missing".into(),
-                    message,
+                    message: missing_message(&app, Tool::YtDlp, message),
                 },
             )?;
-            return Ok(());
+            return Ok(Attempt::Done);
         }
     };
     let elapsed = started.elapsed().as_millis();
     log::info!("media.timing task={task_id} tools ms={elapsed}");
+    // Lô link (chất lượng chung): Phân tích lúc tới lượt, lấy selector thật và tên theo tiêu đề.
+    // yt-dlp lỗi kiểu extractor lúc Phân tích ⇒ như lúc tải: kiểm bản mới, có thì chạy lại một lần.
+    let job = match preset::settle(&app, &journal, &mut task, job, &tools, &cancel).await? {
+        Settled::Ready(job) => job,
+        Settled::Stopped => return Ok(Attempt::Done),
+        Settled::Outdated(message) => {
+            if allow_update && refresh(&app, &journal, &mut task, &tools).await? {
+                return Ok(Attempt::Outdated);
+            }
+            preset::probe_failed(&app, &journal, &mut task, &message)?;
+            return Ok(Attempt::Done);
+        }
+    };
     if job.audio_format.is_some() && tools.ffmpeg.is_none() {
         fail(
             &app,
@@ -77,15 +154,19 @@ pub async fn run(
             TaskError {
                 class: ErrorClass::User,
                 code: "tool.ffmpeg_missing".into(),
-                message: "Cần ffmpeg để tách hoặc chuyển định dạng âm thanh. Tải ffmpeg ở Cài đặt → Công cụ media rồi thử lại.".into(),
+                message: missing_message(
+                    &app,
+                    Tool::Ffmpeg,
+                    "Cần ffmpeg để tách hoặc chuyển định dạng âm thanh. Tải ffmpeg ở Cài đặt → Công cụ media rồi thử lại.".into(),
+                ),
             },
         )?;
-        return Ok(());
+        return Ok(Attempt::Done);
     }
     if cancel.is_cancelled() {
         let downloaded = task.downloaded_bytes;
         pause(&app, &journal, &mut task, downloaded)?;
-        return Ok(());
+        return Ok(Attempt::Done);
     }
 
     // Luồng http(s) thường: engine UTD tự tải nhiều kết nối, nhanh hơn yt-dlp (một kết nối/luồng).
@@ -101,7 +182,7 @@ pub async fn run(
         started,
     };
     match fast::run(&fast_path, &mut task, &job).await {
-        Ok(fast::FastEnd::Handled) => return Ok(()),
+        Ok(fast::FastEnd::Handled) => return Ok(Attempt::Done),
         Ok(fast::FastEnd::Fallback) => {
             let elapsed = started.elapsed().as_millis();
             log::info!("media.timing task={task_id} fallback=yt-dlp ms={elapsed}");
@@ -119,7 +200,7 @@ pub async fn run(
                     "Không tải được luồng media. Bấm Tiếp tục để thử lại.",
                 ),
             )?;
-            return Ok(());
+            return Ok(Attempt::Done);
         }
     }
 
@@ -141,6 +222,7 @@ pub async fn run(
     let mut command = tokio_command(&tools.yt_dlp);
     // --print ngầm bật --quiet nên phải bật lại --progress; --encoding giữ đường dẫn Unicode.
     command
+        .args(js_runtime_args(&tools))
         .arg("--encoding")
         .arg("utf-8")
         .arg("--progress")
@@ -194,7 +276,7 @@ pub async fn run(
                     message: format!("Không chạy được yt-dlp: {error}"),
                 },
             )?;
-            return Ok(());
+            return Ok(Attempt::Done);
         }
     };
     let stdout = child
@@ -224,12 +306,13 @@ pub async fn run(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                let _ = child.kill().await;
+                // Tiến trình con của yt-dlp còn sống thì vẫn ghi vào file .part sau khi đã Tạm dừng.
+                kill_tree(&mut child).await;
                 let _ = child.wait().await;
                 out_task.abort();
                 err_task.abort();
                 pause(&app, &journal, &mut task, downloaded)?;
-                return Ok(());
+                return Ok(Attempt::Done);
             }
             message = receiver.recv() => {
                 match message {
@@ -282,18 +365,21 @@ pub async fn run(
     let status = child.wait().await.map_err(|error| error.to_string())?;
     if cancel.is_cancelled() {
         pause(&app, &journal, &mut task, downloaded)?;
-        return Ok(());
+        return Ok(Attempt::Done);
     }
     if !status.success() {
         task.downloaded_bytes = clamp(downloaded, total);
         task.total_bytes = total;
+        if allow_update && auto::outdated(&stderr_tail) && refresh(&app, &journal, &mut task, &tools).await? {
+            return Ok(Attempt::Outdated);
+        }
         fail(
             &app,
             &journal,
             &mut task,
             classify_failure(&stderr_tail),
         )?;
-        return Ok(());
+        return Ok(Attempt::Done);
     }
 
     let reported = file_path.map(|path| {
@@ -325,14 +411,29 @@ pub async fn run(
                             .into(),
                     },
                 )?;
-                return Ok(());
+                return Ok(Attempt::Done);
             }
         },
     };
     finalize(&app, &journal, &mut task, &destination, &path)?;
     let _ = out_task.await;
     let _ = err_task.await;
-    Ok(())
+    Ok(Attempt::Done)
+}
+
+/// yt-dlp vừa lỗi kiểu extractor/403: kiểm bản mới (task hiện "đang kiểm tra" trong lúc đó).
+/// `true` = đã có bản mới, nên chạy lại.
+async fn refresh(
+    app: &AppHandle,
+    journal: &Journal,
+    task: &mut DownloadTask,
+    tools: &tools::MediaTools,
+) -> Result<bool, String> {
+    let Some(auto) = auto_tools(app) else {
+        return Ok(false);
+    };
+    set_status(app, journal, task, TaskStatus::Resolving)?;
+    Ok(auto.refresh_after_failure(&tools.yt_dlp_version).await)
 }
 
 /// Đọc từng dòng theo byte rồi giải mã lossy: một byte không phải UTF-8 không được làm mất phần còn lại.

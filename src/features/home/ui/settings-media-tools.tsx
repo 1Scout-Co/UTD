@@ -9,14 +9,17 @@ import {
   cancelMediaToolInstall,
   installMediaTool,
   mediaToolsStatus,
+  setMediaToolsAuto,
   subscribeToolProgress,
 } from "../api/media-tools"
 import type {
   MediaToolName,
   MediaToolProgress,
+  MediaToolsAuto,
   MediaToolsStatus,
 } from "../model/types"
 import {
+  AutoTools,
   ConsentNote,
   InstallProgress,
   ToolAction,
@@ -24,6 +27,7 @@ import {
   TOOLS,
   ToolState,
 } from "./settings-media-tools-parts"
+import { useToolsAuto } from "./tools-auto"
 
 /** own = false: lần cài bắt đầu trước khi mở lại Cài đặt, theo dõi bằng cách hỏi lại. */
 type Busy = { tool: MediaToolName; own: boolean }
@@ -33,7 +37,8 @@ function messageOf(reason: unknown): string {
 }
 
 function infoOf(status: MediaToolsStatus | null, tool: MediaToolName) {
-  return (tool === "yt-dlp" ? status?.ytDlp : status?.ffmpeg) ?? null
+  if (tool === "yt-dlp") return status?.ytDlp ?? null
+  return (tool === "deno" ? status?.deno : status?.ffmpeg) ?? null
 }
 
 /** Tiến độ tải công cụ (sự kiện từ app). */
@@ -120,8 +125,26 @@ function useToolStatus(desktop: boolean) {
   }
 }
 
+/** App tự tải công cụ khi Cài đặt đang mở: theo dõi như lần cài bắt đầu từ trước (hỏi lại đến khi xong). */
+function useAutoTools(desktop: boolean, state: ReturnType<typeof useToolStatus>) {
+  const auto = useToolsAuto(desktop)
+  const active = auto.state?.active ?? auto.state?.updating ?? null
+  const { busy, setBusy } = state
+  useEffect(() => {
+    if (active && !busy) setBusy({ tool: active, own: false })
+  }, [active, busy, setBusy])
+
+  const toggle = (enabled: boolean) => {
+    void setMediaToolsAuto(enabled)
+      .then(auto.setState)
+      .catch((reason: unknown) => state.setError(messageOf(reason)))
+  }
+  return { auto: auto.state, toggle }
+}
+
 function useMediaTools(desktop: boolean) {
   const state = useToolStatus(desktop)
+  const { auto, toggle } = useAutoTools(desktop, state)
   const [notice, setNotice] = useState<string | null>(null)
   // Người dùng tự bấm Huỷ: báo nhẹ, không hiện như lỗi.
   const cancelled = useRef(false)
@@ -156,7 +179,7 @@ function useMediaTools(desktop: boolean) {
     void cancelMediaToolInstall().catch(() => undefined)
   }
 
-  return { ...state, notice, install, cancel }
+  return { ...state, auto, toggle, notice, install, cancel }
 }
 
 /** Mục "Công cụ media" trong Cài đặt: dùng bản có sẵn, chỉ tải khi thiếu (S-31). */
@@ -169,6 +192,11 @@ export function SettingsMediaTools({ desktop }: { desktop: boolean }) {
 
   return (
     <div className="space-y-2.5" data-s={missing ? "S-31" : undefined}>
+      <AutoTools
+        enabled={tools.auto?.enabled ?? true}
+        disabled={!desktop || tools.auto === null}
+        onChange={tools.toggle}
+      />
       {TOOLS.map((meta) => {
         const info = infoOf(tools.status, meta.name)
         const running = tools.busy?.tool === meta.name
@@ -209,11 +237,19 @@ export function SettingsMediaTools({ desktop }: { desktop: boolean }) {
       <MediaToolsFooter desktop={desktop} binDir={tools.status?.binDir} />
       <MediaToolsMessages
         notice={tools.notice}
-        error={tools.error}
+        error={tools.error ?? autoError(tools.auto)}
         onRetry={check === "failed" ? tools.retry : null}
       />
     </div>
   )
+}
+
+/** Tự tải lỗi (vd mất mạng) mà chưa có công cụ: nói rõ app sẽ tự thử lại. */
+function autoError(auto: MediaToolsAuto | null): string | null {
+  if (!auto?.enabled || auto.paused || !auto.error || !auto.pending.length) {
+    return null
+  }
+  return `${auto.error} UTD sẽ tự thử lại.`
 }
 
 /** Thông báo xong, lỗi, và nút Thử lại khi chưa hỏi được trạng thái công cụ. */

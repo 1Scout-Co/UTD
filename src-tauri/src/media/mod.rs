@@ -1,17 +1,29 @@
+mod auto;
+/// Tải cả kênh: `channel::channel_list`, `channel::channel_list_cancel`.
+pub(crate) mod channel;
 mod fast;
 mod finish;
 mod install;
+#[cfg(test)]
+mod install_tests;
 mod mux;
 mod output;
 /// `parts::discard_parts`: dọn luồng con trước khi xoá task media khỏi danh sách.
 pub(crate) mod parts;
+mod preset;
 mod probe;
 mod probe_cache;
 mod resolve;
 mod rollup;
 mod runner;
+mod sources;
 mod tools;
+mod unpack;
+mod verify;
 
+pub use auto::{start as start_auto_tools, Auto, AutoState};
+
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -26,17 +38,81 @@ use utd_engine::{
 
 use utd_engine::Journal;
 use crate::events::{BridgeError, ERROR_EVENT};
+use crate::queue::{Entry, Place};
 use crate::state::{AppState, RunningTasks};
 
 
+/// `add_media_download`. Hai cách chọn định dạng:
+/// - `selector` (+ `audioFormat`) lấy từ `media_probe` (hộp Tải media);
+/// - `quality` (`best` · `1080` · `720` · `audio-m4a` · `audio-mp3`) cho lô link: không cần Phân tích trước,
+///   tới lượt chạy UTD tự Phân tích, chọn định dạng gần nhất và đặt tên theo tiêu đề (`title` có thể rỗng).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddMediaInput {
     pub url: String,
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub selector: String,
+    pub quality: Option<String>,
     pub audio_format: Option<String>,
     pub page_url: Option<String>,
+    /// Thư mục tải; không gửi ⇒ thư mục mặc định trong Cài đặt.
+    pub dest_dir: Option<String>,
+    /// `true` ⇒ xếp cuối hàng đợi (lô "Thêm vào hàng đợi", tải cả kênh); mặc định chen đầu hàng.
+    #[serde(default)]
+    pub later: bool,
+    /// Tải cả kênh: thư mục con (tên kênh) trong thư mục tải.
+    pub subfolder: Option<String>,
+    /// Tải cả kênh: video này của kênh nào, để lần sau "Tải video mới" bỏ qua.
+    pub channel: Option<channel::ChannelPick>,
+}
+
+impl AddMediaInput {
+    /// Link trang video trong lô: chất lượng chung, tên theo tiêu đề lúc tới lượt chạy.
+    pub(crate) fn with_quality(url: String, quality: String) -> Self {
+        Self {
+            url,
+            title: String::new(),
+            selector: String::new(),
+            quality: Some(quality),
+            audio_format: None,
+            page_url: None,
+            dest_dir: None,
+            later: false,
+            subfolder: None,
+            channel: None,
+        }
+    }
+}
+
+/// Định dạng đã kiểm của một yêu cầu media.
+struct Choice {
+    selector: String,
+    audio_format: Option<String>,
+}
+
+fn checked_choice(input: &AddMediaInput) -> Result<Choice, String> {
+    if let Some(raw) = &input.quality {
+        let quality = preset::Quality::parse(raw).ok_or("Chất lượng không hợp lệ.")?;
+        return Ok(Choice {
+            selector: quality.selector(),
+            audio_format: quality.audio_format().map(str::to_string),
+        });
+    }
+    let selector = input.selector.trim();
+    if selector.is_empty() || selector.len() > 512 || selector.chars().any(char::is_control) {
+        return Err("Bộ chọn định dạng không hợp lệ.".into());
+    }
+    if let Some(format) = &input.audio_format
+        && !matches!(format.as_str(), "m4a" | "mp3")
+    {
+        return Err("Định dạng âm thanh không hợp lệ.".into());
+    }
+    Ok(Choice {
+        selector: selector.to_string(),
+        audio_format: input.audio_format.clone(),
+    })
 }
 
 /// Dò công cụ có chạy `--version` nên làm ngoài luồng giao diện.
@@ -49,7 +125,7 @@ pub async fn media_tools_status() -> Result<tools::MediaToolsStatus, String> {
     Ok(status)
 }
 
-/// Tải yt-dlp hoặc ffmpeg chính chủ từ GitHub vào `<data>\bin` (người dùng đã bấm nút).
+/// Tải yt-dlp, deno hoặc ffmpeg chính chủ vào `<data>\bin` (người dùng đã bấm nút).
 #[tauri::command]
 pub async fn install_media_tool(
     app: AppHandle,
@@ -63,13 +139,73 @@ pub fn cancel_media_tool_install() -> bool {
     install::cancel()
 }
 
+/// Trạng thái tự tải/cập nhật công cụ (mục Công cụ media, thẻ tiến độ ở thanh bên).
 #[tauri::command]
-pub async fn media_probe(url: String) -> Result<probe::MediaProbeResult, String> {
-    let url = validate_url(&url).map_err(|error| error.to_string())?;
-    let tools = tauri::async_runtime::spawn_blocking(tools::resolve)
+pub fn media_tools_auto(auto: tauri::State<'_, Auto>) -> AutoState {
+    auto.state()
+}
+
+/// Công tắc "Tự tải và cập nhật" trong Cài đặt.
+#[tauri::command]
+pub fn set_media_tools_auto(
+    auto: tauri::State<'_, Auto>,
+    enabled: bool,
+) -> Result<AutoState, String> {
+    auto.set_enabled(enabled)
+}
+
+/// Nút "Thử lại" khi tự tải công cụ lỗi (vd vừa có mạng lại): thử ngay, bỏ thời gian chờ.
+#[tauri::command]
+pub fn retry_media_tools(auto: tauri::State<'_, Auto>) -> AutoState {
+    auto.kick();
+    auto.state()
+}
+
+/// Công cụ cho lệnh yt-dlp mà người dùng đang đợi (Phân tích, liệt kê kênh): lúc công cụ đang tự tải
+/// (lần đầu mở app) thì chờ yt-dlp và deno một lượt; vẫn thiếu yt-dlp thì câu lỗi nói rõ UTD tự thử lại.
+pub(crate) async fn interactive_tools(auto: Option<&Auto>) -> Result<tools::MediaTools, String> {
+    if let Some(auto) = auto {
+        let (essential, optional) = ([sources::Tool::YtDlp], [sources::Tool::Deno]);
+        let never = CancellationToken::new();
+        let _ = auto.wait_for(&essential, &optional, 1, &never).await;
+    }
+    tauri::async_runtime::spawn_blocking(tools::resolve)
         .await
-        .map_err(|error| error.to_string())??;
-    probe::probe(&tools.yt_dlp, &tools, url.as_str()).await
+        .map_err(|error| error.to_string())?
+        .map_err(|missing| match auto {
+            Some(auto) => auto.missing_message(sources::Tool::YtDlp, missing),
+            None => missing,
+        })
+}
+
+/// Phân tích một link (hộp Tải media). yt-dlp lỗi kiểu extractor ⇒ kiểm bản mới, có thì cài rồi phân
+/// tích lại một lần.
+#[tauri::command]
+pub async fn media_probe(app: AppHandle, url: String) -> Result<probe::MediaProbeResult, String> {
+    let url = validate_url(&url).map_err(|error| error.to_string())?;
+    let auto = auto_tools(&app);
+    let mut retried = false;
+    loop {
+        let tools = interactive_tools(auto.as_ref()).await?;
+        let ffmpeg = tools.ffmpeg.is_some()
+            || auto
+                .as_ref()
+                .is_some_and(|auto| auto.will_install(sources::Tool::Ffmpeg));
+        let failure = match probe::probe(&tools, url.as_str(), ffmpeg).await {
+            Ok(result) => return Ok(result),
+            Err(failure) => failure,
+        };
+        let refreshed = match &auto {
+            Some(auto) if !retried && failure.outdated => {
+                auto.refresh_after_failure(&tools.yt_dlp_version).await
+            }
+            _ => false,
+        };
+        if !refreshed {
+            return Err(failure.message);
+        }
+        retried = true;
+    }
 }
 
 /// Ngoài luồng giao diện: kiểm/tạo thư mục tải và đọc thư mục để tránh trùng tên đều chạm đĩa.
@@ -88,33 +224,49 @@ pub async fn add_media_download(
     Ok(task)
 }
 
-fn enqueue_media(app: AppHandle, input: AddMediaInput) -> Result<DownloadTask, String> {
-    let (journal, running) = {
+fn enqueue_media(app: AppHandle, mut input: AddMediaInput) -> Result<DownloadTask, String> {
+    let (journal, queue) = {
         let state = app.state::<AppState>();
-        (state.journal.clone(), state.running.clone())
+        (state.journal.clone(), state.queue.clone())
     };
+    let folder = crate::commands::download_dir_for(&app, input.dest_dir.as_deref())?;
+    let destination = with_subfolder(folder, input.subfolder.as_deref())?;
+    let place = if input.later { Place::Back } else { Place::Front };
+    let pick = input.channel.take();
+    let task = create_media(&journal, &destination, input)?;
+    if let Err(error) = queue.submit(vec![Entry::new(task.id.clone())], place) {
+        let _ = journal.delete_task(&task.id);
+        return Err(error);
+    }
+    if let Some(pick) = &pick
+        && let Err(error) = channel::remember(&journal, pick, &task.id)
+    {
+        log::warn!("channel: không nhớ được video đã tải ({error})");
+    }
+    Ok(task)
+}
+
+/// Tạo task media + job trong journal, chưa xếp hàng (`destination` đã kiểm). Lô link dùng chung.
+pub(crate) fn create_media(
+    journal: &Journal,
+    destination: &Path,
+    input: AddMediaInput,
+) -> Result<DownloadTask, String> {
     let url = validate_url(&input.url).map_err(|error| error.to_string())?;
-    if input.selector.trim().is_empty()
-        || input.selector.len() > 512
-        || input.selector.chars().any(char::is_control)
-    {
-        return Err("Bộ chọn định dạng không hợp lệ.".into());
-    }
-    if let Some(format) = &input.audio_format
-        && !matches!(format.as_str(), "m4a" | "mp3")
-    {
-        return Err("Định dạng âm thanh không hợp lệ.".into());
-    }
+    let choice = checked_choice(&input)?;
     if let Some(page_url) = &input.page_url {
         validate_url(page_url).map_err(|error| error.to_string())?;
     }
-
-    let destination = crate::commands::suggested_download_dir(&app)?;
-    std::fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
     let title = input.title.trim();
-    let title = if title.is_empty() { "Media" } else { title };
-    let base = unique_base(&destination, &safe_base(title));
-    let extension = input.audio_format.as_deref().unwrap_or("mp4");
+    let title = if !title.is_empty() {
+        title.to_string()
+    } else if input.quality.is_some() {
+        preset::placeholder_title(&url)
+    } else {
+        "Media".to_string()
+    };
+    let base = unique_base(destination, &safe_base(&title));
+    let extension = choice.audio_format.as_deref().unwrap_or("mp4");
     let file_name = format!("{base}.{extension}");
     validate_file_name(&file_name).map_err(|error| error.to_string())?;
 
@@ -135,8 +287,8 @@ fn enqueue_media(app: AppHandle, input: AddMediaInput) -> Result<DownloadTask, S
         task_id: task.id.clone(),
         url: url.to_string(),
         page_url: input.page_url,
-        selector: input.selector.trim().to_string(),
-        audio_format: input.audio_format,
+        selector: choice.selector,
+        audio_format: choice.audio_format,
         title: title.chars().take(300).collect(),
         created_at: now_ms(),
     };
@@ -144,16 +296,78 @@ fn enqueue_media(app: AppHandle, input: AddMediaInput) -> Result<DownloadTask, S
         let _ = journal.delete_task(&task.id);
         return Err(error.to_string());
     }
-    if let Err(error) = spawn_media_run(
-        app,
-        journal.clone(),
-        running,
-        task.id.clone(),
-    ) {
-        let _ = journal.delete_task(&task.id);
-        return Err(error);
-    }
     Ok(task)
+}
+
+/// Thư mục tải, cộng thư mục con (tên kênh) khi tải cả kênh; tên con được làm sạch thành một tầng.
+fn with_subfolder(
+    folder: std::path::PathBuf,
+    subfolder: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    let Some(name) = subfolder.map(str::trim).filter(|name| !name.is_empty()) else {
+        return Ok(folder);
+    };
+    let destination = folder.join(safe_base(name));
+    std::fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
+    Ok(destination)
+}
+
+fn auto_tools(app: &AppHandle) -> Option<Auto> {
+    app.try_state::<Auto>().map(|state| state.inner().clone())
+}
+
+/// Hàng đợi hỏi trước khi chạy task media (`queue::Runtime::ready`): công cụ task cần còn đang tự tải
+/// (`Auto::holds_media`) ⇒ chưa chạy, task vẫn "Đang chờ lượt" mà không giữ chỗ.
+pub(crate) fn waits_for_tools(app: &AppHandle, task_id: &str) -> bool {
+    let Some(auto) = auto_tools(app) else {
+        return false;
+    };
+    if auto.holds_media(false) {
+        return true;
+    }
+    // Chỉ còn ffmpeg (bắt buộc khi tách âm thanh) đang chờ thử lại: tuỳ task.
+    auto.holds_media(true)
+        && app.try_state::<AppState>().is_some_and(|state| {
+            state
+                .journal
+                .load_media_job(task_id)
+                .ok()
+                .flatten()
+                .is_some_and(|job| job.audio_format.is_some())
+        })
+}
+
+/// Task media vừa vào hàng: còn thiếu công cụ thì tự tải thử lại ngay, khỏi đợi hết thời gian chờ.
+pub(crate) fn want_tools(app: &AppHandle) {
+    if let Some(auto) = auto_tools(app)
+        && !auto.state().pending.is_empty()
+    {
+        auto.kick();
+    }
+}
+
+/// Công cụ tự tải đổi trạng thái (xong một lượt, lỗi, tắt, Huỷ) ⇒ hàng đợi xem lại task media đang chờ.
+pub(crate) fn watch_tools_for_queue(app: &AppHandle) {
+    let Some(auto) = auto_tools(app) else {
+        return;
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut receiver = auto.subscribe();
+        let mut last = None;
+        loop {
+            let holds = Some((auto.holds_media(false), auto.holds_media(true)));
+            if holds != last
+                && let Some(state) = app.try_state::<AppState>()
+            {
+                last = holds;
+                state.queue.pump();
+            }
+            if receiver.changed().await.is_err() {
+                return;
+            }
+        }
+    });
 }
 
 pub(crate) fn spawn_media_run(
@@ -177,6 +391,7 @@ pub(crate) fn spawn_media_run(
             );
         }
         running.remove(&task_id);
+        crate::queue::finished(&app, &task_id);
     });
     Ok(())
 }
@@ -203,8 +418,45 @@ pub(crate) fn tokio_command(program: &Path) -> tokio::process::Command {
     command
 }
 
+/// Dừng tiến trình cùng các tiến trình con. yt-dlp.exe (PyInstaller một file) chạy lại chính nó thành
+/// tiến trình con: chỉ giết tiến trình ngoài thì tiến trình con vẫn liệt kê/tải tiếp và giữ ống
+/// stdout/stderr, bên đọc chờ tới khi nó tự xong (nút Dừng của Tải cả kênh treo cả phút). Windows:
+/// `taskkill /T` giết cả cây, phải gọi lúc tiến trình ngoài còn sống.
+pub(crate) async fn kill_tree(child: &mut tokio::process::Child) {
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        let taskkill = std::env::var_os("SystemRoot")
+            .map(|root| std::path::PathBuf::from(root).join(r"System32\taskkill.exe"))
+            .unwrap_or_else(|| "taskkill.exe".into());
+        let _ = tokio_command(&taskkill)
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+    }
+    let _ = child.start_kill();
+}
+
 pub(crate) fn ffmpeg_location(tools: &tools::MediaTools) -> Option<String> {
     tools::ffmpeg_directory(tools.ffmpeg.as_deref())
+}
+
+/// yt-dlp từ 2025.11.12 giải thử thách của YouTube bằng runtime JavaScript (deno). Chỉ rõ deno đã
+/// dò được (của UTD hoặc trên máy); bản yt-dlp cũ hơn không biết cờ này nên không truyền.
+pub(crate) fn js_runtime_args(tools: &tools::MediaTools) -> Vec<OsString> {
+    const FIRST_EJS: &str = "2025.11.12";
+    let supported = verify::is_date_version(&tools.yt_dlp_version)
+        && tools.yt_dlp_version.as_str() >= FIRST_EJS;
+    match &tools.deno {
+        Some(deno) if supported => {
+            let mut runtime = OsString::from("deno:");
+            runtime.push(deno);
+            vec!["--js-runtimes".into(), runtime]
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn safe_base(title: &str) -> String {
@@ -264,4 +516,62 @@ fn conflicts(destination: &Path, base: &str) -> bool {
         let name = entry.file_name().to_string_lossy().into_owned();
         name == base || name.starts_with(&prefix) || name.starts_with(&variant_prefix)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn tools_with(version: &str, deno: Option<&str>) -> tools::MediaTools {
+        tools::MediaTools {
+            yt_dlp: PathBuf::from("yt-dlp.exe"),
+            yt_dlp_version: version.into(),
+            ffmpeg: None,
+            deno: deno.map(PathBuf::from),
+        }
+    }
+
+    #[test]
+    fn points_new_yt_dlp_at_deno_only() {
+        let deno = r"C:\UTD-Data\bin\deno.exe";
+        assert_eq!(
+            js_runtime_args(&tools_with("2026.10.21", Some(deno))),
+            [OsString::from("--js-runtimes"), OsString::from(format!("deno:{deno}"))]
+        );
+        assert!(js_runtime_args(&tools_with("2026.10.21", None)).is_empty());
+        // Bản trước EJS không biết cờ này: truyền vào là lỗi "no such option".
+        assert!(js_runtime_args(&tools_with("2025.10.22", Some(deno))).is_empty());
+        assert!(js_runtime_args(&tools_with("không rõ", Some(deno))).is_empty());
+    }
+
+    /// Như yt-dlp.exe: `cmd` chạy `ping` làm tiến trình con, `ping` giữ ống stdout. Giết cả cây thì đọc
+    /// stdout tới EOF ngay; chỉ giết `cmd` thì phải chờ `ping` tự xong (~30 s).
+    #[cfg(windows)]
+    #[test]
+    fn kill_tree_also_stops_children_holding_the_pipe() {
+        use tokio::io::AsyncReadExt;
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let mut child = tokio_command(Path::new("cmd.exe"))
+                .args(["/C", "ping -n 30 127.0.0.1"])
+                .stdout(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut stdout = child.stdout.take().unwrap();
+            let mut first = [0u8; 1];
+            stdout.read_exact(&mut first).await.unwrap();
+            kill_tree(&mut child).await;
+            let mut rest = Vec::new();
+            let drained = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                stdout.read_to_end(&mut rest),
+            )
+            .await;
+            assert!(drained.is_ok(), "tiến trình con vẫn giữ ống stdout");
+            let _ = child.wait().await;
+        });
+    }
 }

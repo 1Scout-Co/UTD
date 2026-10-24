@@ -13,10 +13,12 @@ import {
 import { t } from "@/shared/i18n/i18n"
 
 import {
+  channelPageUrl,
   mediaProbe,
   subscribeMediaRequest,
   takeMediaRequest,
 } from "../api/downloads"
+import { isChannelPage } from "../model/media-pages"
 import type { AddMediaPayload, MediaProbe } from "../model/types"
 import {
   FormatList,
@@ -25,6 +27,7 @@ import {
   SupportedSites,
   UrlField,
 } from "./media-picker-parts"
+import { ToolsAutoNote } from "./tools-auto"
 
 /**
  * Link trang video từ trình duyệt (chuột phải / popup): `onUrl` cần ổn định (useCallback). Link tới
@@ -70,6 +73,7 @@ export function MediaPickerDialog({
   error,
   initialUrl,
   onSubmit,
+  onChannel,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -78,6 +82,8 @@ export function MediaPickerDialog({
   error: string | null
   initialUrl?: string | null
   onSubmit: (payload: AddMediaPayload) => void | Promise<void>
+  /** Link là kênh (dán vào đây, hoặc link rút gọn app thấy trỏ tới kênh): mở hộp Tải cả kênh. */
+  onChannel: (url: string) => void
 }) {
   const autoAnalyze = Boolean(initialUrl) && desktop
   const [url, setUrl] = useState(initialUrl ?? "")
@@ -129,11 +135,13 @@ export function MediaPickerDialog({
           null,
       )
     } catch (reason) {
-      setLocalError(reason instanceof Error ? reason.message : String(reason))
+      const channel = channelPageUrl(reason)
+      if (channel) onChannel(channel)
+      else setLocalError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [onChannel])
 
   // Mở với link sẵn ⇒ phân tích ngay (ref chặn chạy hai lần ở StrictMode).
   useEffect(() => {
@@ -149,6 +157,10 @@ export function MediaPickerDialog({
     }
     if (!/^https?:\/\//i.test(value.trim())) {
       setLocalError(t("media.needUrl"))
+      return
+    }
+    if (isChannelPage(value)) {
+      onChannel(value.trim())
       return
     }
     setLoading(true)
@@ -194,6 +206,7 @@ export function MediaPickerDialog({
             onPaste={paste}
           />
 
+          {loading ? <ToolsAutoNote desktop={desktop} /> : null}
           {loading ? <ProbeSkeleton /> : null}
           {!loading && !probe ? <SupportedSites /> : null}
 

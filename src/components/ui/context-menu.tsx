@@ -1,6 +1,7 @@
 import * as React from "react"
 import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu"
 import { cn } from "cn"
+import { POPUP_COLLISION_PADDING } from "@/shared/window/metrics"
 import { ChevronRightIcon, CheckIcon } from "lucide-react"
 
 function ContextMenu({ ...props }: ContextMenuPrimitive.Root.Props) {
@@ -42,6 +43,7 @@ function ContextMenuContent({
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Positioner
         className="isolate z-50 outline-none"
+        collisionPadding={POPUP_COLLISION_PADDING}
         align={align}
         alignOffset={alignOffset}
         side={side}

@@ -5,6 +5,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event"
 import {
   addDownload,
   addMediaDownload,
+  channelPageUrl,
   defaultDownloadDir,
   diskSpace,
   isDesktopApp,
@@ -19,6 +20,7 @@ import { formatBytes } from "@/shared/i18n/format"
 import { t } from "@/shared/i18n/i18n"
 
 import { mapEngineTask } from "../model/download-mapper"
+import { isChannelPage } from "../model/media-pages"
 import { demoDownloads, demoStorage } from "../model/mock-data"
 import type {
   AddDownloadPayload,
@@ -29,9 +31,13 @@ import type {
   StorageInfo,
 } from "../model/types"
 import { AddDownloadDialog } from "./add-download-dialog"
+import { BatchDialog } from "./batch-dialog"
+import { ChannelFlow, useChannelFlow } from "./channel-flow"
 import { DoctorDialog } from "./doctor-dialog"
 import { MediaPickerDialog, useMediaRequests } from "./media-picker-dialog"
 import { SettingsDialog } from "./settings-dialog"
+import { ToolsAutoCard } from "./tools-auto"
+import { useBatchFlow } from "./use-batch-flow"
 import { useUpdateAvailable } from "./use-update-available"
 import { Soniox } from "./variants/soniox"
 
@@ -151,13 +157,60 @@ export function HomeScreen() {
         usedPercent: demoStorage.usedPercent,
       }
 
-  const openMediaWith = useCallback((url: string) => {
-    setAddOpen(false)
-    setSettingsOpen(false)
-    setMediaError(null)
-    setMediaRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1 }))
-    setMediaOpen(true)
+  // Task mới (thêm từ hộp Tải cả kênh) lên đầu danh sách.
+  const showTask = useCallback((task: EngineTask) => {
+    setTasks((previous) => [task, ...previous.filter((item) => item.id !== task.id)])
+    setScreenState("data")
   }, [])
+  const channel = useChannelFlow(showTask)
+  const { openChannel, setOpen: setChannelOpen } = channel
+
+  // Mỗi lúc một hộp: link/lô từ trình duyệt tới liền nhau thì hộp mới thay hộp cũ, không chồng lên.
+  const closeDialogs = useCallback(() => {
+    setAddOpen(false)
+    setMediaOpen(false)
+    setSettingsOpen(false)
+    setChannelOpen(false)
+  }, [setChannelOpen])
+  const batch = useBatchFlow(desktop, closeDialogs)
+  const { setOpen: setBatchOpen } = batch
+  // Task vừa thêm theo lô: lên đầu danh sách (thứ tự chạy do hàng đợi ở app quyết).
+  const addTasks = (added: EngineTask[]) => {
+    const ids = new Set(added.map((task) => task.id))
+    setTasks((previous) => [...added, ...previous.filter((task) => !ids.has(task.id))])
+    if (added.length) setScreenState("data")
+    refreshStorage()
+  }
+
+  // Mã `channel_page:` của app (kể cả link rút gọn trỏ tới kênh) mở thẳng hộp Tải cả kênh.
+  const openChannelWith = useCallback(
+    (url: string) => {
+      setAddOpen(false)
+      setSettingsOpen(false)
+      setMediaOpen(false)
+      setBatchOpen(false)
+      openChannel(url)
+    },
+    [openChannel, setBatchOpen],
+  )
+
+  // Link trang video ⇒ hộp Tải media; link kênh (TikTok @user, kênh/playlist YouTube) ⇒ hộp Tải cả kênh.
+  const openMediaWith = useCallback(
+    (url: string) => {
+      if (isChannelPage(url)) {
+        openChannelWith(url)
+        return
+      }
+      setAddOpen(false)
+      setSettingsOpen(false)
+      setBatchOpen(false)
+      setChannelOpen(false)
+      setMediaError(null)
+      setMediaRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1 }))
+      setMediaOpen(true)
+    },
+    [openChannelWith, setBatchOpen, setChannelOpen],
+  )
   useMediaRequests(desktop, openMediaWith)
 
   const openAdd = () => {
@@ -195,7 +248,9 @@ export function HomeScreen() {
       setAddOpen(false)
       refreshStorage()
     } catch (error) {
-      if (isMediaPageError(error)) openMediaWith(payload.url)
+      const channelUrl = channelPageUrl(error)
+      if (channelUrl) openChannelWith(channelUrl)
+      else if (isMediaPageError(error)) openMediaWith(payload.url)
       else setAddError(error instanceof Error ? error.message : String(error))
     } finally {
       setAddBusy(false)
@@ -278,6 +333,7 @@ export function HomeScreen() {
         state={desktop ? shownState : "data"}
         items={items}
         storage={storageSummary}
+        sideStatus={<ToolsAutoCard desktop={desktop} />}
         onAdd={openAdd}
         onMedia={openMedia}
         onRetry={() => void refresh()}
@@ -301,6 +357,18 @@ export function HomeScreen() {
           )
         }
         onTaskRemoved={dropTask}
+        onBatch={batch.openEmpty}
+      />
+      {/* Hai hộp cùng cấp: key có tiền tố riêng để không trùng nhau (cùng bắt đầu từ 0). */}
+      <BatchDialog
+        key={`batch-${batch.key}`}
+        open={batch.open}
+        onOpenChange={batch.setOpen}
+        desktop={desktop}
+        defaultDir={defaultDir}
+        initialUrls={batch.urls}
+        fromBrowser={batch.fromBrowser}
+        onAdded={addTasks}
       />
       <AddDownloadDialog
         open={addOpen}
@@ -311,9 +379,10 @@ export function HomeScreen() {
         error={addError}
         onSubmit={submitAdd}
         onMedia={openMediaWith}
+        onBatch={batch.openWith}
       />
       <MediaPickerDialog
-        key={mediaRequest?.key ?? 0}
+        key={`media-${mediaRequest?.key ?? 0}`}
         initialUrl={mediaRequest?.url}
         open={mediaOpen}
         onOpenChange={setMediaOpen}
@@ -321,7 +390,9 @@ export function HomeScreen() {
         busy={mediaBusy}
         error={mediaError}
         onSubmit={submitMedia}
+        onChannel={openChannelWith}
       />
+      <ChannelFlow desktop={desktop} flow={channel} />
       <DoctorDialog
         item={diagnoseItem}
         open={diagnoseItem !== null}

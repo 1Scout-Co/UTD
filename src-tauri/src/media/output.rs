@@ -464,10 +464,10 @@ mod tests {
             native_brand(Layout::Merge, &[video.clone(), audio.clone()])
         };
         assert_eq!(merge(&av1, &aac), Some(Brand::Mp4));
-        assert_eq!(
-            merge(&hint("avc1.640028", "none", "mp4"), &aac),
-            Some(Brand::Mp4)
-        );
+        // H.264/HEVC có B-frame utd-mp4 cũng ghép (ctts + edit list như ffmpeg).
+        for codec in ["avc1.640028", "hvc1.1.6.L120.90", "hev1.1.6.L93.B0"] {
+            assert_eq!(merge(&hint(codec, "none", "mp4"), &aac), Some(Brand::Mp4));
+        }
         assert_eq!(merge(&av1, &opus), None, "Opus/WebM: ffmpeg ghép");
         assert_eq!(merge(&hint("vp9", "none", "webm"), &aac), None);
         let resumed = [hint("", "", "mp4"), hint("", "", "m4a")];

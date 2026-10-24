@@ -20,5 +20,9 @@ tokio-util = { version = "0.7.20", features = ["rt"] }
 url = "2.5.8"
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 
+# Cờ quarantine của macOS (safety::mark_of_the_web) qua setxattr; bản đã có sẵn trong Cargo.lock.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.191"
+
 [dev-dependencies]
 tempfile = "3.27.0"

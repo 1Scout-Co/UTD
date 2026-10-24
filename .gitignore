@@ -32,3 +32,6 @@ test-results/
 
 # Rust
 target/
+
+# Worktree của các phiên Claude Code làm song song (mỗi cái một bản checkout đầy đủ)
+.claude/worktrees/

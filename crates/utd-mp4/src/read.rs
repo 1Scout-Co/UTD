@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::boxes::{FourCc, broken, name};
 use crate::frag::{self, Stream};
-use crate::init::{self, Movie};
+use crate::init::{self, Movie, Role};
 use crate::table::Track;
 use crate::{Error, unsupported};
 
@@ -24,8 +24,8 @@ struct Header {
     end: u64,
 }
 
-#[derive(Default)]
 struct Scan {
+    role: Role,
     movie: Option<Movie>,
     stream: Option<Stream>,
     /// Khoảng byte các trun của moof vừa đọc trỏ tới: phải nằm gọn trong mdat liền sau.
@@ -34,8 +34,17 @@ struct Scan {
     mdats: Vec<(u64, u64)>,
 }
 
-/// Mọi trak của file kèm bảng mẫu. fMP4 chỉ nhận một trak.
+/// Mọi trak của file đầu vào kèm bảng mẫu. fMP4 chỉ nhận một trak.
 pub(crate) fn read_file(path: &Path) -> Result<Vec<Track>, Error> {
+    read(path, Role::Input)
+}
+
+/// Đọc lại file ra của chính crate (tự kiểm): nhận cả ctts và edit list đã ghi.
+pub(crate) fn read_output(path: &Path) -> Result<Vec<Track>, Error> {
+    read(path, Role::Output)
+}
+
+fn read(path: &Path, role: Role) -> Result<Vec<Track>, Error> {
     let file = File::open(path)?;
     let length = file.metadata()?.len();
     let mut reader = BufReader::with_capacity(SCAN_BUFFER, file);
@@ -43,7 +52,13 @@ pub(crate) fn read_file(path: &Path) -> Result<Vec<Track>, Error> {
     if !first.is_some_and(|kind| FIRST_BOXES.iter().any(|known| known[..] == kind[..])) {
         return Err(unsupported("không phải file MP4"));
     }
-    let mut scan = Scan::default();
+    let mut scan = Scan {
+        role,
+        movie: None,
+        stream: None,
+        pending: None,
+        mdats: Vec::new(),
+    };
     let mut pos = 0;
     while pos < length {
         let header = next_header(&mut reader, pos, length)?;
@@ -105,7 +120,7 @@ impl Scan {
         match &header.kind {
             b"moov" => {
                 let body = read_body(reader, header, MAX_MOOV)?;
-                self.open_movie(init::read_moov(&body)?)?;
+                self.open_movie(init::read_moov(&body, self.role)?)?;
                 Ok(header.end)
             }
             b"moof" => {

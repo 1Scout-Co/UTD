@@ -10,10 +10,12 @@ import {
 } from "@/components/ui/dialog"
 import { t } from "@/shared/i18n/i18n"
 
+import { SettingsAbout } from "./settings-about"
 import { SettingsBrowser } from "./settings-browser"
 import { SettingsDownloadDir } from "./settings-download-dir"
 import { SettingsLanguage } from "./settings-language"
 import { SettingsMediaTools } from "./settings-media-tools"
+import { SettingsQueue } from "./settings-queue"
 import { SettingsSection as Section, SettingsPrivacy } from "./settings-section"
 import { SettingsUpdates, useAppVersion } from "./settings-updates"
 
@@ -78,6 +80,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
             />
           </Section>
 
+          <SettingsQueue open={open} desktop={desktop} />
+
           <SettingsBrowser open={open} desktop={desktop} />
 
           <Section
@@ -95,6 +99,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
           />
 
           <SettingsPrivacy />
+
+          <SettingsAbout version={version} />
         </div>
 
         <SettingsFooter

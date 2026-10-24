@@ -3,6 +3,7 @@
 //! trun → tfhd → trex độc lập với bộ đọc) và byte dữ liệu từng mẫu.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::Kind;
 use crate::table::Sample;
@@ -35,9 +36,17 @@ fn words(values: &[u32]) -> Vec<u8> {
 /// Thư mục tạm riêng mỗi test, tự xoá.
 pub(super) struct Scratch(pub PathBuf);
 
+/// Số thứ tự thư mục tạm: hai test chạy song song cùng `name` (vd cùng ca `refused`) không được
+/// dùng chung một thư mục, kẻo test này xoá thư mục test kia đang ghi.
+static NEXT_SCRATCH: AtomicUsize = AtomicUsize::new(0);
+
 impl Scratch {
     pub fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("utd-mp4-{}-{name}", std::process::id()));
+        let serial = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "utd-mp4-{}-{serial}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         Self(path)
@@ -65,8 +74,10 @@ pub(super) struct Init {
     pub trex: [u32; 4],
     /// objectTypeIndication của esds (0x40 = AAC).
     pub object_type: u8,
-    /// Thêm edts có media_time 1024 (như AAC ffmpeg tự mã hoá).
-    pub edts: bool,
+    /// edts đặt trong trak của init (xem `edit`).
+    pub edts: Option<Vec<u8>>,
+    /// Box thêm vào cuối moov (udta…).
+    pub extra: Vec<u8>,
 }
 
 impl Init {
@@ -77,7 +88,8 @@ impl Init {
             timescale: 15360,
             trex: [1, 256, 0, 0x0101_0000],
             object_type: 0x40,
-            edts: false,
+            edts: None,
+            extra: Vec::new(),
         }
     }
 
@@ -88,7 +100,8 @@ impl Init {
             timescale: 48000,
             trex: [1, 1024, 0, 0],
             object_type: 0x40,
-            edts: false,
+            edts: None,
+            extra: Vec::new(),
         }
     }
 
@@ -155,7 +168,7 @@ impl Init {
             &[&words(&[0, 0, self.timescale, 0])[..], &[0x55, 0xC4, 0, 0]].concat(),
         );
         let mdia = bx(b"mdia", &[mdhd, full(b"hdlr", 0, 0, &hdlr), minf].concat());
-        let edts = edts.or_else(|| self.edts.then(|| edit(0, 1024)));
+        let edts = edts.or_else(|| self.edts.clone());
         bx(
             b"trak",
             &[full(b"tkhd", 0, 3, &tkhd), edts.unwrap_or_default(), mdia].concat(),
@@ -165,15 +178,16 @@ impl Init {
 
 /// edts một mục (segment, media_time, tốc độ 1).
 pub(super) fn edit(segment: u32, media_time: u32) -> Vec<u8> {
-    bx(
-        b"edts",
-        &full(
-            b"elst",
-            0,
-            0,
-            &words(&[1, segment, media_time, 0x0001_0000]),
-        ),
-    )
+    edits(&[(segment, media_time, 0x0001_0000)])
+}
+
+/// edts với các mục (segment, media_time, tốc độ 16.16) version 0.
+pub(super) fn edits(entries: &[(u32, u32, u32)]) -> Vec<u8> {
+    let mut body = words(&[entries.len() as u32]);
+    for (segment, media_time, rate) in entries {
+        body.extend_from_slice(&words(&[*segment, *media_time, *rate]));
+    }
+    bx(b"edts", &full(b"elst", 0, 0, &body))
 }
 
 fn mvhd() -> Vec<u8> {
@@ -205,6 +219,8 @@ pub(super) fn smp(duration: u32, size: u32, flags: u32) -> Smp {
 
 #[derive(Clone, Default)]
 pub(super) struct Trun {
+    /// 1: lệch cts có dấu.
+    pub version: u8,
     pub flags: u32,
     pub first_flags: u32,
     pub samples: Vec<Smp>,
@@ -274,7 +290,13 @@ impl Built {
         );
         let moov = bx(
             b"moov",
-            &[mvhd(), init.trak(&empty_tables(), None), bx(b"mvex", &trex)].concat(),
+            &[
+                mvhd(),
+                init.trak(&empty_tables(), None),
+                bx(b"mvex", &trex),
+                init.extra.clone(),
+            ]
+            .concat(),
         );
         let bytes = [bx(b"ftyp", b"iso6\0\0\0\0iso6mp41"), moov].concat();
         Self {
@@ -320,6 +342,7 @@ impl Built {
                 size: sample.size - trim,
                 duration: sample.duration,
                 sync: sample.flags & 0x0101_0000 == 0,
+                cts: sample.cts,
             });
             self.payloads.push(output);
             self.decode_end += u64::from(sample.duration);
@@ -406,7 +429,7 @@ fn moof(frag: &Frag, resolved: &[Vec<Smp>], base: u64, offsets: &[i32]) -> Vec<u
                 }
             }
         }
-        traf.extend_from_slice(&full(b"trun", 0, trun.flags, &body));
+        traf.extend_from_slice(&full(b"trun", trun.version, trun.flags, &body));
     }
     traf.extend_from_slice(&frag.extra);
     let traf = bx(b"traf", &traf);
@@ -435,6 +458,8 @@ pub(super) struct Plain {
     /// Lệch cts của mẫu thứ hai (0 = không có ctts).
     pub cts: u32,
     pub edts: Option<Vec<u8>>,
+    /// Một byte sdtp mỗi mẫu (rỗng = không có sdtp).
+    pub sdtp: Vec<u8>,
 }
 
 /// File thường: ftyp, mdat, moov với stbl đầy đủ (mdat trước moov như ffmpeg).
@@ -454,6 +479,7 @@ pub(super) fn plain(init: &Init, samples: &[Smp], options: &Plain) -> Built {
             size: output.len() as u32,
             duration: sample.duration,
             sync: sample.flags & 0x0101_0000 == 0,
+            cts: if number == 1 { options.cts } else { 0 },
         });
         built.payloads.push(output);
     }
@@ -490,7 +516,9 @@ fn plain_tables(samples: &[Smp], options: &Plain, offsets: &[u32]) -> Vec<u8> {
     };
     let mut tables = full(b"stts", 0, 0, &stts);
     if options.cts != 0 {
-        tables.extend_from_slice(&full(b"ctts", 0, 0, &words(&[2, 1, 0, 1, options.cts])));
+        let rest = count - 2;
+        let entries = words(&[3, 1, 0, 1, options.cts, rest, 0]);
+        tables.extend_from_slice(&full(b"ctts", 0, 0, &entries));
     }
     tables.extend_from_slice(&full(
         b"stss",
@@ -498,6 +526,9 @@ fn plain_tables(samples: &[Smp], options: &Plain, offsets: &[u32]) -> Vec<u8> {
         0,
         &[&words(&[sync.len() as u32])[..], &words(&sync)].concat(),
     ));
+    if !options.sdtp.is_empty() {
+        tables.extend_from_slice(&full(b"sdtp", 0, 0, &options.sdtp));
+    }
     let (whole, rest) = (count / options.per_chunk, count % options.per_chunk);
     let mut stsc = vec![(1, options.per_chunk)];
     if rest != 0 {

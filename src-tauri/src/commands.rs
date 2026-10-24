@@ -7,10 +7,12 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use utd_engine::{
-    DownloadControl, DownloadEngine, DownloadRequest, DownloadTask, Journal, TaskKind,
+    DownloadControl, DownloadEngine, DownloadRequest, DownloadTask, Journal, RemoteFile, TaskKind,
+    TaskStatus,
 };
 
 use crate::events::{emit_engine_event, BridgeError, ERROR_EVENT};
+use crate::queue::{DownloadQueue, Entry, Place};
 use crate::state::{AppState, RunningTasks};
 
 #[derive(Debug, Deserialize)]
@@ -21,6 +23,9 @@ pub struct AddDownloadInput {
     pub file_name: Option<String>,
     pub connections: Option<u16>,
     pub expected_sha256: Option<String>,
+    /// `true` ⇒ xếp cuối hàng đợi ("Thêm vào hàng đợi"); mặc định chen đầu hàng.
+    #[serde(default)]
+    pub later: bool,
 }
 
 /// Ngoài luồng giao diện: tạo/kiểm thư mục tải trên ổ mạng đang tắt có thể treo nhiều giây.
@@ -31,26 +36,40 @@ pub async fn add_download(
     input: AddDownloadInput,
 ) -> Result<DownloadTask, String> {
     let engine = state.engine.clone();
-    let running = state.running.clone();
-    tauri::async_runtime::spawn_blocking(move || enqueue_download(app, engine, running, input))
+    let queue = state.queue.clone();
+    tauri::async_runtime::spawn_blocking(move || enqueue_download(app, engine, queue, input))
         .await
         .map_err(|error| error.to_string())?
 }
 
+/// Tạo task rồi xếp vào hàng đợi chung (chạy ngay nếu còn chỗ).
 pub(crate) fn enqueue_download(
     app: AppHandle,
     engine: Arc<DownloadEngine>,
-    running: Arc<RunningTasks>,
+    queue: Arc<DownloadQueue>,
     input: AddDownloadInput,
 ) -> Result<DownloadTask, String> {
     // Trang video tải bằng HTTP chỉ được trang HTML: trả mã `media_page` để giao diện mở hộp Tải media.
     if crate::media_pages::is_media_page(&input.url) {
         return Err(crate::media_pages::media_page_error());
     }
-    let dest_dir = match input.dest_dir.filter(|value| !value.trim().is_empty()) {
-        Some(value) => checked_dest_dir(&value, &app_data_dir(&app)?)?,
-        None => suggested_download_dir(&app)?,
-    };
+    // Trang kênh: mở hộp Tải cả kênh với link đó.
+    if crate::media_pages::is_channel_page(&input.url) {
+        return Err(crate::media_pages::channel_page_error(&input.url));
+    }
+    let dest_dir = download_dir_for(&app, input.dest_dir.as_deref())?;
+    let place = if input.later { Place::Back } else { Place::Front };
+    let (task, entry) = create_download(&engine, &dest_dir, input)?;
+    queue.submit(vec![entry], place)?;
+    Ok(task)
+}
+
+/// Tạo task HTTP trong journal, chưa xếp hàng (`dest_dir` đã kiểm). Lô link dùng chung (batch.rs).
+pub(crate) fn create_download(
+    engine: &DownloadEngine,
+    dest_dir: &Path,
+    input: AddDownloadInput,
+) -> Result<(DownloadTask, Entry), String> {
     let allow_rename = input.file_name.is_none();
     let mut request = DownloadRequest::new(input.url, dest_dir.to_string_lossy().into_owned());
     request.file_name = input.file_name.filter(|value| !value.trim().is_empty());
@@ -65,15 +84,18 @@ pub(crate) fn enqueue_download(
         .filter(|value| !value.trim().is_empty());
     let task = engine.enqueue(request).map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&task.dest_dir).map_err(|error| error.to_string())?;
-    spawn_run(
-        app,
-        engine,
-        running,
-        task.id.clone(),
-        false,
-        allow_rename,
-    )?;
-    Ok(task)
+    let entry = Entry {
+        id: task.id.clone(),
+        rename: allow_rename,
+    };
+    Ok((task, entry))
+}
+
+/// Bảng xem trước của hộp Thêm hàng loạt: tên + kích thước một link, có phải trang web (chưa tạo task).
+#[tauri::command]
+pub async fn inspect_link(state: State<'_, AppState>, url: String) -> Result<RemoteFile, String> {
+    let engine = state.engine.clone();
+    engine.inspect(&url).await.map_err(|error| error.message)
 }
 
 #[tauri::command]
@@ -84,42 +106,34 @@ pub fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadTask>, S
         .map_err(|error| error.to_string())
 }
 
+/// Task đang chờ: bỏ khỏi hàng (`paused`); đang chạy: huỷ lượt tải (engine giữ tiến độ).
 #[tauri::command]
 pub fn pause_download(state: State<'_, AppState>, task_id: String) -> Result<(), String> {
-    state.running.cancel(&task_id);
+    if !state.queue.pause(&task_id)? {
+        state.running.cancel(&task_id);
+    }
     Ok(())
 }
 
+/// Tiếp tục / Thử lại: vào đầu hàng đợi, chạy ngay khi còn chỗ.
 #[tauri::command]
-pub fn resume_download(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    task_id: String,
-) -> Result<(), String> {
-    if state.running.contains(&task_id) {
+pub fn resume_download(state: State<'_, AppState>, task_id: String) -> Result<(), String> {
+    resume_task(&state, &task_id)
+}
+
+pub(crate) fn resume_task(state: &AppState, task_id: &str) -> Result<(), String> {
+    if state.running.contains(task_id) {
         return Err("download is already running".into());
     }
-    let task = state
+    state
         .journal
-        .load_task(&task_id)
+        .load_task(task_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "download not found".to_string())?;
-    if task.kind == TaskKind::Media {
-        return crate::media::spawn_media_run(
-            app,
-            state.journal.clone(),
-            state.running.clone(),
-            task_id,
-        );
-    }
-    spawn_run(
-        app,
-        state.engine.clone(),
-        state.running.clone(),
-        task_id,
-        true,
-        false,
-    )
+    state
+        .queue
+        .submit(vec![Entry::new(task_id)], Place::Front)
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -131,6 +145,7 @@ pub fn remove_download(
     if state.running.contains(&task_id) {
         return Err("pause the download before removing it".into());
     }
+    state.queue.forget(&task_id);
     remove_task(&state.journal, &task_id, delete_files.unwrap_or(false))
 }
 
@@ -147,6 +162,8 @@ fn remove_task(journal: &Journal, task_id: &str, delete_files: bool) -> Result<(
     journal
         .delete_task(task_id)
         .map_err(|error| error.to_string())?;
+    // Đã tải xong thì vẫn tính "Đã tải" (như lúc chưa ghép), kể cả khi xoá file kèm theo.
+    crate::media::channel::forget(journal, task_id, task.status == TaskStatus::Completed);
     if delete_files {
         let target = Path::new(&task.dest_dir).join(&task.file_name);
         let _ = std::fs::remove_file(target);
@@ -231,16 +248,57 @@ fn measure_disk(app: &AppHandle, path: Option<String>) -> Result<DiskSpace, Stri
     std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
     let free_bytes = fs2::available_space(&path).map_err(|error| error.to_string())?;
     let total_bytes = fs2::total_space(&path).map_err(|error| error.to_string())?;
-    let label = path
-        .components()
-        .next()
-        .map(|component| component.as_os_str().to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Ổ đĩa".into());
     Ok(DiskSpace {
         free_bytes,
         total_bytes,
-        label,
+        label: disk_label(&path),
     })
+}
+
+/// Tên ổ hiện cạnh dung lượng: `C:` trên Windows; trên macOS là tên Finder hiện ("Macintosh HD",
+/// tên USB), không có thì `/Volumes/<tên>`.
+fn disk_label(path: &Path) -> String {
+    #[cfg(target_os = "macos")]
+    if let Some(name) = mac_volume_name(path) {
+        return name;
+    }
+    if cfg!(target_os = "macos")
+        && let Some(name) = volume_root(path).strip_prefix("/Volumes").ok().and_then(Path::to_str)
+        && !name.is_empty()
+    {
+        return name.to_string();
+    }
+    path.components()
+        .next()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Ổ đĩa".into())
+}
+
+/// `NSURLVolumeLocalizedNameKey`: thư mục người dùng nằm ở ổ Data (firmlink) vẫn ra "Macintosh HD".
+#[cfg(target_os = "macos")]
+fn mac_volume_name(path: &Path) -> Option<String> {
+    use objc2_foundation::{NSString, NSURL, NSURLVolumeLocalizedNameKey};
+    objc2::rc::autoreleasepool(|_| {
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        let mut value = None;
+        // SAFETY: khoá là hằng của Foundation; `value` nhận đúng một đối tượng hoặc để None.
+        unsafe { url.getResourceValue_forKey_error(&mut value, NSURLVolumeLocalizedNameKey) }
+            .ok()?;
+        let name = value?.downcast::<NSString>().ok()?.to_string();
+        (!name.trim().is_empty()).then_some(name)
+    })
+}
+
+/// Thư mục người dùng chọn ở hộp Thêm (kiểm như Cài đặt, tạo nếu chưa có), không chọn ⇒ thư mục mặc định.
+pub(crate) fn download_dir_for(app: &AppHandle, chosen: Option<&str>) -> Result<PathBuf, String> {
+    match chosen.filter(|value| !value.trim().is_empty()) {
+        Some(value) => checked_dest_dir(value, &app_data_dir(app)?),
+        None => {
+            let folder = suggested_download_dir(app)?;
+            std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+            Ok(folder)
+        }
+    }
 }
 
 /// Thư mục tải khi không chỉ định: thư mục đã lưu trong Cài đặt, nếu không thì `Downloads\UTD`.
@@ -284,12 +342,23 @@ fn usable_saved_dir(value: &str, data_dir: &Path) -> Option<PathBuf> {
         return None;
     }
     let folder = parse_download_dir(value).ok()?;
-    let root: PathBuf = folder
-        .components()
-        .take_while(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
-        .collect();
+    let root = volume_root(&folder);
     let usable = root.is_dir() && !folder.is_file() && !is_within(&folder, data_dir);
     usable.then_some(folder)
+}
+
+/// Gốc ổ chứa thư mục: `D:\` trên Windows; macOS gắn ổ ngoài ở `/Volumes/<tên>` (rút ra là mất).
+fn volume_root(folder: &Path) -> PathBuf {
+    if cfg!(target_os = "macos")
+        && let Ok(rest) = folder.strip_prefix("/Volumes")
+        && let Some(name) = rest.components().next()
+    {
+        return Path::new("/Volumes").join(name);
+    }
+    folder
+        .components()
+        .take_while(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+        .collect()
 }
 
 /// Ký tự điều khiển hoặc đảo chiều chữ (bidi) làm tên thư mục hiển thị sai.
@@ -335,7 +404,11 @@ fn parse_download_dir(raw: &str) -> Result<PathBuf, String> {
         return Err("Đường dẫn có ký tự không hợp lệ.".into());
     }
     if !path.is_absolute() {
-        return Err("Cần đường dẫn đầy đủ, ví dụ D:\\Tải về.".into());
+        return Err(if cfg!(windows) {
+            "Cần đường dẫn đầy đủ, ví dụ D:\\Tải về.".into()
+        } else {
+            "Cần đường dẫn đầy đủ, ví dụ /Users/ban/Downloads/UTD.".into()
+        });
     }
     if path
         .components()
@@ -423,7 +496,7 @@ fn probe_writable(folder: &Path) -> Result<(), String> {
     written.and(removed).map_err(|_| failed())
 }
 
-/// `path` nằm trong (hoặc chính là) `root`; Windows không phân biệt hoa thường.
+/// `path` nằm trong (hoặc chính là) `root`; Windows và ổ mặc định của macOS không phân biệt hoa thường.
 fn is_within(path: &Path, root: &Path) -> bool {
     let parts = |value: &Path| -> Vec<String> {
         value
@@ -431,7 +504,7 @@ fn is_within(path: &Path, root: &Path) -> bool {
             .filter(|component| !matches!(component, Component::CurDir))
             .map(|component| {
                 let text = component.as_os_str().to_string_lossy();
-                if cfg!(windows) {
+                if cfg!(any(windows, target_os = "macos")) {
                     text.to_lowercase()
                 } else {
                     text.into_owned()
@@ -444,7 +517,8 @@ fn is_within(path: &Path, root: &Path) -> bool {
     !root.is_empty() && path.len() >= root.len() && path[..root.len()] == root[..]
 }
 
-fn spawn_run(
+/// Chạy một task HTTP (hàng đợi gọi); xong lượt thì nhả chỗ trong hàng đợi.
+pub(crate) fn spawn_run(
     app: AppHandle,
     engine: Arc<DownloadEngine>,
     running: Arc<RunningTasks>,
@@ -484,6 +558,7 @@ fn spawn_run(
             );
         }
         running.remove(&task_id);
+        crate::queue::finished(&app, &task_id);
     });
     Ok(())
 }
@@ -680,6 +755,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Tải cả kênh nhớ video lúc xếp hàng: xoá task đang chờ khỏi danh sách (ngưng tải kênh) thì lần sau
+    /// video được chọn lại; task đã tải xong bị xoá khỏi danh sách vẫn là "Đã tải".
+    #[test]
+    fn removing_a_queued_channel_video_offers_it_again() {
+        let root = scratch();
+        let journal = Journal::open(root.join("data").join("utd.db")).unwrap();
+        let dir = text(&root);
+        let key = "tiktok.com:MS4wLjABAAAA";
+        let mut ids = Vec::new();
+        for (video, status) in [("v1", TaskStatus::Queued), ("v2", TaskStatus::Completed)] {
+            let mut task = DownloadTask::new("https://www.tiktok.com/@a/video/1", "a.mp4", &*dir, 1)
+                .unwrap()
+                .with_kind(TaskKind::Media);
+            task.status = status;
+            task.hash_state = utd_engine::HashState::Unavailable;
+            journal.save_task(&task).unwrap();
+            let pick = crate::media::channel::ChannelPick {
+                key: key.into(),
+                video_id: video.into(),
+            };
+            crate::media::channel::remember(&journal, &pick, &task.id).unwrap();
+            ids.push(task.id);
+        }
+        for id in &ids {
+            remove_task(&journal, id, false).unwrap();
+        }
+        assert!(!crate::media::channel::is_downloaded(&journal, key, "v1"), "chưa tải ⇒ chọn lại");
+        assert!(crate::media::channel::is_downloaded(&journal, key, "v2"), "đã tải xong ⇒ vẫn nhớ");
+        drop(journal);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn within_compares_whole_components() {
         let root = scratch();
@@ -688,5 +795,39 @@ mod tests {
         assert!(is_within(&data.join("bin"), &data));
         assert!(!is_within(&root.join("UTD-Data2"), &data));
         assert!(!is_within(&root, &data));
+        #[cfg(target_os = "macos")]
+        assert!(
+            is_within(&root.join("utd-data").join("bin"), &data),
+            "APFS mặc định không phân biệt hoa thường"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unplugged_mac_volume_falls_back_to_default() {
+        let data = scratch().join("UTD-Data");
+        let gone = format!("/Volumes/utd-khong-co-{}/Phim", uuid::Uuid::new_v4().simple());
+        assert_eq!(usable_saved_dir(&gone, &data), None, "ổ ngoài đã rút ⇒ về mặc định");
+        assert_eq!(volume_root(Path::new("/Users/ban/Downloads")), PathBuf::from("/"));
+        assert_eq!(
+            volume_root(Path::new("/Volumes/USB/Phim")),
+            PathBuf::from("/Volumes/USB")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_disk_label_is_the_volume_name() {
+        let boot = disk_label(Path::new("/"));
+        assert!(!boot.is_empty() && boot != "/", "tên ổ khởi động, không phải \"/\": {boot}");
+        assert_eq!(disk_label(&std::env::temp_dir()), boot, "ổ Data vẫn mang tên ổ khởi động");
+        let usb = format!("utd-khong-co-{}", uuid::Uuid::new_v4().simple());
+        assert_eq!(disk_label(&Path::new("/Volumes").join(&usb).join("Phim")), usb);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_disk_label_is_the_drive() {
+        assert_eq!(disk_label(Path::new(r"C:\Users\ban\Downloads")), "C:");
     }
 }

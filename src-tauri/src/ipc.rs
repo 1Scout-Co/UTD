@@ -20,7 +20,13 @@ struct PipeRequest {
     suggested_name: Option<String>,
     /// Trang đang mở khi chuột phải; native host cũ không gửi trường này.
     page_url: Option<String>,
+    /// Lô link ("Tải tất cả link bằng UTD"): mở hộp Thêm hàng loạt, `url` khi đó là trang đang mở.
+    #[serde(default)]
+    batch: Option<Vec<String>>,
 }
+
+/// Một dòng yêu cầu tối đa chừng này byte: lô `batch::MAX_LINKS` link (native host đã giới hạn 1 MiB).
+const MAX_REQUEST_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Việc làm với một yêu cầu qua pipe. Token và giới hạn kiểm trước, rồi mới xem có phải trang video.
 #[derive(Debug, PartialEq)]
@@ -28,16 +34,27 @@ enum Route {
     Reject(&'static str),
     /// Trang video: không tạo task HTTP (chỉ được trang HTML), mở hộp Tải media trong UTD.
     Media,
+    /// Lô link đã kiểm: mở hộp Thêm hàng loạt, chưa tạo task nào.
+    Batch(Vec<String>),
+    /// Trang kênh: cùng sự kiện với trang video, giao diện nhận ra link kênh và mở hộp Tải cả kênh.
+    Channel,
     Download,
 }
 
 fn route(request: &PipeRequest, token: &str) -> Route {
     if !secure_eq(&request.token, token) {
         Route::Reject("Token IPC không hợp lệ.")
+    } else if let Some(links) = &request.batch {
+        match crate::batch::clean_links(links) {
+            Ok(links) => Route::Batch(links),
+            Err(message) => Route::Reject(message),
+        }
     } else if request.url.len() > 8192 {
         Route::Reject("URL quá dài.")
     } else if crate::media_pages::is_media_page(&request.url) {
         Route::Media
+    } else if crate::media_pages::is_channel_page(&request.url) {
+        Route::Channel
     } else {
         Route::Download
     }
@@ -79,14 +96,17 @@ impl PipeResponse {
 }
 
 /// `UTD_DATA_DIR` (đường dẫn tuyệt đối): bản chạy thử dùng thư mục dữ liệu riêng, chạy song song với bản
-/// thật mà không đụng `UTD-Data` (journal, cài đặt, công cụ, tích hợp trình duyệt). Native host do
-/// trình duyệt chạy không có biến này nên luôn nói chuyện với bản thật.
+/// thật mà không đụng `UTD-Data` (journal, cài đặt, công cụ, tích hợp trình duyệt: nút cài báo lỗi, trừ
+/// khi có `UTD_TEST_BROWSER_INTEGRATION=1`). Native host do trình duyệt chạy không có biến này nên luôn
+/// nói chuyện với bản thật.
 pub fn isolated_data_dir() -> Option<PathBuf> {
     std::env::var_os("UTD_DATA_DIR")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
 }
 
+/// Windows `%LOCALAPPDATA%\UTD-Data`, macOS `~/Library/Application Support/UTD-Data`. Không theo
+/// `identifier` của Tauri: native host do trình duyệt chạy phải tự tìm ra đúng chỗ này.
 pub fn data_dir() -> Result<PathBuf, String> {
     if let Some(directory) = isolated_data_dir() {
         return Ok(directory);
@@ -95,7 +115,14 @@ pub fn data_dir() -> Result<PathBuf, String> {
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         return Ok(PathBuf::from(local).join("UTD-Data"));
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+        return Ok(PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("UTD-Data"));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
     if let Some(home) = std::env::var_os("HOME") {
         return Ok(PathBuf::from(home).join(".local").join("share").join("UTD-Data"));
     }
@@ -118,11 +145,25 @@ pub fn write_config(directory: &Path, config: &IpcConfig) -> Result<(), String> 
     let path = directory.join("ipc.json");
     let payload = serde_json::to_vec_pretty(config).map_err(|error| error.to_string())?;
     let temporary = directory.join("ipc.json.tmp");
-    std::fs::write(&temporary, payload).map_err(|error| error.to_string())?;
+    write_private(&temporary, &payload).map_err(|error| error.to_string())?;
     if path.exists() {
         std::fs::remove_file(&path).map_err(|error| error.to_string())?;
     }
     std::fs::rename(&temporary, &path).map_err(|error| error.to_string())
+}
+
+/// Token chỉ chủ máy đọc được: Unix tạo file quyền 0600 ngay từ đầu (Windows dựa vào ACL của
+/// `%LOCALAPPDATA%`).
+fn write_private(path: &Path, payload: &[u8]) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(path);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    std::io::Write::write_all(&mut options.open(path)?, payload)
 }
 
 pub fn read_config() -> Result<(IpcConfig, PathBuf), String> {
@@ -154,24 +195,141 @@ pub fn pipe_path(pipe: &str) -> String {
     format!(r"\\.\pipe\{pipe}")
 }
 
-#[cfg(windows)]
+/// macOS: Unix domain socket trong thư mục dữ liệu (quyền 0600), vẫn kèm token của `ipc.json`.
+/// `sun_path` chỉ chứa 104 byte (kể cả byte NUL cuối): thư mục dữ liệu dài (bản thử `UTD_DATA_DIR` trong
+/// `$TMPDIR`) thì socket nằm ở thư mục tạm riêng của người dùng, tên theo băm thư mục dữ liệu — app và
+/// native host tính ra cùng một chỗ.
+#[cfg(unix)]
+pub fn socket_path(directory: &Path) -> PathBuf {
+    socket_path_in(directory, &user_temp_dir())
+}
+
+#[cfg(any(unix, test))]
+const SUN_PATH_LEN: usize = 104;
+
+#[cfg(any(unix, test))]
+fn socket_path_in(directory: &Path, short_dir: &Path) -> PathBuf {
+    let path = directory.join("ipc.sock");
+    if path.as_os_str().len() < SUN_PATH_LEN {
+        return path;
+    }
+    // FNV-1a 64 bit: cố định giữa các lần chạy và giữa app với native host.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in directory.as_os_str().as_encoded_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    short_dir.join(format!("utd-{hash:016x}.sock"))
+}
+
+/// macOS: thư mục tạm riêng của người dùng (0700) theo hệ thống (`_CS_DARWIN_USER_TEMP_DIR`), không theo
+/// biến `TMPDIR` — trình duyệt chạy native host có thể mang môi trường khác app.
+#[cfg(target_os = "macos")]
+fn user_temp_dir() -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    let mut buffer = vec![0u8; 1024];
+    // SAFETY: đưa đúng cỡ bộ đệm; confstr ghi chuỗi kết thúc NUL, trả cỡ cần kể cả NUL (0 = lỗi).
+    let needed = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_TEMP_DIR,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    if needed == 0 || needed > buffer.len() {
+        return std::env::temp_dir();
+    }
+    buffer.truncate(needed - 1);
+    PathBuf::from(std::ffi::OsString::from_vec(buffer))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn user_temp_dir() -> PathBuf {
+    std::env::temp_dir()
+}
+
 pub fn spawn_server(
     app: tauri::AppHandle,
     engine: Arc<utd_engine::DownloadEngine>,
-    running: Arc<crate::state::RunningTasks>,
+    queue: Arc<crate::queue::DownloadQueue>,
     config: IpcConfig,
+    directory: PathBuf,
 ) {
     tauri::async_runtime::spawn(async move {
-        accept_loop(app, engine, running, config).await;
+        accept_loop(app, engine, queue, config, directory).await;
     });
+}
+
+#[cfg(unix)]
+async fn accept_loop(
+    app: tauri::AppHandle,
+    engine: Arc<utd_engine::DownloadEngine>,
+    queue: Arc<crate::queue::DownloadQueue>,
+    config: IpcConfig,
+    directory: PathBuf,
+) {
+    let listener = bind_until_ready(&socket_path(&directory)).await;
+    loop {
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => stream,
+            Err(error) => {
+                log::warn!("IPC socket accept failed: {error}");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                continue;
+            }
+        };
+        let app = app.clone();
+        let engine = engine.clone();
+        let queue = queue.clone();
+        let token = config.token.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = handle_connection(stream, app, engine, queue, &token).await {
+                log::warn!("IPC request rejected: {error}");
+            }
+        });
+    }
+}
+
+/// Như bản Windows tạo lại pipe: lỗi (vd chưa gỡ được socket cũ) thì thử lại, không bỏ kênh IPC tới khi
+/// tắt app. Chỉ ghi log khi lỗi đổi, khỏi đầy log.
+#[cfg(unix)]
+async fn bind_until_ready(path: &Path) -> tokio::net::UnixListener {
+    let mut last: Option<String> = None;
+    loop {
+        match bind_private(path) {
+            Ok(listener) => return listener,
+            Err(error) => {
+                let message = error.to_string();
+                if last.as_deref() != Some(message.as_str()) {
+                    log::error!("IPC socket bind failed at {}: {message}", path.display());
+                    last = Some(message);
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
+
+/// Socket sót lại (app bị tắt ngang) thì gỡ rồi tạo lại; chỉnh quyền 0600 trước khi nhận kết nối.
+#[cfg(unix)]
+fn bind_private(path: &Path) -> std::io::Result<tokio::net::UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    let listener = tokio::net::UnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
 }
 
 #[cfg(windows)]
 async fn accept_loop(
     app: tauri::AppHandle,
     engine: Arc<utd_engine::DownloadEngine>,
-    running: Arc<crate::state::RunningTasks>,
+    queue: Arc<crate::queue::DownloadQueue>,
     config: IpcConfig,
+    _directory: PathBuf,
 ) {
     use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
 
@@ -194,29 +352,32 @@ async fn accept_loop(
         }
         let app = app.clone();
         let engine = engine.clone();
-        let running = running.clone();
+        let queue = queue.clone();
         let token = config.token.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = handle_connection(server, app, engine, running, &token).await {
+            if let Err(error) = handle_connection(server, app, engine, queue, &token).await {
                 log::warn!("IPC request rejected: {error}");
             }
         });
     }
 }
 
-#[cfg(windows)]
-async fn handle_connection(
-    mut server: tokio::net::windows::named_pipe::NamedPipeServer,
+/// Một yêu cầu một dòng JSON, trả một dòng JSON (named pipe trên Windows, Unix socket trên macOS).
+async fn handle_connection<S>(
+    mut server: S,
     app: tauri::AppHandle,
     engine: Arc<utd_engine::DownloadEngine>,
-    running: Arc<crate::state::RunningTasks>,
+    queue: Arc<crate::queue::DownloadQueue>,
     token: &str,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     let mut line = String::new();
     {
-        let mut reader = BufReader::new((&mut server).take(64 * 1024));
+        let mut reader = BufReader::new((&mut server).take(MAX_REQUEST_BYTES));
         let read = tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
             .await
             .map_err(|_| "IPC timeout".to_string())?
@@ -230,13 +391,15 @@ async fn handle_connection(
         serde_json::from_str(&line).map_err(|_| "IPC payload không hợp lệ".to_string())?;
     let response = match route(&request, token) {
         Route::Reject(message) => PipeResponse::error(message),
-        Route::Media => {
-            let media = crate::events::MediaRequest {
-                url: request.url.trim().to_string(),
+        Route::Media => open_media(&app, request, crate::media_pages::MEDIA_PAGE_NOTE),
+        Route::Channel => open_media(&app, request, crate::media_pages::CHANNEL_PAGE_NOTE),
+        Route::Batch(urls) => {
+            let batch = crate::events::BatchRequest {
+                urls,
                 page_url: crate::media_pages::clean_page_url(request.page_url),
             };
-            crate::media_pages::open_media_flow(&app, media);
-            PipeResponse::note(crate::media_pages::MEDIA_PAGE_NOTE)
+            crate::batch::open_batch_flow(&app, batch);
+            PipeResponse::note(crate::batch::BATCH_NOTE)
         }
         Route::Download => {
             let input = crate::commands::AddDownloadInput {
@@ -245,8 +408,9 @@ async fn handle_connection(
                 file_name: request.suggested_name,
                 connections: None,
                 expected_sha256: None,
+                later: false,
             };
-            match crate::commands::enqueue_download(app, engine, running, input) {
+            match crate::commands::enqueue_download(app, engine, queue, input) {
                 Ok(task) => PipeResponse::ok(task.id),
                 Err(message) => PipeResponse::error(message),
             }
@@ -259,6 +423,16 @@ async fn handle_connection(
         .await
         .map_err(|error| error.to_string())?;
     server.flush().await.map_err(|error| error.to_string())
+}
+
+/// Trang video hoặc trang kênh: cùng sự kiện `utd://media-request`, giao diện tự nhận ra link kênh.
+fn open_media(app: &tauri::AppHandle, request: PipeRequest, note: &str) -> PipeResponse {
+    let media = crate::events::MediaRequest {
+        url: request.url.trim().to_string(),
+        page_url: crate::media_pages::clean_page_url(request.page_url),
+    };
+    crate::media_pages::open_media_flow(app, media);
+    PipeResponse::note(note)
 }
 
 fn secure_eq(left: &str, right: &str) -> bool {
@@ -299,6 +473,10 @@ mod tests {
             Route::Download,
             "trang chủ vẫn đi đường tải thường"
         );
+        assert_eq!(
+            route(&request(TOKEN, "https://www.tiktok.com/@tiktok"), TOKEN),
+            Route::Channel
+        );
     }
 
     #[test]
@@ -311,6 +489,34 @@ mod tests {
         );
         let long = format!("{watch}&x={}", "a".repeat(8192));
         assert_eq!(route(&request(TOKEN, &long), TOKEN), Route::Reject("URL quá dài."));
+    }
+
+    #[test]
+    fn a_batch_opens_the_batch_dialog_after_the_token_check() {
+        let batch = |token: &str, links: &[&str]| -> PipeRequest {
+            serde_json::from_value(serde_json::json!({
+                "token": token,
+                "url": "https://example.com/gallery",
+                "pageUrl": "https://example.com/gallery",
+                "batch": links,
+            }))
+            .unwrap()
+        };
+        let links = ["https://example.com/a.jpg", "javascript:x", "https://example.com/a.jpg"];
+        assert_eq!(
+            route(&batch(TOKEN, &links), TOKEN),
+            Route::Batch(vec!["https://example.com/a.jpg".into()])
+        );
+        let wrong = "f".repeat(TOKEN.len());
+        assert_eq!(
+            route(&batch(&wrong, &links), TOKEN),
+            Route::Reject("Token IPC không hợp lệ.")
+        );
+        assert_eq!(
+            route(&batch(TOKEN, &["mailto:x@example.com"]), TOKEN),
+            Route::Reject("Không có link hợp lệ.")
+        );
+        assert_eq!(request(TOKEN, "https://youtu.be/x").batch, None, "native host cũ");
     }
 
     #[test]
@@ -327,5 +533,103 @@ mod tests {
             note,
             serde_json::json!({ "ok": true, "taskId": null, "message": "Đã mở" })
         );
+    }
+
+    #[test]
+    fn config_round_trips_through_the_data_dir() {
+        let directory = std::env::temp_dir().join(format!("utd-ipc-{}", Uuid::new_v4()));
+        let config = create_config();
+        assert!(valid_config(&config));
+        write_config(&directory, &config).unwrap();
+        write_config(&directory, &config).unwrap();
+        let saved: IpcConfig =
+            serde_json::from_slice(&std::fs::read(directory.join("ipc.json")).unwrap()).unwrap();
+        assert_eq!(saved.token, config.token);
+        assert!(!directory.join("ipc.json.tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(directory.join("ipc.json")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "token chỉ chủ máy đọc được");
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Thư mục dữ liệu dài (bản thử trong `$TMPDIR` của macOS): socket vẫn vừa `sun_path`, cùng một chỗ
+    /// cho app và native host, khác nhau giữa hai thư mục dữ liệu.
+    #[test]
+    fn socket_path_fits_sun_path_even_for_a_long_data_dir() {
+        let short = Path::new("/tmp/utd-data");
+        assert_eq!(socket_path_in(short, Path::new("/t")), short.join("ipc.sock"));
+        let long = PathBuf::from(format!(
+            "/var/folders/h4/{}/T/utd-integrate-{}",
+            "x".repeat(30),
+            Uuid::new_v4()
+        ));
+        let other = long.with_file_name("utd-integrate-khac");
+        let user_tmp = Path::new("/var/folders/h4/abc/T");
+        let path = socket_path_in(&long, user_tmp);
+        assert!(path.as_os_str().len() < SUN_PATH_LEN, "{}", path.display());
+        assert!(path.starts_with(user_tmp));
+        assert_eq!(path, socket_path_in(&long, user_tmp), "app và native host cùng một chỗ");
+        assert_ne!(path, socket_path_in(&other, user_tmp));
+    }
+
+    /// Bản thật trên Mac: thư mục dữ liệu dài vẫn nhận kết nối qua socket.
+    #[cfg(unix)]
+    #[test]
+    fn unix_socket_binds_for_a_long_data_dir() {
+        let directory = std::env::temp_dir().join(format!(
+            "utd-sock-dai-{}-{}",
+            Uuid::new_v4(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = socket_path(&directory);
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let _listener = bind_private(&path).unwrap();
+            std::os::unix::net::UnixStream::connect(&path).unwrap();
+        });
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Socket sót lại thì thay; quyền 0600; native host nối được và nói một dòng mỗi chiều.
+    #[cfg(unix)]
+    #[test]
+    fn unix_socket_is_private_and_replaces_a_stale_one() {
+        use std::io::{BufRead, Write};
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let directory = PathBuf::from("/tmp").join(format!("utd-sock-{}", &Uuid::new_v4().simple().to_string()[..8]));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = socket_path(&directory);
+        std::fs::write(&path, b"cu").unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let listener = bind_private(&path).unwrap();
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+            let client = std::thread::spawn({
+                let path = path.clone();
+                move || {
+                    let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
+                    stream.write_all(b"xin chao\n").unwrap();
+                    let mut line = String::new();
+                    std::io::BufReader::new(stream).read_line(&mut line).unwrap();
+                    line
+                }
+            });
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = tokio::io::BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "xin chao\n");
+            reader.get_mut().write_all(b"da nhan\n").await.unwrap();
+            assert_eq!(client.join().unwrap(), "da nhan\n");
+        });
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

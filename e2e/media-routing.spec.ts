@@ -216,6 +216,7 @@ function mockDesktop({ early }: { early: string | null }) {
     default_download_dir: () => 'C:/Users/Test/Downloads/UTD',
     disk_space: () => ({ freeBytes: 5e11, totalBytes: 1e12, label: 'C:' }),
     get_update_check: () => ({ ready: true, enabled: false, available: null, installing: false }),
+    take_batch_request: () => null,
     take_media_request: () => {
       const url = pending
       pending = null

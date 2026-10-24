@@ -6,13 +6,32 @@ use std::path::{Path, PathBuf};
 use super::text;
 
 /// Mã lỗi Windows hay gặp khi đổi tên/chép file.
-const NOT_FOUND: [i32; 2] = [2, 3];
-const ACCESS_DENIED: i32 = 5;
-const IN_USE: [i32; 2] = [32, 33];
-const NOT_SAME_DEVICE: i32 = 17;
-const ALREADY_EXISTS: [i32; 2] = [80, 183];
-const DISK_FULL: [i32; 2] = [39, 112];
-const NAME_TOO_LONG: i32 = 206;
+#[cfg(windows)]
+mod code {
+    pub const NOT_FOUND: [i32; 2] = [2, 3];
+    pub const ACCESS_DENIED: i32 = 5;
+    pub const IN_USE: [i32; 2] = [32, 33];
+    pub const NOT_SAME_DEVICE: i32 = 17;
+    pub const ALREADY_EXISTS: [i32; 2] = [80, 183];
+    pub const DISK_FULL: [i32; 2] = [39, 112];
+    pub const NAME_TOO_LONG: i32 = 206;
+}
+
+/// Cùng ý nghĩa, theo errno của macOS/Unix (số khác Windows: 17 ở đây là "đã có").
+#[cfg(unix)]
+mod code {
+    pub const NOT_FOUND: [i32; 2] = [libc::ENOENT, libc::ENOTDIR];
+    pub const ACCESS_DENIED: i32 = libc::EACCES;
+    pub const IN_USE: [i32; 2] = [libc::EBUSY, libc::ETXTBSY];
+    pub const NOT_SAME_DEVICE: i32 = libc::EXDEV;
+    pub const ALREADY_EXISTS: [i32; 2] = [libc::EEXIST, libc::ENOTEMPTY];
+    pub const DISK_FULL: [i32; 2] = [libc::ENOSPC, libc::EDQUOT];
+    pub const NAME_TOO_LONG: i32 = libc::ENAMETOOLONG;
+}
+
+use code::{
+    ACCESS_DENIED, ALREADY_EXISTS, DISK_FULL, IN_USE, NAME_TOO_LONG, NOT_FOUND, NOT_SAME_DEVICE,
+};
 
 /// Câu ngắn cho người dùng; chi tiết chỉ ghi mã lỗi vào log (không ghi đường dẫn).
 pub(super) fn describe(error: &io::Error) -> String {
@@ -94,10 +113,52 @@ fn verbatim_wide(path: &Path) -> Vec<u16> {
     out
 }
 
-#[cfg(not(windows))]
+/// macOS: `renamex_np(RENAME_EXCL)` đổi tên một bước, đích đã có thì lỗi `EEXIST`. Ổ mặc định không
+/// phân biệt hoa/thường nên đổi hoa/thường của chính file đó cũng báo "đã có": nhận ra rồi đổi thẳng.
+#[cfg(target_os = "macos")]
 pub(super) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
-    std::fs::hard_link(from, to)?;
-    std::fs::remove_file(from)
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = |path: &Path| {
+        std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
+    };
+    let (source, target) = (c_path(from)?, c_path(to)?);
+    // SAFETY: hai chuỗi C kết thúc bằng NUL, sống tới hết lệnh gọi.
+    if unsafe { libc::renamex_np(source.as_ptr(), target.as_ptr(), libc::RENAME_EXCL) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::EEXIST) if same_file(from, to) => std::fs::rename(from, to),
+        // Ổ không hỗ trợ RENAME_EXCL (exFAT, FAT32, ổ mạng cũ).
+        Some(libc::ENOTSUP | libc::EINVAL) => link_then_unlink(from, to),
+        _ => Err(error),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn same_file(left: &Path, right: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::symlink_metadata(left), std::fs::symlink_metadata(right)) {
+        (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    link_then_unlink(from, to)
+}
+
+/// Liên kết cứng (đích đã có thì lỗi) rồi gỡ tên cũ; ổ không có liên kết cứng thì kiểm rồi đổi tên.
+#[cfg(unix)]
+fn link_then_unlink(from: &Path, to: &Path) -> io::Result<()> {
+    match std::fs::hard_link(from, to) {
+        Ok(()) => std::fs::remove_file(from),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists || occupied(to) => Err(error),
+        Err(error) if error.raw_os_error() == Some(NOT_SAME_DEVICE) => Err(error),
+        Err(_) => std::fs::rename(from, to),
+    }
 }
 
 /// Chuyển `from` → `to` (đích chưa có). Cùng ổ: đổi tên. Khác ổ: chép sang tên tạm cạnh đích,
@@ -269,9 +330,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn case_only_rename_works_on_windows() {
+    fn case_only_rename_works_on_windows_and_mac() {
         let root = scratch();
         let (lower, upper) = (root.join("phim.mp4"), root.join("Phim.MP4"));
         std::fs::write(&lower, b"x").unwrap();
@@ -298,6 +359,36 @@ mod tests {
         stream.push(":Zone.Identifier");
         let zone = std::fs::read_to_string(PathBuf::from(stream)).unwrap();
         assert!(zone.contains("ZoneId=3"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// macOS: "Mark of the Web" là thuộc tính mở rộng `com.apple.quarantine` (Gatekeeper đọc nó).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn copy_across_reapplies_the_quarantine_attribute() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = scratch();
+        let from = root.join("tai-lieu.pdf");
+        std::fs::write(&from, b"%PDF-1.7").unwrap();
+        let to = root.join("dich").join("tai-lieu.pdf");
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        copy_across(&from, &to, true).unwrap();
+        let path = std::ffi::CString::new(to.as_os_str().as_bytes()).unwrap();
+        let mut value = [0u8; 128];
+        // SAFETY: chuỗi C kết thúc bằng NUL, bộ đệm đủ chỗ cho `value.len()` byte.
+        let read = unsafe {
+            libc::getxattr(
+                path.as_ptr(),
+                c"com.apple.quarantine".as_ptr(),
+                value.as_mut_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        assert!(read > 0, "có cờ quarantine");
+        let text = String::from_utf8_lossy(&value[..read as usize]).into_owned();
+        assert!(text.starts_with("0081;") && text.contains(";UTD;"), "{text}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

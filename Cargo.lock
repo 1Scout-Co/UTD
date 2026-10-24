@@ -70,10 +70,15 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "fs2",
+ "libc",
  "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "png",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -4642,6 +4647,7 @@ name = "utd-engine"
 version = "0.1.0"
 dependencies = [
  "httpdate",
+ "libc",
  "log",
  "percent-encoding",
  "reqwest",

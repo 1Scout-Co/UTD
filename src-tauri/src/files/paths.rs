@@ -73,9 +73,9 @@ pub(super) fn check_new_name(raw: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
-/// Hai tên chỉ khác hoa/thường: Windows coi là cùng một file.
+/// Hai tên chỉ khác hoa/thường: Windows và ổ mặc định của macOS (APFS) coi là cùng một file.
 pub(super) fn same_name(left: &str, right: &str) -> bool {
-    cfg!(windows) && left.to_lowercase() == right.to_lowercase()
+    cfg!(any(windows, target_os = "macos")) && left.to_lowercase() == right.to_lowercase()
 }
 
 /// Đổi tên file đã xong không được biến nó thành thứ Guard sẽ cách ly (đổi `.txt` thành `.cmd`…).
@@ -155,7 +155,7 @@ fn same_dir_text(left: &Path, right: &Path) -> bool {
             .filter(|component| !matches!(component, Component::CurDir))
             .map(|component| {
                 let text = component.as_os_str().to_string_lossy();
-                if cfg!(windows) {
+                if cfg!(any(windows, target_os = "macos")) {
                     text.to_lowercase()
                 } else {
                     text.into_owned()
@@ -204,6 +204,7 @@ pub(super) fn quarantined_copy(quarantine: &Path, file_name: &str) -> Option<Pat
 }
 
 /// Đường dẫn cho API shell của Windows: bỏ tiền tố `\\?\` mà `canonicalize` thêm vào.
+#[cfg(windows)]
 pub(super) fn shell_path(path: &Path) -> PathBuf {
     let text = path.as_os_str().to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
@@ -331,6 +332,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(windows)]
     #[test]
     fn shell_paths_drop_the_verbatim_prefix() {
         assert_eq!(

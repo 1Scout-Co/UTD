@@ -142,8 +142,8 @@ function taskCommands(item: DownloadItem, ctx: RowContext): RowCommand[] {
 
 function removeCommands(item: DownloadItem, ctx: RowContext): RowCommand[] {
   const { id, status } = item
-  const busy =
-    status === "downloading" || status === "verifying" || status === "queued"
+  // Task đang chờ trong hàng đợi chưa chạy: bỏ khỏi danh sách được ngay (app bỏ nó khỏi hàng).
+  const busy = status === "downloading" || status === "verifying"
   return [
     {
       key: "remove",

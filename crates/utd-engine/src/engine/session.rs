@@ -13,8 +13,8 @@ use url::Url;
 
 use super::adaptive::{ConnectionGate, Controller, Sample, Tuning};
 use super::content::{
-    empty_response, file_is_page, looks_like_html, not_a_file, page_check, sniff_remote,
-    PageCheck,
+    empty_response, file_is_page, is_html_type, is_page_name, looks_like_html, not_a_file,
+    page_check, sniff_remote, PageCheck,
 };
 use super::file::{move_no_clobber, target_path, PartFile};
 use super::http::{host_key, probe, sanitize_suggested_name, Probe};
@@ -27,7 +27,7 @@ use super::worker::{
 };
 use super::{
     DownloadControl, DownloadOutcome, DownloadRequest, EngineEvent, EngineOptions, ProgressSnapshot,
-    LARGE_FILE_BYTES,
+    RemoteFile, LARGE_FILE_BYTES,
 };
 use crate::db::Journal;
 use crate::safety::{self, GuardAction};
@@ -140,6 +140,32 @@ impl DownloadEngine {
 
     pub fn options(&self) -> &EngineOptions {
         &self.options
+    }
+
+    /// Dò nhanh một link mà không tạo task (HEAD, hoặc GET 1 byte): tên, kích thước, có phải trang web.
+    /// Cho bảng xem trước của hộp Thêm hàng loạt: thử một lần, mỗi yêu cầu tối đa `connect_timeout`.
+    pub async fn inspect(&self, raw_url: &str) -> std::result::Result<RemoteFile, TaskError> {
+        let url = validate_url(raw_url.trim()).map_err(|error| TaskError {
+            class: ErrorClass::User,
+            code: "url.invalid".into(),
+            message: error.to_string(),
+        })?;
+        let transport = Transport::new(&self.client, &self.scoped_client, &url, &[], None)
+            .map_err(|_| internal_error())?;
+        let probe = probe(&transport, &url, self.options.connect_timeout)
+            .await
+            .map_err(|failure| failure.error)?;
+        let file_name = sanitize_suggested_name(probe.file_name.as_deref().unwrap_or(url.path()));
+        let page = !probe.attachment
+            && (is_page_name(&file_name)
+                || probe.content_type.as_deref().is_some_and(is_html_type));
+        Ok(RemoteFile {
+            url: probe.url.to_string(),
+            file_name,
+            total_bytes: probe.total_bytes,
+            content_type: probe.content_type,
+            page,
+        })
     }
 
     pub async fn download(

@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { TitleBar } from "@/shared/window/title-bar"
 import { cn } from "cn"
 
 import { formatNumber, formatSpeed } from "@/shared/i18n/format"
@@ -36,6 +37,10 @@ export type SonioxProps = HomeScreenProps &
     updateVersion?: string
     /** Mở thẳng mục Cập nhật trong Cài đặt. */
     onUpdates?: () => void
+    /** Thẻ trạng thái nhỏ trên thẻ ổ đĩa (vd app đang tự tải công cụ media). */
+    sideStatus?: React.ReactNode
+    /** Mở hộp Thêm hàng loạt (nút "Hàng loạt" cạnh "Thêm URL"). */
+    onBatch?: () => void
   }
 
 /** Mục Cài đặt ở chân thanh bên; có bản mới thì kèm nhãn "Mới" và bấm vào mở thẳng mục Cập nhật. */
@@ -71,10 +76,11 @@ function SettingsNav({
   )
 }
 
+// Tên app nằm trên thanh tiêu đề (thay chữ "UTD" của khung gốc), không lặp lại trong thanh bên.
 function SonioxLogo() {
   return (
     // Tên sản phẩm luôn đọc trái→phải, kể cả giao diện tiếng Ả Rập.
-    <div dir="ltr" className="flex w-fit items-baseline gap-1.5 px-2.5">
+    <div dir="ltr" className="flex items-baseline gap-1.5">
       <span className="text-xl font-extrabold tracking-tighter text-foreground">
         utd
       </span>
@@ -120,11 +126,15 @@ function NavItem({
 function StorageCard({ storage }: { storage: StorageSummary }) {
   return (
     <div className="rounded-xl bg-card p-3 shadow-soft ring-1 ring-foreground/5">
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">
+      {/* Tên ổ dài ("Macintosh HD", tên USB) thì dung lượng xuống dòng dưới; "C:" vẫn chung một dòng. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-xs">
+        <span
+          className="max-w-full truncate text-muted-foreground"
+          title={storage.label}
+        >
           {t("nav.drive", { drive: storage.label })}
         </span>
-        <span className="font-semibold">
+        <span className="shrink-0 font-semibold whitespace-nowrap">
           {t("nav.free", { size: storage.free })}
         </span>
       </div>
@@ -142,6 +152,7 @@ function StorageCard({ storage }: { storage: StorageSummary }) {
 function SonioxSidebar({
   total,
   storage,
+  sideStatus,
   updateVersion,
   onHome,
   onMedia,
@@ -150,6 +161,7 @@ function SonioxSidebar({
 }: {
   total: number
   storage?: StorageSummary
+  sideStatus?: React.ReactNode
   updateVersion?: string
   onHome: () => void
   onMedia: () => void
@@ -157,9 +169,8 @@ function SonioxSidebar({
   onUpdates?: () => void
 }) {
   return (
-    <aside className="flex w-52 shrink-0 flex-col px-3 py-5">
-      <SonioxLogo />
-      <nav aria-label={t("nav.main")} className="mt-8 space-y-1">
+    <aside className="flex w-52 shrink-0 flex-col px-3 pt-6 pb-5">
+      <nav aria-label={t("nav.main")} className="space-y-1">
         <NavItem
           icon={Download}
           label={t("nav.downloads")}
@@ -182,6 +193,7 @@ function SonioxSidebar({
         </div>
       </nav>
       <div className="mt-auto space-y-2">
+        {sideStatus}
         {storage ? <StorageCard storage={storage} /> : null}
         <SettingsNav
           updateVersion={updateVersion}
@@ -281,6 +293,7 @@ function DownloadsView({
   onQueryChange,
   onClear,
   onAdd,
+  onBatch,
   linkOf,
   onTaskUpdate,
   onTaskRemoved,
@@ -291,6 +304,7 @@ function DownloadsView({
   onFilterChange: (filter: DownloadFilter) => void
   onQueryChange: (query: string) => void
   onClear: () => void
+  onBatch?: () => void
 } & Pick<
   HomeScreenProps,
   "items" | "onAdd" | "onPause" | "onResume" | "onRemove" | "onDiagnose"
@@ -308,6 +322,7 @@ function DownloadsView({
         onFilterChange={onFilterChange}
         onQueryChange={onQueryChange}
         onAdd={onAdd}
+        onBatch={onBatch}
       />
       <SonioxTable
         items={items}
@@ -358,6 +373,7 @@ export function Soniox({
   onSettings,
   updateVersion,
   onUpdates,
+  sideStatus,
   ...handlers
 }: SonioxProps) {
   const { filter, setFilter, query, setQuery, clear } = useListControls()
@@ -365,18 +381,22 @@ export function Soniox({
   return (
     <div
       data-variant="soniox"
-      className="flex h-svh w-full overflow-hidden bg-background bg-[radial-gradient(circle_at_14%_0%,#e8f1ff_0,transparent_36%),radial-gradient(circle_at_100%_100%,#eef4ff_0,transparent_34%)] text-foreground"
+      className="relative flex h-svh w-full overflow-hidden bg-background bg-[radial-gradient(circle_at_14%_0%,#e8f1ff_0,transparent_36%),radial-gradient(circle_at_100%_100%,#eef4ff_0,transparent_34%)] pt-10 text-foreground"
     >
+      <TitleBar className="absolute inset-x-0 top-0">
+        <SonioxLogo />
+      </TitleBar>
       <SonioxSidebar
         total={items.length}
         storage={storage}
+        sideStatus={sideStatus}
         updateVersion={updateVersion}
         onHome={clear}
         onMedia={onMedia}
         onSettings={onSettings}
         onUpdates={onUpdates}
       />
-      <main className="m-3 ms-0 flex min-w-0 flex-1 flex-col rounded-2xl bg-card p-6 shadow-panel ring-1 ring-foreground/5">
+      <main className="me-3 mb-3 flex min-w-0 flex-1 flex-col rounded-2xl bg-card p-6 shadow-panel ring-1 ring-foreground/5">
         <PageHeader items={state === "data" ? items : undefined} />
         {state === "data" ? (
           <DownloadsView

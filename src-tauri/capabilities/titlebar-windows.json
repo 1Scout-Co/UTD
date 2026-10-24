@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "titlebar-windows",
+  "description": "Thanh tiêu đề riêng trên Windows: kéo cửa sổ (đường lui khi WebView2 không có app-region) và 3 nút Thu nhỏ / Phóng to / Đóng. Đọc trạng thái phóng to đã có trong core:default.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "windows"
+  ],
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close"
+  ]
+}

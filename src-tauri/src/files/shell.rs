@@ -1,5 +1,6 @@
 //! Gọi shell của Windows như Explorer: mở bằng ứng dụng mặc định, mở thư mục và chọn file,
 //! bỏ vào Thùng rác. Mọi hàm chạy trên luồng nền đã khởi tạo COM (STA), không bao giờ panic.
+//! macOS làm y như Finder: `shell/mac.rs`.
 
 #[cfg(windows)]
 use std::path::Path;
@@ -7,7 +8,12 @@ use std::path::Path;
 #[cfg(windows)]
 pub(super) use imp::{open_file, open_folder, recycle, select_in_folder, with_com};
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod mac;
+#[cfg(target_os = "macos")]
+pub(super) use mac::{open_file, open_folder, recycle, select_in_folder, with_com};
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod fallback {
     use super::super::text;
     use std::path::Path;
@@ -29,7 +35,7 @@ mod fallback {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(super) use fallback::{open_file, open_folder, recycle, select_in_folder, with_com};
 
 /// Chuỗi UTF-16 kết thúc bằng 0 cho API Windows (đường dẫn đã bỏ `\\?\`).

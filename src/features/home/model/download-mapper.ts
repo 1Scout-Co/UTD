@@ -157,7 +157,9 @@ function describe(task: EngineTask, progress?: EngineProgress): string {
   if (task.status === "verifying") return verifyingLabel(task)
   if (task.status === "paused") return t("desc.paused")
   if (task.status === "queued") return t("desc.queued")
-  if (task.status === "resolving") return t("desc.resolving")
+  if (task.status === "resolving") {
+    return task.kind === "media" ? t("desc.analyzing") : t("desc.resolving")
+  }
   const parts = progress?.segmentsTotal ?? 0
   const connections = progress?.connections ?? task.connections
   return parts > 1

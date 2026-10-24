@@ -25,6 +25,9 @@ const NOT_SYNC: u32 = 0x0101_0000;
 pub(crate) const MAX_SAMPLES: usize = 1 << 25;
 
 const ENCRYPTED: [&[u8; 4]; 4] = [b"senc", b"saiz", b"saio", b"pssh"];
+/// Box trong traf làm ffmpeg đổi cờ gói: sdtp (cờ disposable) mov.c đánh số theo cả track nên
+/// đặt trong traf là lệch.
+const UNCHECKED: [&[u8; 4]; 1] = [b"sdtp"];
 
 /// Mặc định mẫu từ trex (moov/mvex), hoặc đã gộp với tfhd.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -70,6 +73,9 @@ pub(crate) fn read_moof(
 fn read_traf(body: &[u8], moof: u64, stream: &mut Stream) -> Result<Option<(u64, u64)>, Error> {
     let boxes = children(body)?;
     reject_encrypted(&boxes)?;
+    if let Some(child) = boxes.iter().find(|child| UNCHECKED.contains(&&child.kind)) {
+        return Err(unsupported(format!("traf có {}", name(&child.kind))));
+    }
     let header = read_tfhd(single(&boxes, b"tfhd")?.body, moof, stream)?;
     if let Some(tfdt) = find(&boxes, b"tfdt") {
         let mut cursor = Cursor::new(tfdt.body);
@@ -163,7 +169,7 @@ fn read_trun(
     stream: &mut Stream,
 ) -> Result<Option<(u64, u64)>, Error> {
     let mut cursor = Cursor::new(body);
-    let (_, flags) = cursor.full()?;
+    let (version, flags) = cursor.full()?;
     let count = cursor.u32()?;
     let start = if flags & DATA_OFFSET != 0 {
         let offset = cursor.u32()? as i32;
@@ -184,7 +190,12 @@ fn read_trun(
             "trun có cả first-sample-flags lẫn sample-flags",
         ));
     }
-    let (bytes, duration) = read_samples(&mut cursor, flags, count, first_flags, header, stream)?;
+    let layout = Layout {
+        flags,
+        signed: version == 1,
+        first_flags,
+    };
+    let (bytes, duration) = read_samples(&mut cursor, &layout, count, header, stream)?;
     stream.decode_end += duration;
     *next = start.checked_add(bytes).ok_or_else(|| broken("trun"))?;
     if count == 0 {
@@ -197,15 +208,23 @@ fn read_trun(
     Ok(Some((start, *next)))
 }
 
+/// Trường có mặt trong từng mẫu của một trun.
+struct Layout {
+    flags: u32,
+    /// trun version 1: lệch cts có dấu.
+    signed: bool,
+    first_flags: Option<u32>,
+}
+
 /// Bảng mẫu của trun; trả tổng byte và tổng thời lượng.
 fn read_samples(
     cursor: &mut Cursor<'_>,
-    flags: u32,
+    layout: &Layout,
     count: u32,
-    first_flags: Option<u32>,
     header: &Header,
     stream: &mut Stream,
 ) -> Result<(u64, u64), Error> {
+    let flags = layout.flags;
     let per_sample = 4 * (flags & 0xF00).count_ones() as usize;
     let samples = &mut stream.track.samples;
     if (count as usize).saturating_add(samples.len()) > MAX_SAMPLES
@@ -218,11 +237,20 @@ fn read_samples(
     for index in 0..count {
         let duration = field(cursor, flags & SAMPLE_DURATION, defaults.duration)?;
         let size = field(cursor, flags & SAMPLE_SIZE, defaults.size)?;
-        let fallback = first_flags.filter(|_| index == 0).unwrap_or(defaults.flags);
+        let fallback = layout
+            .first_flags
+            .filter(|_| index == 0)
+            .unwrap_or(defaults.flags);
         let sample_flags = field(cursor, flags & SAMPLE_FLAGS, fallback)?;
-        // Lệch cts toàn 0 không đổi gì; khác 0 là có B-frame, bản đầu chưa ghép.
-        if field(cursor, flags & SAMPLE_CTS, 0)? != 0 {
-            return Err(unsupported("trun có lệch cts (B-frame)"));
+        let cts = field(cursor, flags & SAMPLE_CTS, 0)?;
+        // mov.c đọc cts thành int; âm thì dịch DTS theo mức âm nhất đã gặp, đổi dần giữa các
+        // fragment, nên chưa ghép.
+        if (cts as i32) < 0 {
+            return Err(unsupported(if layout.signed {
+                "trun có lệch cts âm"
+            } else {
+                "lệch cts vượt 31 bit"
+            }));
         }
         bytes += u64::from(size);
         total += u64::from(duration);
@@ -230,6 +258,7 @@ fn read_samples(
             size,
             duration,
             sync: sample_flags & NOT_SYNC == 0,
+            cts,
         });
     }
     Ok((bytes, total))
