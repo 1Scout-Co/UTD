@@ -48,7 +48,7 @@ mod text {
     pub(super) const MEDIA_RENAME: &str = "Đợi tải xong rồi đổi tên.";
     pub(super) const MEDIA_MOVE: &str = "Đợi tải xong rồi chuyển.";
     pub(super) const SAVE_FAILED: &str = "Không lưu được thay đổi.";
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub(super) const WINDOWS_ONLY: &str = "Chỉ có trên Windows.";
 }
 

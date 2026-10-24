@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+pub mod mac;
+
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -73,24 +76,21 @@ pub fn browser_integration_status() -> Result<BrowserIntegrationStatus, String> 
     build_status()
 }
 
+/// Native host trong thư mục dữ liệu: Windows là bản chép `UTD.exe`, macOS là script gọi app trong
+/// `UTD.app` (chép binary ra ngoài bundle thì mất chữ ký của bundle, cập nhật xong vẫn chạy bản cũ).
+#[cfg(windows)]
+pub const HOST_FILE: &str = "utd-native-host.exe";
+#[cfg(not(windows))]
+pub const HOST_FILE: &str = "utd-native-host";
+
 #[tauri::command]
 pub fn install_browser_integration() -> Result<BrowserIntegrationStatus, String> {
     let directory = crate::ipc::data_dir()?;
     refresh_extensions()?;
     let host_directory = directory.join("native-messaging");
     std::fs::create_dir_all(&host_directory).map_err(|error| error.to_string())?;
-    let host_path = directory.join("utd-native-host.exe");
-    let current = std::env::current_exe().map_err(|error| error.to_string())?;
-    if current != host_path
-        && let Err(first) = std::fs::copy(&current, &host_path)
-    {
-        let _ = std::fs::remove_file(&host_path);
-        std::fs::copy(&current, &host_path).map_err(|second| {
-            format!(
-                "Không cài được native host ({first}; {second}). Đóng UTD đang chạy rồi thử lại."
-            )
-        })?;
-    }
+    let host_path = directory.join(HOST_FILE);
+    install_host(&host_path)?;
 
     let chromium_manifest = host_directory.join("chromium.json");
     let firefox_manifest = host_directory.join("firefox.json");
@@ -117,8 +117,38 @@ pub fn install_browser_integration() -> Result<BrowserIntegrationStatus, String>
 
     #[cfg(windows)]
     register_windows(&chromium_manifest, &firefox_manifest)?;
+    #[cfg(target_os = "macos")]
+    mac::register(&chromium_manifest, &firefox_manifest)?;
 
     build_status()
+}
+
+#[cfg(windows)]
+fn install_host(host_path: &Path) -> Result<(), String> {
+    let current = std::env::current_exe().map_err(|error| error.to_string())?;
+    if current != host_path
+        && let Err(first) = std::fs::copy(&current, host_path)
+    {
+        let _ = std::fs::remove_file(host_path);
+        std::fs::copy(&current, host_path).map_err(|second| {
+            format!(
+                "Không cài được native host ({first}; {second}). Đóng UTD đang chạy rồi thử lại."
+            )
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn install_host(host_path: &Path) -> Result<(), String> {
+    let app = mac::installed_exe()?;
+    mac::write_host_script(host_path, &app, crate::ipc::isolated_data_dir().as_deref())
+        .map_err(|error| format!("Không cài được native host ({error})."))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn install_host(_: &Path) -> Result<(), String> {
+    Err("Tích hợp trình duyệt mới có trên Windows và macOS.".into())
 }
 
 #[tauri::command]
@@ -150,7 +180,7 @@ pub fn open_extension_folder() -> Result<String, String> {
 
 fn build_status() -> Result<BrowserIntegrationStatus, String> {
     let directory = crate::ipc::data_dir()?;
-    let host_path = directory.join("utd-native-host.exe");
+    let host_path = directory.join(HOST_FILE);
     let manifest_path = directory.join("native-messaging").join("chromium.json");
     let extension_root = extension_root()
         .map(|path| path.display().to_string())

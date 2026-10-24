@@ -91,7 +91,36 @@ pub fn mark_of_the_web(path: &Path) -> io::Result<()> {
     fs::write(PathBuf::from(stream), "[ZoneTransfer]\r\nZoneId=3\r\n")
 }
 
-#[cfg(not(windows))]
+/// macOS: thuộc tính `com.apple.quarantine` như Safari/Chrome ghi. Gatekeeper kiểm chữ ký và hỏi
+/// trước khi mở lần đầu thứ chạy được lấy ra từ file này (app trong .zip/.dmg cũng mang cờ theo).
+#[cfg(target_os = "macos")]
+pub fn mark_of_the_web(path: &Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    // Cờ 0x0081 = tải từ mạng; trường cuối là UUID sự kiện của LaunchServices, để trống được.
+    let value = format!("0081;{seconds:08x};UTD;");
+    let file = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: tên file và tên thuộc tính là chuỗi C kết thúc bằng NUL; `value` sống tới hết lệnh gọi.
+    let done = unsafe {
+        libc::setxattr(
+            file.as_ptr(),
+            c"com.apple.quarantine".as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+            0,
+        )
+    };
+    if done != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn mark_of_the_web(_path: &Path) -> io::Result<()> {
     Ok(())
 }
@@ -153,6 +182,40 @@ pub fn dangerous_extension(extension: &str) -> bool {
             | "library-ms"
             | "search-ms"
             | "diagcab"
+    ) || (cfg!(target_os = "macos") && mac_dangerous_extension(extension))
+}
+
+/// Thêm cho macOS: app và bộ cài (.dmg/.pkg ngang .exe/.msi), script Terminal chạy khi nhấp đúp,
+/// Automator/AppleScript, lối tắt mở thẳng file hay app khác, gói nạp vào hệ thống.
+fn mac_dangerous_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        "app"
+            | "dmg"
+            | "pkg"
+            | "mpkg"
+            | "command"
+            | "tool"
+            | "terminal"
+            | "workflow"
+            | "action"
+            | "scpt"
+            | "scptd"
+            | "applescript"
+            | "webloc"
+            | "inetloc"
+            | "fileloc"
+            | "prefpane"
+            | "kext"
+            | "plugin"
+            | "bundle"
+            | "dylib"
+            | "osax"
+            | "qlgenerator"
+            | "saver"
+            | "appex"
+            | "xpc"
+            | "mobileconfig"
     )
 }
 
@@ -171,6 +234,13 @@ fn detect_magic(prefix: &[u8]) -> Option<&'static str> {
         || prefix.starts_with(&[0xCE, 0xFA, 0xED, 0xFE])
         || prefix.starts_with(&[0xFE, 0xED, 0xFA, 0xCE])
         || prefix.starts_with(&[0xFE, 0xED, 0xFA, 0xCF])
+    {
+        return Some("mach-o-executable");
+    }
+    // Mach-O "universal" (nhiều kiến trúc) dùng chung CA FE BA BE với file .class của Java: số kiến
+    // trúc (u32 big-endian ngay sau) luôn nhỏ, còn .class ghi phiên bản Java ≥ 45 ở chỗ đó.
+    if let Some(&[0xCA, 0xFE, 0xBA, 0xBE, a, b, c, d]) = prefix.get(..8)
+        && (1..20).contains(&u32::from_be_bytes([a, b, c, d]))
     {
         return Some("mach-o-executable");
     }
@@ -274,6 +344,62 @@ mod tests {
         assert!(!source.exists());
         assert!(target.exists());
         assert!(target.to_string_lossy().ends_with(".quarantined"));
+    }
+
+    #[test]
+    fn detects_universal_mach_o_but_not_java_classes() {
+        let (_directory, fat) = temporary_file("ffmpeg", b"\xCA\xFE\xBA\xBE\x00\x00\x00\x02....");
+        let report = inspect(&fat, "ffmpeg").expect("inspect");
+        assert_eq!(report.action, GuardAction::Quarantine);
+        assert_eq!(report.detected, "mach-o-executable");
+        let (_directory, class) = temporary_file("A.class", b"\xCA\xFE\xBA\xBE\x00\x00\x00\x41....");
+        assert_eq!(inspect(&class, "A.class").expect("inspect").action, GuardAction::Allow);
+    }
+
+    #[test]
+    fn mac_app_and_installer_types_follow_the_platform() {
+        for name in [
+            "UTD.dmg",
+            "cai-dat.pkg",
+            "chay.command",
+            "x.tool",
+            "tu-dong.workflow",
+            "kich-ban.scpt",
+            "mo.fileloc",
+            "hoso.mobileconfig",
+        ] {
+            let (_directory, file) = temporary_file(name, b"data");
+            let action = inspect(&file, name).expect("inspect").action;
+            if cfg!(target_os = "macos") {
+                assert_eq!(action, GuardAction::Quarantine, "{name}");
+            } else {
+                assert_eq!(action, GuardAction::Allow, "{name}: vô hại ngoài macOS");
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn writes_quarantine_attribute() {
+        use std::os::unix::ffi::OsStrExt;
+        let (_directory, file) = temporary_file("safe.pdf", b"%PDF-1.7");
+        mark_of_the_web(&file).expect("quarantine");
+        let path = std::ffi::CString::new(file.as_os_str().as_bytes()).expect("path");
+        let mut value = [0u8; 128];
+        // SAFETY: chuỗi C kết thúc bằng NUL, bộ đệm đủ `value.len()` byte.
+        let read = unsafe {
+            libc::getxattr(
+                path.as_ptr(),
+                c"com.apple.quarantine".as_ptr(),
+                value.as_mut_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        assert!(read > 0);
+        let text = String::from_utf8_lossy(&value[..read as usize]).into_owned();
+        assert!(text.starts_with("0081;") && text.ends_with(";UTD;"), "{text}");
     }
 
     #[cfg(windows)]

@@ -186,6 +186,7 @@ pub(super) fn icons_for(tasks: &[DownloadTask], size: u32) -> HashMap<String, St
 
 /// Pixel 32-bit BGRA của Windows → RGBA thẳng (chưa nhân alpha) cho PNG.
 /// Ảnh nhân sẵn alpha (premultiplied) thì chia lại; ảnh không có alpha thì coi là đục.
+#[cfg(any(windows, test))]
 pub(super) fn straight_rgba(mut pixels: Vec<u8>) -> Vec<u8> {
     let has_alpha = pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] != 0);
     let premultiplied = has_alpha
@@ -231,7 +232,12 @@ pub(super) fn data_url(width: u32, height: u32, rgba: &[u8]) -> Option<String> {
     ))
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod mac;
+#[cfg(target_os = "macos")]
+use mac::extract;
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn extract(_: &Source, _: u32) -> Option<(u32, u32, Vec<u8>)> {
     None
 }
@@ -476,6 +482,28 @@ mod tests {
                 (Source::File(explorer.clone()), 32),
                 (Source::Extension("zip".into()), 32),
                 (Source::Extension("exe".into()), 64),
+            ] {
+                let (width, height, rgba) = extract(&source, size).expect("icon");
+                assert_eq!((width, height), (size, size), "{source:?}");
+                assert!(
+                    rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[3] > 0),
+                    "có hình"
+                );
+                let png = encode_png(width, height, &rgba).unwrap();
+                assert_eq!(png[..8], PNG_SIGNATURE);
+            }
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn extracts_real_finder_icons() {
+        super::super::shell::with_com(|| {
+            for (source, size) in [
+                (Source::File(PathBuf::from("/bin/ls")), 32),
+                (Source::Extension("zip".into()), 32),
+                (Source::Extension("pdf".into()), 64),
+                (Source::Extension(String::new()), 48),
             ] {
                 let (width, height, rgba) = extract(&source, size).expect("icon");
                 assert_eq!((width, height), (size, size), "{source:?}");

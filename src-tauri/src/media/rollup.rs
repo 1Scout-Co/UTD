@@ -137,7 +137,8 @@ mod tests {
     use super::*;
 
     fn child(name: &str) -> DownloadTask {
-        DownloadTask::new("https://media.example/x", name, "C:\\UTD", 16).unwrap()
+        let dir = if cfg!(windows) { "C:\\UTD" } else { "/tmp/UTD" };
+        DownloadTask::new("https://media.example/x", name, dir, 16).unwrap()
     }
 
     fn progress(
