@@ -7,10 +7,11 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use utd_engine::{
-    DownloadControl, DownloadEngine, DownloadRequest, DownloadTask, Journal, TaskKind,
+    DownloadControl, DownloadEngine, DownloadRequest, DownloadTask, Journal, RemoteFile, TaskKind,
 };
 
 use crate::events::{emit_engine_event, BridgeError, ERROR_EVENT};
+use crate::queue::{DownloadQueue, Entry, Place};
 use crate::state::{AppState, RunningTasks};
 
 #[derive(Debug, Deserialize)]
@@ -21,6 +22,9 @@ pub struct AddDownloadInput {
     pub file_name: Option<String>,
     pub connections: Option<u16>,
     pub expected_sha256: Option<String>,
+    /// `true` ⇒ xếp cuối hàng đợi ("Thêm vào hàng đợi"); mặc định chen đầu hàng.
+    #[serde(default)]
+    pub later: bool,
 }
 
 /// Ngoài luồng giao diện: tạo/kiểm thư mục tải trên ổ mạng đang tắt có thể treo nhiều giây.
@@ -31,26 +35,36 @@ pub async fn add_download(
     input: AddDownloadInput,
 ) -> Result<DownloadTask, String> {
     let engine = state.engine.clone();
-    let running = state.running.clone();
-    tauri::async_runtime::spawn_blocking(move || enqueue_download(app, engine, running, input))
+    let queue = state.queue.clone();
+    tauri::async_runtime::spawn_blocking(move || enqueue_download(app, engine, queue, input))
         .await
         .map_err(|error| error.to_string())?
 }
 
+/// Tạo task rồi xếp vào hàng đợi chung (chạy ngay nếu còn chỗ).
 pub(crate) fn enqueue_download(
     app: AppHandle,
     engine: Arc<DownloadEngine>,
-    running: Arc<RunningTasks>,
+    queue: Arc<DownloadQueue>,
     input: AddDownloadInput,
 ) -> Result<DownloadTask, String> {
     // Trang video tải bằng HTTP chỉ được trang HTML: trả mã `media_page` để giao diện mở hộp Tải media.
     if crate::media_pages::is_media_page(&input.url) {
         return Err(crate::media_pages::media_page_error());
     }
-    let dest_dir = match input.dest_dir.filter(|value| !value.trim().is_empty()) {
-        Some(value) => checked_dest_dir(&value, &app_data_dir(&app)?)?,
-        None => suggested_download_dir(&app)?,
-    };
+    let dest_dir = download_dir_for(&app, input.dest_dir.as_deref())?;
+    let place = if input.later { Place::Back } else { Place::Front };
+    let (task, entry) = create_download(&engine, &dest_dir, input)?;
+    queue.submit(vec![entry], place)?;
+    Ok(task)
+}
+
+/// Tạo task HTTP trong journal, chưa xếp hàng (`dest_dir` đã kiểm). Lô link dùng chung (batch.rs).
+pub(crate) fn create_download(
+    engine: &DownloadEngine,
+    dest_dir: &Path,
+    input: AddDownloadInput,
+) -> Result<(DownloadTask, Entry), String> {
     let allow_rename = input.file_name.is_none();
     let mut request = DownloadRequest::new(input.url, dest_dir.to_string_lossy().into_owned());
     request.file_name = input.file_name.filter(|value| !value.trim().is_empty());
@@ -65,15 +79,18 @@ pub(crate) fn enqueue_download(
         .filter(|value| !value.trim().is_empty());
     let task = engine.enqueue(request).map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&task.dest_dir).map_err(|error| error.to_string())?;
-    spawn_run(
-        app,
-        engine,
-        running,
-        task.id.clone(),
-        false,
-        allow_rename,
-    )?;
-    Ok(task)
+    let entry = Entry {
+        id: task.id.clone(),
+        rename: allow_rename,
+    };
+    Ok((task, entry))
+}
+
+/// Bảng xem trước của hộp Thêm hàng loạt: tên + kích thước một link, có phải trang web (chưa tạo task).
+#[tauri::command]
+pub async fn inspect_link(state: State<'_, AppState>, url: String) -> Result<RemoteFile, String> {
+    let engine = state.engine.clone();
+    engine.inspect(&url).await.map_err(|error| error.message)
 }
 
 #[tauri::command]
@@ -84,42 +101,34 @@ pub fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadTask>, S
         .map_err(|error| error.to_string())
 }
 
+/// Task đang chờ: bỏ khỏi hàng (`paused`); đang chạy: huỷ lượt tải (engine giữ tiến độ).
 #[tauri::command]
 pub fn pause_download(state: State<'_, AppState>, task_id: String) -> Result<(), String> {
-    state.running.cancel(&task_id);
+    if !state.queue.pause(&task_id)? {
+        state.running.cancel(&task_id);
+    }
     Ok(())
 }
 
+/// Tiếp tục / Thử lại: vào đầu hàng đợi, chạy ngay khi còn chỗ.
 #[tauri::command]
-pub fn resume_download(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    task_id: String,
-) -> Result<(), String> {
-    if state.running.contains(&task_id) {
+pub fn resume_download(state: State<'_, AppState>, task_id: String) -> Result<(), String> {
+    resume_task(&state, &task_id)
+}
+
+pub(crate) fn resume_task(state: &AppState, task_id: &str) -> Result<(), String> {
+    if state.running.contains(task_id) {
         return Err("download is already running".into());
     }
-    let task = state
+    state
         .journal
-        .load_task(&task_id)
+        .load_task(task_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "download not found".to_string())?;
-    if task.kind == TaskKind::Media {
-        return crate::media::spawn_media_run(
-            app,
-            state.journal.clone(),
-            state.running.clone(),
-            task_id,
-        );
-    }
-    spawn_run(
-        app,
-        state.engine.clone(),
-        state.running.clone(),
-        task_id,
-        true,
-        false,
-    )
+    state
+        .queue
+        .submit(vec![Entry::new(task_id)], Place::Front)
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -131,6 +140,7 @@ pub fn remove_download(
     if state.running.contains(&task_id) {
         return Err("pause the download before removing it".into());
     }
+    state.queue.forget(&task_id);
     remove_task(&state.journal, &task_id, delete_files.unwrap_or(false))
 }
 
@@ -241,6 +251,18 @@ fn measure_disk(app: &AppHandle, path: Option<String>) -> Result<DiskSpace, Stri
         total_bytes,
         label,
     })
+}
+
+/// Thư mục người dùng chọn ở hộp Thêm (kiểm như Cài đặt, tạo nếu chưa có), không chọn ⇒ thư mục mặc định.
+pub(crate) fn download_dir_for(app: &AppHandle, chosen: Option<&str>) -> Result<PathBuf, String> {
+    match chosen.filter(|value| !value.trim().is_empty()) {
+        Some(value) => checked_dest_dir(value, &app_data_dir(app)?),
+        None => {
+            let folder = suggested_download_dir(app)?;
+            std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+            Ok(folder)
+        }
+    }
 }
 
 /// Thư mục tải khi không chỉ định: thư mục đã lưu trong Cài đặt, nếu không thì `Downloads\UTD`.
@@ -444,7 +466,8 @@ fn is_within(path: &Path, root: &Path) -> bool {
     !root.is_empty() && path.len() >= root.len() && path[..root.len()] == root[..]
 }
 
-fn spawn_run(
+/// Chạy một task HTTP (hàng đợi gọi); xong lượt thì nhả chỗ trong hàng đợi.
+pub(crate) fn spawn_run(
     app: AppHandle,
     engine: Arc<DownloadEngine>,
     running: Arc<RunningTasks>,
@@ -484,6 +507,7 @@ fn spawn_run(
             );
         }
         running.remove(&task_id);
+        crate::queue::finished(&app, &task_id);
     });
     Ok(())
 }

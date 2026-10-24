@@ -79,12 +79,10 @@ pub fn init(app: &tauri::App) {
         installing: AtomicBool::new(false),
     });
     let handle = app.handle().clone();
-    tauri::async_runtime::spawn(async move {
-        resume_after_update(&handle);
-        if ready {
-            startup_check(handle).await;
-        }
-    });
+    // Download dừng để cài bản mới đã được hàng đợi xếp lên đầu lúc mở app (`take_resume_ids`).
+    if ready {
+        tauri::async_runtime::spawn(startup_check(handle));
+    }
 }
 
 #[tauri::command]
@@ -155,6 +153,10 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         .await
         .map_err(|error| friendly(&error))?;
     reporter.stage("install");
+    // Hàng đợi không chạy task kế khi task đang chạy dừng lại để cài.
+    if let Some(state) = app.try_state::<AppState>() {
+        state.queue.freeze();
+    }
     let paused = pause_running(&app).await;
     let journal = app
         .try_state::<AppState>()
@@ -169,6 +171,9 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
             let _ = journal.set_setting(RESUME_KEY, "");
         }
         resume_tasks(&app, &paused);
+        if let Some(state) = app.try_state::<AppState>() {
+            state.queue.thaw();
+        }
         return Err(friendly(&error));
     }
     app.restart()
@@ -379,32 +384,27 @@ fn running_ids(journal: &Journal, running: &RunningTasks) -> Vec<String> {
         .collect()
 }
 
-/// Chạy lại các download đã dừng để cài bản mới (chỉ task còn ở trạng thái tạm dừng).
-fn resume_after_update(app: &AppHandle) {
-    let Some(journal) = app
-        .try_state::<AppState>()
-        .map(|state| state.journal.clone())
-    else {
-        return;
-    };
+/// Lúc mở app sau khi cài bản mới: id các download đã dừng để cài (đọc một lần rồi xoá). Hàng đợi xếp
+/// chúng lên đầu (lib.rs), trước các task đang chờ.
+pub(crate) fn take_resume_ids(journal: &Journal) -> Vec<String> {
     let saved = journal
         .get_setting(RESUME_KEY)
         .ok()
         .flatten()
         .unwrap_or_default();
     if saved.trim().is_empty() {
-        return;
+        return Vec::new();
     }
     let _ = journal.set_setting(RESUME_KEY, "");
-    let ids: Vec<String> = saved
+    saved
         .lines()
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .map(str::to_string)
-        .collect();
-    resume_tasks(app, &ids);
+        .collect()
 }
 
+/// Cài lỗi: chạy lại các download vừa dừng (chỉ task còn ở trạng thái tạm dừng), ở đầu hàng đợi.
 fn resume_tasks(app: &AppHandle, ids: &[String]) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
@@ -414,10 +414,7 @@ fn resume_tasks(app: &AppHandle, ids: &[String]) {
             state.journal.load_task(id),
             Ok(Some(task)) if task.status == TaskStatus::Paused
         );
-        if paused
-            && let Err(error) =
-                crate::commands::resume_download(app.clone(), app.state(), id.clone())
-        {
+        if paused && let Err(error) = crate::commands::resume_task(&state, id) {
             log::warn!("Resume after update failed: {error}");
         }
     }

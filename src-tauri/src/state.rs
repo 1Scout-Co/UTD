@@ -4,10 +4,14 @@ use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 use utd_engine::{DownloadEngine, Journal};
 
+use crate::queue::DownloadQueue;
+
 pub struct AppState {
     pub engine: Arc<DownloadEngine>,
     pub journal: Arc<Journal>,
     pub running: Arc<RunningTasks>,
+    /// Mọi download (HTTP, media) chạy qua hàng đợi chung: giới hạn số chạy cùng lúc.
+    pub queue: Arc<DownloadQueue>,
 }
 
 #[derive(Default)]

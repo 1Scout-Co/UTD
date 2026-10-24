@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use utd_engine::{now_ms, ErrorClass, Journal, TaskError, TaskStatus};
 
 use crate::media::finish::{clamp, emit_progress, emit_task, error, fail, finalize, pause};
-use crate::media::{fast, ffmpeg_location, tokio_command, tools};
+use crate::media::{fast, ffmpeg_location, preset, tokio_command, tools};
 use crate::state::AppState;
 
 enum StreamMessage {
@@ -69,6 +69,10 @@ pub async fn run(
     };
     let elapsed = started.elapsed().as_millis();
     log::info!("media.timing task={task_id} tools ms={elapsed}");
+    // Lô link (chất lượng chung): Phân tích lúc tới lượt, lấy selector thật và tên theo tiêu đề.
+    let Some(job) = preset::settle(&app, &journal, &mut task, job, &tools, &cancel).await? else {
+        return Ok(());
+    };
     if job.audio_format.is_some() && tools.ffmpeg.is_none() {
         fail(
             &app,

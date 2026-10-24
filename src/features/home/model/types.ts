@@ -132,6 +132,38 @@ export interface AddMediaPayload {
   pageUrl?: string
 }
 
+/** Chất lượng chung cho link trang video trong lô (src-tauri/src/media/preset.rs). */
+export type BatchQuality = "best" | "1080" | "720" | "audio-m4a" | "audio-mp3"
+
+export interface AddBatchPayload {
+  urls: string[]
+  destDir?: string
+  quality: BatchQuality
+  /** true = "Thêm vào hàng đợi" (cuối hàng); false = "Bắt đầu ngay" (đầu hàng). */
+  later: boolean
+}
+
+export interface BatchResult {
+  tasks: EngineTask[]
+  failed: { url: string; message: string }[]
+}
+
+/** Một link dò trước khi thêm (`inspect_link`). */
+export interface RemoteFile {
+  url: string
+  fileName: string
+  totalBytes: number | null
+  contentType: string | null
+  /** Server trả trang web, không phải file. */
+  page: boolean
+}
+
+export interface QueueSettings {
+  /** Số download chạy cùng lúc. */
+  limit: number
+  maxLimit: number
+}
+
 export type MediaToolName = "yt-dlp" | "ffmpeg"
 
 /** utd = bản UTD tự tải vào thư mục của nó; còn lại là bản có sẵn trên máy. */

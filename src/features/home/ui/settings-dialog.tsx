@@ -12,6 +12,7 @@ import {
 import { SettingsBrowser } from "./settings-browser"
 import { SettingsDownloadDir } from "./settings-download-dir"
 import { SettingsMediaTools } from "./settings-media-tools"
+import { SettingsQueue } from "./settings-queue"
 import { SettingsSection as Section, SettingsPrivacy } from "./settings-section"
 import { SettingsUpdates, useAppVersion } from "./settings-updates"
 
@@ -75,6 +76,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
               onChange={onDefaultDirChange}
             />
           </Section>
+
+          <SettingsQueue open={open} desktop={desktop} />
 
           <SettingsBrowser open={open} desktop={desktop} />
 

@@ -5,6 +5,7 @@ mod mux;
 mod output;
 /// `parts::discard_parts`: dọn luồng con trước khi xoá task media khỏi danh sách.
 pub(crate) mod parts;
+mod preset;
 mod probe;
 mod probe_cache;
 mod resolve;
@@ -26,17 +27,75 @@ use utd_engine::{
 
 use utd_engine::Journal;
 use crate::events::{BridgeError, ERROR_EVENT};
+use crate::queue::{Entry, Place};
 use crate::state::{AppState, RunningTasks};
 
 
+/// `add_media_download`. Hai cách chọn định dạng:
+/// - `selector` (+ `audioFormat`) lấy từ `media_probe` (hộp Tải media);
+/// - `quality` (`best` · `1080` · `720` · `audio-m4a` · `audio-mp3`) cho lô link: không cần Phân tích trước,
+///   tới lượt chạy UTD tự Phân tích, chọn định dạng gần nhất và đặt tên theo tiêu đề (`title` có thể rỗng).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddMediaInput {
     pub url: String,
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub selector: String,
+    pub quality: Option<String>,
     pub audio_format: Option<String>,
     pub page_url: Option<String>,
+    /// Thư mục tải; không gửi ⇒ thư mục mặc định trong Cài đặt.
+    pub dest_dir: Option<String>,
+    /// `true` ⇒ xếp cuối hàng đợi (lô "Thêm vào hàng đợi", tải cả kênh); mặc định chen đầu hàng.
+    #[serde(default)]
+    pub later: bool,
+}
+
+impl AddMediaInput {
+    /// Link trang video trong lô: chất lượng chung, tên theo tiêu đề lúc tới lượt chạy.
+    pub(crate) fn with_quality(url: String, quality: String) -> Self {
+        Self {
+            url,
+            title: String::new(),
+            selector: String::new(),
+            quality: Some(quality),
+            audio_format: None,
+            page_url: None,
+            dest_dir: None,
+            later: false,
+        }
+    }
+}
+
+/// Định dạng đã kiểm của một yêu cầu media.
+struct Choice {
+    selector: String,
+    audio_format: Option<String>,
+}
+
+fn checked_choice(input: &AddMediaInput) -> Result<Choice, String> {
+    if let Some(raw) = &input.quality {
+        let quality = preset::Quality::parse(raw).ok_or("Chất lượng không hợp lệ.")?;
+        return Ok(Choice {
+            selector: quality.selector(),
+            audio_format: quality.audio_format().map(str::to_string),
+        });
+    }
+    let selector = input.selector.trim();
+    if selector.is_empty() || selector.len() > 512 || selector.chars().any(char::is_control) {
+        return Err("Bộ chọn định dạng không hợp lệ.".into());
+    }
+    if let Some(format) = &input.audio_format
+        && !matches!(format.as_str(), "m4a" | "mp3")
+    {
+        return Err("Định dạng âm thanh không hợp lệ.".into());
+    }
+    Ok(Choice {
+        selector: selector.to_string(),
+        audio_format: input.audio_format.clone(),
+    })
 }
 
 /// Dò công cụ có chạy `--version` nên làm ngoài luồng giao diện.
@@ -89,32 +148,41 @@ pub async fn add_media_download(
 }
 
 fn enqueue_media(app: AppHandle, input: AddMediaInput) -> Result<DownloadTask, String> {
-    let (journal, running) = {
+    let (journal, queue) = {
         let state = app.state::<AppState>();
-        (state.journal.clone(), state.running.clone())
+        (state.journal.clone(), state.queue.clone())
     };
+    let destination = crate::commands::download_dir_for(&app, input.dest_dir.as_deref())?;
+    let place = if input.later { Place::Back } else { Place::Front };
+    let task = create_media(&journal, &destination, input)?;
+    if let Err(error) = queue.submit(vec![Entry::new(task.id.clone())], place) {
+        let _ = journal.delete_task(&task.id);
+        return Err(error);
+    }
+    Ok(task)
+}
+
+/// Tạo task media + job trong journal, chưa xếp hàng (`destination` đã kiểm). Lô link dùng chung.
+pub(crate) fn create_media(
+    journal: &Journal,
+    destination: &Path,
+    input: AddMediaInput,
+) -> Result<DownloadTask, String> {
     let url = validate_url(&input.url).map_err(|error| error.to_string())?;
-    if input.selector.trim().is_empty()
-        || input.selector.len() > 512
-        || input.selector.chars().any(char::is_control)
-    {
-        return Err("Bộ chọn định dạng không hợp lệ.".into());
-    }
-    if let Some(format) = &input.audio_format
-        && !matches!(format.as_str(), "m4a" | "mp3")
-    {
-        return Err("Định dạng âm thanh không hợp lệ.".into());
-    }
+    let choice = checked_choice(&input)?;
     if let Some(page_url) = &input.page_url {
         validate_url(page_url).map_err(|error| error.to_string())?;
     }
-
-    let destination = crate::commands::suggested_download_dir(&app)?;
-    std::fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
     let title = input.title.trim();
-    let title = if title.is_empty() { "Media" } else { title };
-    let base = unique_base(&destination, &safe_base(title));
-    let extension = input.audio_format.as_deref().unwrap_or("mp4");
+    let title = if !title.is_empty() {
+        title.to_string()
+    } else if input.quality.is_some() {
+        preset::placeholder_title(&url)
+    } else {
+        "Media".to_string()
+    };
+    let base = unique_base(destination, &safe_base(&title));
+    let extension = choice.audio_format.as_deref().unwrap_or("mp4");
     let file_name = format!("{base}.{extension}");
     validate_file_name(&file_name).map_err(|error| error.to_string())?;
 
@@ -135,23 +203,14 @@ fn enqueue_media(app: AppHandle, input: AddMediaInput) -> Result<DownloadTask, S
         task_id: task.id.clone(),
         url: url.to_string(),
         page_url: input.page_url,
-        selector: input.selector.trim().to_string(),
-        audio_format: input.audio_format,
+        selector: choice.selector,
+        audio_format: choice.audio_format,
         title: title.chars().take(300).collect(),
         created_at: now_ms(),
     };
     if let Err(error) = journal.save_media_job(&job) {
         let _ = journal.delete_task(&task.id);
         return Err(error.to_string());
-    }
-    if let Err(error) = spawn_media_run(
-        app,
-        journal.clone(),
-        running,
-        task.id.clone(),
-    ) {
-        let _ = journal.delete_task(&task.id);
-        return Err(error);
     }
     Ok(task)
 }
@@ -177,6 +236,7 @@ pub(crate) fn spawn_media_run(
             );
         }
         running.remove(&task_id);
+        crate::queue::finished(&app, &task_id);
     });
     Ok(())
 }
