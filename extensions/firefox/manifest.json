@@ -3,7 +3,7 @@
   "name": "UTD Download Manager",
   "version": "0.1.0",
   "description": "Gửi link sang UTD để tải nhanh, có kiểm tra an toàn.",
-  "permissions": ["contextMenus", "nativeMessaging", "storage", "activeTab"],
+  "permissions": ["contextMenus", "nativeMessaging", "storage", "activeTab", "scripting"],
   "background": {
     "scripts": ["background.js"]
   },

@@ -197,7 +197,9 @@ function describe(task: EngineTask, progress?: EngineProgress): string {
   if (task.status === "verifying") return verifyingLabel(task)
   if (task.status === "paused") return "Tạm dừng · tiếp tục bất cứ lúc nào"
   if (task.status === "queued") return "Đang chờ lượt"
-  if (task.status === "resolving") return "Đang kiểm tra máy chủ"
+  if (task.status === "resolving") {
+    return task.kind === "media" ? "Đang phân tích video" : "Đang kiểm tra máy chủ"
+  }
   const parts = progress?.segmentsTotal ?? 0
   const connections = progress?.connections ?? task.connections
   return parts > 1

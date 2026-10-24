@@ -1,60 +1,102 @@
+mod bframes;
 mod build;
 mod cases;
+mod ffmpeg;
+mod generated;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use crate::{Brand, Input, Kind, merge};
+use crate::{Brand, Input, Kind, Report, merge};
 
-/// Ghép file thật của YouTube (AV1 399 + AAC 140). Chạy:
-/// `UTD_MP4_FIXTURES=<thư mục> cargo test --release -p utd-mp4 -- --ignored --nocapture`;
-/// `UTD_MP4_OUT=<file.mp4>` để giữ file ra (thêm bản `.m4a` chỉ tiếng cạnh đó).
+/// Luồng hình thật thử lần lượt với f140.m4a: AV1 (399) và H.264 có B-frame (299, 137, 298).
+const REAL_VIDEOS: [&str; 4] = ["f399.mp4", "f299.mp4", "f137.mp4", "f298.mp4"];
+
+/// Ghép bằng Rust rồi bằng ffmpeg (file `ff-<tên>` cạnh `output`), in thời gian hai bên và so
+/// (box thời gian, gói, framemd5, thời lượng, giải mã thử). `UTD_MP4_KEEP=1` thì giữ cả hai file.
+fn against_ffmpeg(inputs: &[Input], brand: Brand, output: &Path) -> Report {
+    let started = Instant::now();
+    let report = merge(inputs, output, brand, &AtomicBool::new(false)).unwrap();
+    let rust = started.elapsed();
+    let name = output.file_name().unwrap().to_string_lossy();
+    let reference = output.with_file_name(format!("ff-{name}"));
+    let took = ffmpeg::reference(inputs, &reference);
+    println!("{name}: Rust {rust:?}, ffmpeg {took:?}, {report:?}");
+    ffmpeg::compare(output, &reference);
+    if std::env::var_os("UTD_MP4_KEEP").is_none() {
+        let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_file(&reference);
+    }
+    report
+}
+
+fn env_path(name: &str) -> PathBuf {
+    PathBuf::from(std::env::var(name).unwrap_or_else(|_| panic!("thiếu {name}")))
+}
+
+/// Ghép luồng DASH thật của YouTube rồi so với bản ffmpeg. Chạy:
+/// `UTD_MP4_FIXTURES=<thư mục> UTD_FFMPEG=<thư mục bin ffmpeg> cargo test --release -p utd-mp4 --
+/// --ignored --nocapture`. Thư mục cần f140.m4a và ít nhất một luồng trong REAL_VIDEOS
+/// (`yt-dlp -f 299 --fixup never`); file ra để cạnh đầu vào.
 #[test]
-#[ignore = "cần UTD_MP4_FIXTURES: thư mục có f399.mp4 + f140.m4a"]
+#[ignore = "cần UTD_MP4_FIXTURES (luồng YouTube) và ffmpeg"]
 fn merges_real_dash_streams() {
-    let directory = PathBuf::from(std::env::var("UTD_MP4_FIXTURES").expect("UTD_MP4_FIXTURES"));
-    let keep = std::env::var_os("UTD_MP4_OUT").map(PathBuf::from);
-    let output = keep.clone().unwrap_or_else(|| {
-        std::env::temp_dir().join(format!("utd-mp4-{}.mp4", std::process::id()))
-    });
-    let video = Input {
-        path: directory.join("f399.mp4"),
-        kind: Kind::Video,
-    };
+    let directory = env_path("UTD_MP4_FIXTURES");
     let audio = Input {
         path: directory.join("f140.m4a"),
         kind: Kind::Audio,
     };
-    let cancel = AtomicBool::new(false);
-    let started = Instant::now();
-    let report = merge(
-        &[video.clone(), audio.clone()],
-        &output,
-        Brand::Mp4,
-        &cancel,
-    )
-    .unwrap();
-    println!("mp4: {:?} trong {:?}", report, started.elapsed());
-    assert_eq!(report.samples, 534_470 + 383_631);
-    phases(&[video.clone(), audio.clone()], &output);
-    cancel_midway(
-        &[video, audio.clone()],
-        &output.with_extension("cancel.mp4"),
-    );
-
-    let m4a = output.with_extension("m4a");
-    let started = Instant::now();
-    let report = merge(&[audio], &m4a, Brand::M4a, &cancel).unwrap();
-    println!("m4a: {:?} trong {:?}", report, started.elapsed());
-    if keep.is_none() {
+    let videos: Vec<Input> = REAL_VIDEOS
+        .iter()
+        .map(|name| Input {
+            path: directory.join(name),
+            kind: Kind::Video,
+        })
+        .filter(|video| video.path.exists())
+        .collect();
+    assert!(!videos.is_empty(), "thiếu luồng hình");
+    for video in videos {
+        let stem = video
+            .path
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let output = directory.join(format!("out-{stem}.mp4"));
+        let inputs = [video, audio.clone()];
+        let report = against_ffmpeg(&inputs, Brand::Mp4, &output);
+        if stem == "f399" {
+            assert_eq!(report.samples, 534_470 + 383_631);
+        }
+        phases(&inputs, &output);
+        cancel_midway(&inputs, &output.with_extension("cancel.mp4"));
         let _ = std::fs::remove_file(&output);
-        let _ = std::fs::remove_file(&m4a);
     }
+    against_ffmpeg(&[audio], Brand::M4a, &directory.join("out-f140.m4a"));
+}
+
+/// Ghép một cặp bất kỳ (file > 4 GiB…): `UTD_MP4_VIDEO=<hình> UTD_MP4_AUDIO=<tiếng>`, file ra
+/// cạnh file hình. Ra quá 4 GiB thì phải dùng co64.
+#[test]
+#[ignore = "cần UTD_MP4_VIDEO + UTD_MP4_AUDIO và ffmpeg"]
+fn merges_a_given_pair() {
+    let video = Input {
+        path: env_path("UTD_MP4_VIDEO"),
+        kind: Kind::Video,
+    };
+    let audio = Input {
+        path: env_path("UTD_MP4_AUDIO"),
+        kind: Kind::Audio,
+    };
+    let output = video.path.with_file_name("out-pair.mp4");
+    let inputs = [video, audio];
+    let report = against_ffmpeg(&inputs, Brand::Mp4, &output);
+    assert_eq!(report.co64, report.file_bytes > u64::from(u32::MAX));
 }
 
 /// Huỷ sau 100 ms (đang chép): phải trả Cancelled nhanh và xoá file dở.
-fn cancel_midway(inputs: &[Input], output: &std::path::Path) {
+fn cancel_midway(inputs: &[Input], output: &Path) {
     let cancel = std::sync::Arc::new(AtomicBool::new(false));
     let flag = std::sync::Arc::clone(&cancel);
     let stopper = std::thread::spawn(move || {
@@ -71,7 +113,7 @@ fn cancel_midway(inputs: &[Input], output: &std::path::Path) {
 }
 
 /// Đo từng pha của `merge` (đọc, xếp chunk, dựng moov, chép, tự kiểm) trên cùng đầu vào.
-fn phases(inputs: &[Input], output: &std::path::Path) {
+fn phases(inputs: &[Input], output: &Path) {
     let cancel = AtomicBool::new(false);
     let started = Instant::now();
     let (tracks, sources) = crate::load(inputs, Brand::Mp4, &cancel).unwrap();
@@ -90,48 +132,4 @@ fn phases(inputs: &[Input], output: &std::path::Path) {
         copied - headed,
         started.elapsed() - copied
     );
-}
-
-/// Các biến thể ffmpeg tự sinh (`-movflags frag_keyframe+empty_moov`, `+default_base_moof`,
-/// `+omit_tfhd_offset`, mỗi khung một fragment, file thường). Chạy với `UTD_MP4_GEN=<thư mục>`;
-/// file ra `out-<tên>.mp4` để cạnh đầu vào cho ffprobe so.
-#[test]
-#[ignore = "cần UTD_MP4_GEN: thư mục fixture ffmpeg tự sinh"]
-fn merges_ffmpeg_generated_variants() {
-    let directory = PathBuf::from(std::env::var("UTD_MP4_GEN").expect("UTD_MP4_GEN"));
-    let cancel = AtomicBool::new(false);
-    let input = |name: &str, kind| Input {
-        path: directory.join(name),
-        kind,
-    };
-    let cases = [
-        ("fk", "v-h264-fk.mp4", "a-aac-fk.m4a"),
-        ("dbm", "v-h264-dbm.mp4", "a-aac-dbm.m4a"),
-        ("omit", "v-h264-omit.mp4", "a-aac-omit.m4a"),
-        ("omitdbm", "v-h264-omitdbm.mp4", "a-aac-omitdbm.m4a"),
-        ("small", "v-h264-small.mp4", "a-aac-dbm.m4a"),
-        ("hevc", "v-hevc-dbm.mp4", "a-aac-dbm.m4a"),
-        ("plain", "src-h264.mp4", "a-aac-dbm.m4a"),
-    ];
-    for (name, video, audio) in cases {
-        let output = directory.join(format!("out-{name}.mp4"));
-        let inputs = [input(video, Kind::Video), input(audio, Kind::Audio)];
-        let report = merge(&inputs, &output, Brand::Mp4, &cancel);
-        println!("{name}: {report:?}");
-        assert!(report.is_ok(), "{name}");
-    }
-    let refused = [
-        ("B-frame", "v-h264b-dbm.mp4", Kind::Video, Brand::Mp4),
-        ("elst dịch AAC", "src-aac.m4a", Kind::Audio, Brand::M4a),
-    ];
-    for (name, file, kind, brand) in refused {
-        let output = directory.join("out-refused.mp4");
-        let result = merge(&[input(file, kind)], &output, brand, &cancel);
-        println!("{name}: {result:?}");
-        assert!(
-            matches!(result, Err(crate::Error::Unsupported(_))),
-            "{name}"
-        );
-        assert!(!output.exists());
-    }
 }

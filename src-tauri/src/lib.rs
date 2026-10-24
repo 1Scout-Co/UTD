@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+mod app_nap;
+mod batch;
 mod browser_integration;
 mod commands;
 mod events;
@@ -7,6 +10,7 @@ mod legacy;
 mod media;
 mod media_pages;
 pub mod native_host;
+mod queue;
 mod state;
 mod titlebar;
 mod updater;
@@ -19,6 +23,7 @@ use std::sync::Arc;
 use tauri::Manager;
 use utd_engine::{DownloadEngine, EngineOptions, Journal};
 
+use crate::queue::DownloadQueue;
 use crate::state::{AppState, RunningTasks};
 
 fn data_dir(app: &tauri::AppHandle) -> PathBuf {
@@ -132,6 +137,7 @@ pub fn run() {
             }
             // Trước pipe server: link từ trình duyệt tới khi giao diện chưa nghe thì giữ ở đây.
             app.manage(media_pages::PendingMedia::default());
+            app.manage(batch::PendingBatch::default());
             let directory = data_dir(app.handle());
             std::fs::create_dir_all(&directory)?;
             let isolated = ipc::isolated_data_dir().is_some();
@@ -145,7 +151,14 @@ pub fn run() {
                 })
             };
             let journal = Arc::new(Journal::open(directory.join("utd.db"))?);
+            // Task bị ngắt (app tắt ngang) và task dừng để cài bản mới chạy lại trước, ở đầu hàng đợi.
+            let mut front = updater::take_resume_ids(&journal);
+            front.extend(queue::interrupted(&journal));
             journal.mark_interrupted()?;
+            let queue = DownloadQueue::new(journal.clone());
+            if let Err(error) = queue.restore(&front) {
+                log::warn!("Queue restore failed: {error}");
+            }
             let quarantine_dir = directory.join("quarantine");
             std::fs::create_dir_all(&quarantine_dir)?;
             let engine = Arc::new(DownloadEngine::new(
@@ -169,18 +182,50 @@ pub fn run() {
                 let directory = directory.clone();
                 std::thread::spawn(move || refresh_native_host(&directory));
             }
-            #[cfg(windows)]
+            // Extension đã cài nạp từ UTD-Data\extension: sau khi cập nhật UTD thì ghi bản mới vào đó
+            // (`tauri dev` không ghi đè extension của bản đã cài).
+            if isolated || !cfg!(debug_assertions) {
+                let extension = directory.join("extension");
+                std::thread::spawn(move || {
+                    match browser_integration::sync_extensions(&extension) {
+                        Ok(0) => {}
+                        Ok(count) => log::info!("Browser extension refreshed: {count} files"),
+                        Err(error) => log::warn!("Browser extension refresh failed: {error}"),
+                    }
+                });
+            }
+            // App bị kéo sang chỗ khác sau khi bật tích hợp: script host phải trỏ theo.
+            #[cfg(target_os = "macos")]
+            if !isolated
+                && !cfg!(debug_assertions)
+                && let Err(error) = browser_integration::mac::refresh_host_script(&directory)
+            {
+                log::warn!("Native host refresh failed: {error}");
+            }
             ipc::spawn_server(
                 app.handle().clone(),
                 engine.clone(),
-                running.clone(),
+                queue.clone(),
                 ipc_config,
+                directory.clone(),
             );
+            // Công cụ media tự tải lần đầu / tự cập nhật (cần journal để nhớ công tắc và lần kiểm).
+            let auto = media::start_auto_tools(app.handle(), journal.clone());
+            #[cfg(target_os = "macos")]
+            {
+                let (running, auto) = (running.clone(), auto.clone());
+                app_nap::watch(move || !running.is_empty() || auto.installs_missing());
+            }
+            app.manage(auto);
             app.manage(AppState {
                 engine,
                 journal,
                 running,
+                queue: queue.clone(),
             });
+            queue.start(Arc::new(queue::AppRuntime(app.handle().clone())));
+            // Task media chờ công cụ tự tải nằm trong hàng mà không giữ chỗ: công cụ xong thì chạy.
+            media::watch_tools_for_queue(app.handle());
             log::info!("UTD engine ready at {}", directory.display());
             // Sau AppState: cần journal (cài đặt, download chạy tiếp sau khi cập nhật).
             updater::init(app);
@@ -208,9 +253,19 @@ pub fn run() {
             media::media_tools_status,
             media::install_media_tool,
             media::cancel_media_tool_install,
+            media::media_tools_auto,
+            media::set_media_tools_auto,
+            media::retry_media_tools,
             media::media_probe,
             media::add_media_download,
+            media::channel::channel_list,
+            media::channel::channel_list_cancel,
             media_pages::take_media_request,
+            batch::take_batch_request,
+            batch::add_batch_downloads,
+            queue::queue_settings,
+            queue::set_queue_limit,
+            commands::inspect_link,
             updater::check_for_update,
             updater::install_update,
             updater::get_update_check,

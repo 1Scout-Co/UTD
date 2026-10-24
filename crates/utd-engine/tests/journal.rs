@@ -227,6 +227,9 @@ fn settings_round_trip() {
         journal.get_setting("language").expect("get"),
         Some("en".into())
     );
+    journal.delete_setting("language").expect("delete");
+    assert_eq!(journal.get_setting("language").expect("get"), None);
+    journal.delete_setting("language").expect("delete twice");
 }
 
 #[test]

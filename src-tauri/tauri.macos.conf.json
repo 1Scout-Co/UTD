@@ -17,5 +17,18 @@
         "acceptFirstMouse": true
       }
     ]
+  },
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "licenseFile": null,
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0",
+      "dmg": {
+        "windowSize": { "width": 600, "height": 380 },
+        "appPosition": { "x": 160, "y": 180 },
+        "applicationFolderPosition": { "x": 440, "y": 180 }
+      }
+    }
   }
 }

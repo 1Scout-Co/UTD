@@ -8,7 +8,7 @@ pub mod safety;
 pub use db::Journal;
 pub use engine::{
     DownloadControl, DownloadEngine, DownloadOutcome, DownloadRequest, EngineEvent, EngineOptions,
-    ProgressSnapshot,
+    ProgressSnapshot, RemoteFile,
 };
 pub use headers::{
     allowed_request_headers, validate_request_headers, RequestHeader, MAX_REQUEST_HEADERS,

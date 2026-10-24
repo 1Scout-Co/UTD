@@ -1,6 +1,7 @@
 // Nhận ra link trang video (YouTube, TikTok, Facebook…): tải bằng HTTP chỉ được trang HTML, nên hộp Thêm
-// chuyển sang hộp Tải media. Cùng luật với src-tauri/src/media_pages.rs: sửa một bên thì sửa cả bên kia
-// (bộ ca thử chung ở e2e/media-routing.spec.ts và tests trong media_pages.rs).
+// chuyển sang hộp Tải media; link kênh (TikTok `@user`, kênh/playlist YouTube) mở hộp Tải cả kênh. Cùng luật
+// với src-tauri/src/media_pages.rs: sửa một bên thì sửa cả bên kia (bộ ca thử chung ở
+// e2e/media-routing.spec.ts và tests trong media_pages.rs).
 
 // Đuôi tệp tải thẳng: `…/x.mp4` là tệp, không phải trang video.
 const FILE_EXTENSIONS = new Set([
@@ -25,11 +26,16 @@ const SOUNDCLOUD_TABS = new Set([
   "spotlight", "toptracks",
 ])
 
+// Thẻ của kênh YouTube liệt kê được video (`/@kênh/videos`); `featured` là trang chủ kênh.
+const YOUTUBE_TABS = new Set(["videos", "shorts", "streams", "featured"])
+
 interface Page {
   host: string
   path: string[]
   /** Có `?v=<id>` (YouTube, Facebook). */
   videoParam: boolean
+  /** Có `?list=<id>` (playlist YouTube). */
+  listParam: boolean
 }
 
 const at = (page: Page, index: number) => page.path[index] ?? ""
@@ -83,6 +89,24 @@ const soundcloud = (page: Page) => {
 
 const bilibili = (page: Page) => at(page, 0) === "video" && has(page, 1)
 
+const isHandle = (part: string) => part.length > 1 && part.startsWith("@")
+
+// `@user` đứng một mình (không phải `/video/…`, `/live`).
+const tiktokUser = (page: Page) => page.path.length === 1 && isHandle(at(page, 0))
+
+// `@kênh`, `channel/<id>`, `c/<tên>`, `user/<tên>` (kèm thẻ Video/Shorts/Trực tiếp) hoặc `playlist?list=`.
+function youtubeChannel(page: Page): boolean {
+  if (at(page, 0) === "playlist") return page.listParam && page.path.length === 1
+  const owner = isHandle(at(page, 0))
+    ? 1
+    : ["channel", "c", "user"].includes(at(page, 0)) && has(page, 1)
+      ? 2
+      : 0
+  if (owner === 0) return false
+  const rest = page.path.length - owner
+  return rest === 0 || (rest === 1 && YOUTUBE_TABS.has(at(page, owner)))
+}
+
 // (tên miền, luật đường dẫn). Tên miền cụ thể (vm.tiktok.com) đứng trước tên miền chung (tiktok.com).
 // Tên miền khớp cả tên miền con: `youtube.com` gồm `www.`, `m.`, `music.`.
 const SITES: [string, (page: Page) => boolean][] = [
@@ -109,6 +133,13 @@ const SITES: [string, (page: Page) => boolean][] = [
   ["bilibili.com", bilibili],
 ]
 
+// Link rút gọn (`vm.tiktok.com`) chưa biết là video hay kênh: đi đường trang video, app thấy là kênh thì
+// trả mã `channel_page:` kèm link kênh.
+const CHANNEL_SITES: [string, (page: Page) => boolean][] = [
+  ["tiktok.com", tiktokUser],
+  ["youtube.com", youtubeChannel],
+]
+
 // `host` là `domain` hoặc tên miền con của nó (`notyoutube.com` không tính).
 const onDomain = (host: string, domain: string) =>
   host === domain || host.endsWith(`.${domain}`)
@@ -128,8 +159,7 @@ function parseUrl(raw: string): URL | null {
   }
 }
 
-/** Link là trang xem video/nghe nhạc của một trang media lớn (không phải trang chủ, kênh hay tệp trực tiếp). */
-export function isMediaPage(raw: string): boolean {
+function matchesSite(raw: string, sites: [string, (page: Page) => boolean][]): boolean {
   const url = parseUrl(raw)
   if (!url) return false
   const host = url.hostname.replace(/\.$/, "").toLowerCase()
@@ -139,7 +169,18 @@ export function isMediaPage(raw: string): boolean {
     host,
     path,
     videoParam: url.searchParams.getAll("v").some(Boolean),
+    listParam: url.searchParams.getAll("list").some(Boolean),
   }
-  const site = SITES.find(([domain]) => onDomain(host, domain))
+  const site = sites.find(([domain]) => onDomain(host, domain))
   return site ? site[1](page) : false
+}
+
+/** Link là trang xem video/nghe nhạc của một trang media lớn (không phải trang chủ, kênh hay tệp trực tiếp). */
+export function isMediaPage(raw: string): boolean {
+  return matchesSite(raw, SITES)
+}
+
+/** Link là trang kênh TikTok (`tiktok.com/@user`) hoặc kênh/playlist YouTube. */
+export function isChannelPage(raw: string): boolean {
+  return matchesSite(raw, CHANNEL_SITES)
 }

@@ -2,7 +2,7 @@
 name = "app"
 # Phiên bản, edition, giấy phép lấy từ [workspace.package] ở Cargo.toml gốc (đổi bản: docs/RELEASE.md).
 version.workspace = true
-description = "UTD desktop app: open-source download manager for Windows"
+description = "UTD desktop app: open-source download manager for Windows and macOS"
 authors = ["UTD contributors"]
 license.workspace = true
 repository = "https://github.com/1Scout-Co/UTD"
@@ -40,6 +40,10 @@ tauri-plugin-updater = { version = "2.14.0", default-features = false, features 
 png = "0.18.1"
 base64 = "0.22.1"
 
+[dev-dependencies]
+# Bài thử tải công cụ với server giả (src/media/install_tests.rs): tính SHA-256 file mẫu. Đã có trong Cargo.lock (engine dùng).
+sha2 = "0.11.1"
+
 [target."cfg(windows)".dependencies]
 winreg = "0.56.0"
 # Thao tác file như Explorer (src/files): mở, chọn trong thư mục, Thùng rác, icon thật.
@@ -58,3 +62,30 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows-core = "0.62.2"
+
+# errno, statvfs, renamex_np, getxattr (src/files/disk.rs, browser_integration/mac.rs).
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"
+
+# Finder/Thùng rác/icon thật trên macOS (src/files/shell/mac.rs, src/files/icons/mac.rs).
+# Cùng bản Tauri đang dùng (đã có trong Cargo.lock); chỉ bật lớp cần dùng.
+[target."cfg(target_os = \"macos\")".dependencies]
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSError",
+    "NSFileManager",
+    "NSGeometry",
+    "NSProcessInfo",
+    "NSString",
+    "NSURL",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSBitmapImageRep",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSWorkspace",
+] }

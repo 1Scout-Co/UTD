@@ -48,7 +48,7 @@ mod text {
     pub(super) const MEDIA_RENAME: &str = "Đợi tải xong rồi đổi tên.";
     pub(super) const MEDIA_MOVE: &str = "Đợi tải xong rồi chuyển.";
     pub(super) const SAVE_FAILED: &str = "Không lưu được thay đổi.";
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub(super) const WINDOWS_ONLY: &str = "Chỉ có trên Windows.";
 }
 
@@ -267,7 +267,11 @@ fn delete_task(journal: &Journal, data: &Path, task_id: &str) -> Result<(), Stri
         shell::with_com(|| shell::recycle(&doomed))?;
     }
     match journal.delete_task(task_id) {
-        Ok(()) | Err(utd_engine::Error::NotFound(_)) => Ok(()),
+        Ok(()) | Err(utd_engine::Error::NotFound(_)) => {
+            let downloaded = task.status == TaskStatus::Completed;
+            crate::media::channel::forget(journal, task_id, downloaded);
+            Ok(())
+        }
         Err(_) => Err(text::SAVE_FAILED.into()),
     }
 }

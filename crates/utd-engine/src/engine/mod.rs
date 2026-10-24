@@ -177,6 +177,20 @@ impl Default for DownloadControl {
     }
 }
 
+/// Kết quả `DownloadEngine::inspect`: một link dò trước khi tạo task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteFile {
+    /// URL sau chuyển hướng.
+    pub url: String,
+    /// Tên server đề xuất (Content-Disposition) hoặc lấy từ đường dẫn, đã làm sạch.
+    pub file_name: String,
+    pub total_bytes: Option<u64>,
+    pub content_type: Option<String>,
+    /// Server trả trang HTML (không phải file đính kèm): tải về chỉ được trang web.
+    pub page: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressSnapshot {

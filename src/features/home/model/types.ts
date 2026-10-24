@@ -130,9 +130,50 @@ export interface AddMediaPayload {
   selector: string
   audioFormat?: MediaAudioFormat
   pageUrl?: string
+  /** Tải cả kênh: thư mục con (tên kênh) trong thư mục tải. */
+  subfolder?: string
+  /** Tải cả kênh: để app nhớ id video đã tải. */
+  channel?: { key: string; videoId: string }
+  /** Thư mục tải; không gửi ⇒ thư mục mặc định trong Cài đặt. */
+  destDir?: string
+  /** true ⇒ xếp cuối hàng đợi chung (tải cả kênh); mặc định chen đầu hàng. */
+  later?: boolean
 }
 
-export type MediaToolName = "yt-dlp" | "ffmpeg"
+/** Chất lượng chung cho link trang video trong lô (src-tauri/src/media/preset.rs). */
+export type BatchQuality = "best" | "1080" | "720" | "audio-m4a" | "audio-mp3"
+
+export interface AddBatchPayload {
+  urls: string[]
+  destDir?: string
+  quality: BatchQuality
+  /** true = "Thêm vào hàng đợi" (cuối hàng); false = "Bắt đầu ngay" (đầu hàng). */
+  later: boolean
+}
+
+export interface BatchResult {
+  tasks: EngineTask[]
+  failed: { url: string; message: string }[]
+}
+
+/** Một link dò trước khi thêm (`inspect_link`). */
+export interface RemoteFile {
+  url: string
+  fileName: string
+  totalBytes: number | null
+  contentType: string | null
+  /** Server trả trang web, không phải file. */
+  page: boolean
+}
+
+export interface QueueSettings {
+  /** Số download chạy cùng lúc. */
+  limit: number
+  maxLimit: number
+}
+
+/** deno: runtime JavaScript yt-dlp dùng để giải thử thách của YouTube. */
+export type MediaToolName = "yt-dlp" | "deno" | "ffmpeg"
 
 /** utd = bản UTD tự tải vào thư mục của nó; còn lại là bản có sẵn trên máy. */
 export type MediaToolSource = "utd" | "path" | "winget" | "scoop" | "choco"
@@ -146,8 +187,33 @@ export interface MediaToolInfo {
 export interface MediaToolsStatus {
   ytDlp: MediaToolInfo | null
   ffmpeg: MediaToolInfo | null
+  deno: MediaToolInfo | null
   binDir: string
   installing: MediaToolName | null
+}
+
+/** App tự tải công cụ còn thiếu (lần đầu) và tự cập nhật yt-dlp/deno của UTD. */
+export interface MediaToolsAuto {
+  /** Công tắc trong Cài đặt (mặc định bật). */
+  enabled: boolean
+  /** Đang dò công cụ lúc mở app. */
+  checking: boolean
+  /** Còn phải tải, theo thứ tự. */
+  pending: MediaToolName[]
+  /** Đang tải thật (null khi đang chờ thử lại). */
+  active: MediaToolName | null
+  /** Đang cập nhật nền (đã có bản dùng được). */
+  updating: MediaToolName | null
+  /** Công cụ mà lượt tải vừa rồi không tải được. */
+  failed: MediaToolName[]
+  /** Câu lỗi của công cụ đầu tiên trong `failed`. */
+  error: string | null
+  /** Giờ thử lại (ms). */
+  retryAt: number | null
+  /** Số lượt tải đã xong. */
+  rounds: number
+  /** Người dùng bấm Huỷ: thôi tự tải tới khi cần lại. */
+  paused: boolean
 }
 
 export type MediaToolStage =

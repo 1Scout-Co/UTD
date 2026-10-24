@@ -107,6 +107,17 @@ Không tải dữ liệu.
 | S-38 | Có video | Nút "Tải" nhỏ khi rê chuột lên video | Mở bảng chọn chất lượng trong app |
 | S-39 | Lỗi | App chưa cài/chưa chạy hoặc site bị tắt overlay | Mở app, bật overlay cho site, tải lại trang |
 
+#### Tải cả kênh
+
+Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp Thêm, Tải media hoặc trình duyệt. Mã S-60–S-63 (chừa S-40–S-59 cho các việc làm song song).
+
+| mã | khi | thấy gì | làm được gì |
+|---|---|---|---|
+| S-60 | Đang tải | Tên, ảnh đại diện kênh; video hiện dần, số video đếm dần | Dừng liệt kê (giữ phần đã có), huỷ |
+| S-61 | Có dữ liệu | Video: ảnh nhỏ, tiêu đề, ngày, thời lượng, lượt xem; video đã tải lần trước đánh dấu "Đã tải" | Lọc mới nhất N / khoảng ngày / chỉ video mới, chọn tất cả / bỏ chọn, một chất lượng chung, thư mục riêng theo tên kênh, tải |
+| S-62 | Trống | Kênh chưa có video công khai | Huỷ |
+| S-63 | Lỗi | Tài khoản riêng tư/cần đăng nhập (UTD không gửi cookie), kênh không có, mạng lỗi, thiếu yt-dlp | Thử lại, huỷ |
+
 ### Làm được gì
 
 - Tải file lớn bằng nhiều kết nối, pause/resume, sống qua mất mạng, sleep, kill app và rút điện (S-01, S-15, S-19).

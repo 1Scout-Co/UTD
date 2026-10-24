@@ -6,6 +6,8 @@ pub const TASK_EVENT: &str = "utd://task";
 pub const PROGRESS_EVENT: &str = "utd://progress";
 pub const ERROR_EVENT: &str = "utd://error";
 pub const TOOL_PROGRESS_EVENT: &str = "utd://tool-progress";
+/// Trạng thái tự tải/cập nhật công cụ media (media/auto.rs).
+pub const TOOLS_AUTO_EVENT: &str = "utd://tools-auto";
 pub const UPDATE_PROGRESS_EVENT: &str = "utd://update-progress";
 pub const UPDATE_AVAILABLE_EVENT: &str = "utd://update-available";
 /// Link trang video gửi từ trình duyệt: giao diện mở hộp Tải media với link này (media_pages.rs).
@@ -20,6 +22,18 @@ pub struct MediaRequest {
     pub page_url: Option<String>,
 }
 
+/// Lô link gửi từ trình duyệt ("Tải tất cả link bằng UTD"): giao diện mở hộp Thêm hàng loạt (batch.rs).
+pub const BATCH_REQUEST_EVENT: &str = "utd://batch-request";
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchRequest {
+    /// Đã kiểm (`batch::clean_links`): http/https, không trùng, giữ thứ tự trên trang.
+    pub urls: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeError {
@@ -27,7 +41,7 @@ pub struct BridgeError {
     pub message: String,
 }
 
-/// Tiến độ tải/cài công cụ media (yt-dlp, ffmpeg).
+/// Tiến độ tải/cài công cụ media (yt-dlp, deno, ffmpeg).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolProgress {

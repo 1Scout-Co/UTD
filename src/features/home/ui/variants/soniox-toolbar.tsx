@@ -1,14 +1,18 @@
 import { useEffect, useRef } from "react"
 
-import { Plus, Search, X } from "lucide-react"
+import { ListPlus, Plus, Search, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { cn } from "cn"
+import { isMac } from "@/shared/platform"
 
 import type { DownloadFilter } from "../../model/types"
 import { TABS } from "./soniox-table-parts"
+
+/** Phím tắt hiện như hệ điều hành quen: ⌘ trên Mac, Ctrl trên Windows (bắt phím thì nhận cả hai). */
+const MOD_KEY = isMac ? "⌘" : "Ctrl"
 
 function SearchField({
   query,
@@ -60,7 +64,7 @@ function SearchField({
         </Button>
       ) : (
         <KbdGroup className="absolute top-1/2 right-2 -translate-y-1/2">
-          <Kbd className="bg-card text-xs shadow-soft">Ctrl</Kbd>
+          <Kbd className="bg-card text-xs shadow-soft">{MOD_KEY}</Kbd>
           <Kbd className="bg-card text-xs shadow-soft">K</Kbd>
         </KbdGroup>
       )}
@@ -125,6 +129,7 @@ export function SonioxToolbar({
   onFilterChange,
   onQueryChange,
   onAdd,
+  onBatch,
 }: {
   filter: DownloadFilter
   counts: Record<DownloadFilter, number>
@@ -132,6 +137,8 @@ export function SonioxToolbar({
   onFilterChange: (filter: DownloadFilter) => void
   onQueryChange: (query: string) => void
   onAdd: () => void
+  /** Hộp Thêm hàng loạt (Ctrl+B). */
+  onBatch?: () => void
 }) {
   return (
     <div data-toolbar className="flex flex-wrap items-center gap-3">
@@ -142,6 +149,17 @@ export function SonioxToolbar({
       />
       <div className="ml-auto flex items-center gap-2">
         <SearchField query={query} onQueryChange={onQueryChange} />
+        {onBatch ? (
+          <Button
+            variant="outline"
+            className="h-9 px-3 text-sm"
+            title="Thêm hàng loạt (Ctrl+B)"
+            onClick={onBatch}
+          >
+            <ListPlus />
+            Hàng loạt
+          </Button>
+        ) : null}
         <Button
           data-primary
           className="h-9 px-3.5 text-sm shadow-md shadow-primary/25"
