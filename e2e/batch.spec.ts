@@ -3,8 +3,14 @@ import { expect, test, type Page } from '@playwright/test'
 
 import { expandPattern, parseLinks, patternCount } from '../src/features/home/model/batch-links'
 
-const axe = (page: Page) =>
-  new AxeBuilder({ page }).include('[role="dialog"]').withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()
+// Chờ hiệu ứng mở hộp (mờ dần, phóng to) chạy xong: đo màu giữa chừng thì độ tương phản sai.
+async function axe(page: Page) {
+  await page.waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== 'running'))
+  return new AxeBuilder({ page })
+    .include('[role="dialog"]')
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+    .analyze()
+}
 
 const VIDEO = 'https://www.youtube.com/watch?v=09OGSRptb0M'
 
@@ -121,6 +127,21 @@ test('S-07: mẫu [001-120] hiện trước số link, mẫu quá lớn bị ch�
   await dialog.getByLabel('Mẫu link').fill('https://example.com/anh[1-99999].jpg')
   await expect(dialog.getByRole('alert')).toHaveText('Mẫu quá lớn: tối đa 10.000 link.')
   await expect(dialog.getByRole('button', { name: 'Bắt đầu ngay' })).toBeDisabled()
+})
+
+test('S-07: cửa sổ nhỏ nhất (1080×680) — hộp không tràn, cuộn tới nút chính được', async ({ page }) => {
+  await page.setViewportSize({ width: 1080, height: 680 })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Hàng loạt' }).click()
+  const dialog = page.getByRole('dialog')
+  const links = Array.from({ length: 30 }, (_, index) => `https://example.com/f${index}.zip`)
+  await dialog.getByLabel('Danh sách link').fill([...links, VIDEO].join('\n'))
+  await expect(dialog.getByText('Đã chọn 31/31')).toBeVisible()
+  const box = await dialog.boundingBox()
+  expect(box && box.y >= 0 && box.y + box.height <= 680).toBe(true)
+  const start = dialog.getByRole('button', { name: 'Bắt đầu ngay' })
+  await start.scrollIntoViewIfNeeded()
+  await expect(start).toBeInViewport()
 })
 
 test('S-07: a11y — hộp Thêm hàng loạt không có lỗi truy cập', async ({ page }) => {

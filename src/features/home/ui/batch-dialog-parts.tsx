@@ -150,7 +150,7 @@ export function BatchSource({
           placeholder={"Mỗi dòng một link\nhttps://example.com/file-1.zip"}
           disabled={busy}
           spellCheck={false}
-          className="max-h-32 min-h-20 font-mono text-sm"
+          className="max-h-28 min-h-20 font-mono text-sm"
         />
       ) : (
         <Input
@@ -178,7 +178,7 @@ export function BatchSource({
 }
 
 const ROW_HEIGHT = 36
-const VISIBLE_ROWS = 7
+const VISIBLE_ROWS = 6
 const OVERSCAN = 6
 
 function SizeCell({ row, probing }: { row: BatchRow; probing: boolean }) {
@@ -218,9 +218,9 @@ export function BatchTable({
   const shown = rows.slice(first, last)
 
   return (
-    // max-h-72 = 8 dòng (tiêu đề + VISIBLE_ROWS) × ROW_HEIGHT.
+    // max-h-63 = 7 dòng (tiêu đề + VISIBLE_ROWS) × ROW_HEIGHT.
     <div
-      className="max-h-72 overflow-y-auto rounded-xl bg-muted/60"
+      className="max-h-63 overflow-y-auto rounded-xl bg-muted/60"
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
     >
       <table className="w-full table-fixed text-sm">

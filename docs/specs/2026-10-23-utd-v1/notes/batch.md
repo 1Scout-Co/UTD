@@ -73,10 +73,27 @@ Nhánh `claude/batch-download-4d17fc`. Ngày 2026-10-24.
   đóng băng khi cập nhật, mở lại app, và một bài engine thật + server cục bộ chậm: đỉnh đúng 3, chạy đúng thứ tự;
   `batch.rs`, `media/preset.rs`, `ipc.rs`, `native_host.rs`).
 - `cargo clippy -p app --all-targets -- -D warnings`, `-p utd-engine` sạch.
-- `pnpm lint`, `pnpm build` (JS 177,4 kB / 200 kB gzip), `pnpm exec playwright test` 41/41 (mới: `e2e/batch.spec.ts`
-  12 bài: tách link, mẫu, hộp hàng loạt, a11y, Cài đặt, desktop giả lập: gửi lô một lần + dò song song ≤ 6,
-  lô từ trình duyệt, link lỗi giữ lại, lô tới sớm, extension gom/lọc link), `ui-check` ĐẠT, arch size đạt.
-- Thử thật: xem mục cuối.
+- `pnpm lint`, `pnpm build` (JS 177,6 kB / 200 kB gzip), `pnpm exec playwright test` 42/42 (mới: `e2e/batch.spec.ts`
+  13 bài: tách link, mẫu, hộp hàng loạt, cửa sổ 1080×680, a11y, Cài đặt, desktop giả lập: gửi lô một lần + dò song
+  song ≤ 6, lô từ trình duyệt, link lỗi giữ lại, lô tới sớm, extension gom/lọc link), `ui-check` ĐẠT, arch size đạt.
+
+### Thử thật (2026-10-24, `UTD_DATA_DIR` riêng, WebView2 debug 9413, bản `tauri build --debug --no-bundle`)
+- Lô 6 file thật (ovh 10 MB + 1 MB, 2 link Cloudflare cùng tên `__down`, dummy.pdf, SHA2-256SUMS trên GitHub) + 1 dòng
+  rác + 1 link trùng + 2 link YouTube, giới hạn 2, chất lượng 720p: bảng hiện đủ tên/kích thước, "Đã bỏ 1 trùng,
+  1 dòng không phải link"; tối đa 2 chạy cùng lúc; `__down` + `__down (1)`; "Me at the zoo.mp4" tự Phân tích và đặt
+  tên theo tiêu đề. Video thứ hai (`BaW_jenozKc`) báo lỗi rõ — video đã bị YouTube gỡ (`yt-dlp`: "This video is
+  unavailable"), không phải lỗi app. Lô MP3 với `C0DPdy98e4c` ⇒ "TEST VIDEO.mp3".
+- Giới hạn 1, "Thêm vào hàng đợi" 3 link, tạm dừng link thứ 3 khi đang chờ, thêm lẻ một link khi đầy chỗ (⇒ `queued`),
+  rồi **tắt ngang** app (Stop-Process) khi 100Mb.dat đang tải: mở lại ⇒ 100Mb.dat tự lên đầu, chạy tiếp từ byte đã có,
+  rồi link thêm lẻ, rồi link kế; link đã tạm dừng vẫn dừng; Tiếp tục ⇒ chạy và xong. Luôn đúng 1 chạy cùng lúc.
+  (100Mb.dat và 1Mb (1).dat sau đó báo "connection timed out": proof.ovh.net ngừng trả lời cả với curl, lỗi phía máy chủ.)
+- Native host thật (`UTD.exe --native-host` nhận tin nhắn từ stdin như trình duyệt, cùng `UTD_DATA_DIR`): tin `batch`
+  ⇒ "Đã mở UTD để chọn link", hộp hàng loạt mở với đúng link (bỏ `javascript:` và link trùng, link không rõ là file bỏ
+  tick sẵn); tin chỉ có `blob:` ⇒ từ chối "Trang này không có link tải được.". "Thêm vào hàng đợi" ⇒ `__down (2)`,
+  "TEST VIDEO (1).mp4".
+- Chưa thử: nạp extension vào Chrome/Firefox thật (không bật tích hợp trình duyệt của bản thật); logic gom/lọc link của
+  extension chỉ kiểm bằng e2e với API trình duyệt giả.
+- Đã tắt app thử (đúng PID) và xoá thư mục dữ liệu/tải thử.
 
 ## Ghi chú cho phiên điều phối
 - Chuỗi giao diện mới viết thẳng tiếng Việt như code xung quanh (phiên đa ngôn ngữ sẽ gom).

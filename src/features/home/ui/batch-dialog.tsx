@@ -166,7 +166,12 @@ export function BatchDialog(props: BatchDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent data-s={rows.length ? "S-07" : "S-05"} data-variant="soniox" className="sm:max-w-[720px]">
+      <DialogContent
+        data-s={rows.length ? "S-07" : "S-05"}
+        data-variant="soniox"
+        // Cửa sổ thấp nhất (680 px) không đủ chỗ cho cả bảng: hộp tự cuộn thay vì tràn ra ngoài.
+        className="max-h-[calc(100svh-2rem)] gap-4 overflow-y-auto sm:max-w-[720px]"
+      >
         <DialogHeader>
           <DialogTitle>Thêm hàng loạt</DialogTitle>
           <DialogDescription className="sr-only">
