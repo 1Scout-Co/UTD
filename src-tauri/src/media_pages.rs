@@ -8,6 +8,9 @@
 //!   cho giao diện, hiện + focus cửa sổ chính. Giao diện chưa kịp nghe (UTD vừa mở) thì giữ link trong
 //!   [`PendingMedia`], giao diện lấy bằng `take_media_request` khi sẵn sàng.
 //!
+//! Link kênh/playlist (TikTok `@user`, kênh và playlist YouTube) đi cùng hai lối vào đó nhưng mở hộp Tải cả
+//! kênh: `add_download` trả [`CHANNEL_PAGE_ERROR`] kèm link, pipe phát cùng sự kiện và giao diện tự nhận ra.
+//!
 //! Bản TS cùng luật: `src/features/home/model/media-pages.ts`. Sửa một bên thì sửa cả bên kia (cùng bộ ca thử).
 
 use std::sync::{Mutex, MutexGuard};
@@ -27,6 +30,20 @@ const MAX_URL_BYTES: usize = 8192;
 pub fn media_page_error() -> String {
     format!("{MEDIA_PAGE_ERROR}: Đây là link video, dùng Tải video để chọn chất lượng.")
 }
+
+/// Mã đầu chuỗi lỗi khi URL là trang kênh/playlist: `channel_page: <link>`, giao diện mở hộp Tải cả kênh
+/// với link đó.
+pub const CHANNEL_PAGE_ERROR: &str = "channel_page";
+
+/// Câu trả cho extension khi link kênh được chuyển sang hộp Tải cả kênh.
+pub const CHANNEL_PAGE_NOTE: &str = "Đã mở UTD để tải cả kênh";
+
+pub fn channel_page_error(url: &str) -> String {
+    format!("{CHANNEL_PAGE_ERROR}: {}", url.trim())
+}
+
+/// Thẻ của kênh YouTube liệt kê được video (`/@kênh/videos`); `featured` là trang chủ kênh.
+const YOUTUBE_TABS: &[&str] = &["videos", "shorts", "streams", "featured"];
 
 /// Đuôi tệp tải thẳng: `…/x.mp4` là tệp, không phải trang video.
 const FILE_EXTENSIONS: &[&str] = &[
@@ -56,6 +73,8 @@ struct Page<'a> {
     path: Vec<&'a str>,
     /// Có `?v=<id>` (YouTube, Facebook).
     video_param: bool,
+    /// Có `?list=<id>` (playlist YouTube).
+    list_param: bool,
 }
 
 impl Page<'_> {
@@ -97,8 +116,21 @@ const SITES: &[(&str, Rule)] = &[
     ("bilibili.com", bilibili),
 ];
 
+/// Trang kênh/playlist tải được cả loạt. Link rút gọn (`vm.tiktok.com`) chưa biết là video hay kênh: đi
+/// đường trang video, `media_probe` thấy là kênh thì trả [`CHANNEL_PAGE_ERROR`].
+const CHANNEL_SITES: &[(&str, Rule)] = &[("tiktok.com", tiktok_user), ("youtube.com", youtube_channel)];
+
 /// Link là trang xem video/nghe nhạc của một trang media lớn (không phải trang chủ, kênh hay tệp trực tiếp).
 pub fn is_media_page(raw: &str) -> bool {
+    matches_site(raw, SITES)
+}
+
+/// Link là trang kênh TikTok (`tiktok.com/@user`) hoặc kênh/playlist YouTube.
+pub fn is_channel_page(raw: &str) -> bool {
+    matches_site(raw, CHANNEL_SITES)
+}
+
+fn matches_site(raw: &str, sites: &[(&str, Rule)]) -> bool {
     let Ok(url) = utd_engine::validate_url(raw.trim()) else {
         return false;
     };
@@ -113,17 +145,54 @@ pub fn is_media_page(raw: &str) -> bool {
     if path.last().is_some_and(|last| is_file_name(last)) {
         return false;
     }
+    let param = |name: &str| {
+        url.query_pairs()
+            .any(|(key, value)| key == name && !value.is_empty())
+    };
     let page = Page {
         host: &host,
         path,
-        video_param: url
-            .query_pairs()
-            .any(|(key, value)| key == "v" && !value.is_empty()),
+        video_param: param("v"),
+        list_param: param("list"),
     };
-    SITES
+    sites
         .iter()
         .find(|(domain, _)| on_domain(&host, domain))
         .is_some_and(|(_, rule)| rule(&page))
+}
+
+/// Link để yt-dlp liệt kê: bỏ tham số thừa (`?lang=…`), trang chủ kênh YouTube ⇒ thẻ Video (trang chủ
+/// chỉ là danh sách các thẻ). `None` khi không phải trang kênh.
+pub fn channel_listing_url(raw: &str) -> Option<String> {
+    if !is_channel_page(raw) {
+        return None;
+    }
+    let mut url = utd_engine::validate_url(raw.trim()).ok()?;
+    let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    let list = url
+        .query_pairs()
+        .find(|(key, _)| key == "list")
+        .map(|(_, value)| value.into_owned());
+    url.set_query(None);
+    url.set_fragment(None);
+    let path: Vec<String> = url
+        .path_segments()
+        .map(|parts| parts.filter(|part| !part.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
+    if on_domain(&host, "youtube.com") {
+        if path.first().is_some_and(|first| first == "playlist") {
+            url.query_pairs_mut().append_pair("list", list.as_deref()?);
+            return Some(url.to_string());
+        }
+        let owner = if path.first().is_some_and(|first| first.starts_with('@')) { 1 } else { 2 };
+        let mut parts = path[..owner].to_vec();
+        let tab = path.get(owner).map(String::as_str).unwrap_or("featured");
+        parts.push(if tab == "featured" { "videos" } else { tab }.to_string());
+        url.set_path(&parts.join("/"));
+        return Some(url.to_string());
+    }
+    url.set_path(&path.join("/"));
+    Some(url.to_string())
 }
 
 /// `host` là `domain` hoặc tên miền con của nó (`notyoutube.com` không tính).
@@ -156,6 +225,34 @@ fn youtube(page: &Page<'_>) -> bool {
 fn tiktok(page: &Page<'_>) -> bool {
     (page.at(0).starts_with('@') && page.at(1) == "video" && page.has(2))
         || (page.at(0) == "t" && page.has(1))
+}
+
+/// `@user` đứng một mình (không phải `/video/…`, `/live`).
+fn tiktok_user(page: &Page<'_>) -> bool {
+    page.path.len() == 1 && is_handle(page.at(0))
+}
+
+/// `@kênh`, `channel/<id>`, `c/<tên>`, `user/<tên>` (kèm thẻ Video/Shorts/Trực tiếp) hoặc `playlist?list=`.
+fn youtube_channel(page: &Page<'_>) -> bool {
+    if page.at(0) == "playlist" {
+        return page.list_param && page.path.len() == 1;
+    }
+    let owner = if is_handle(page.at(0)) {
+        1
+    } else if matches!(page.at(0), "channel" | "c" | "user") && page.has(1) {
+        2
+    } else {
+        return false;
+    };
+    match page.path.len() - owner {
+        0 => true,
+        1 => YOUTUBE_TABS.contains(&page.at(owner)),
+        _ => false,
+    }
+}
+
+fn is_handle(part: &str) -> bool {
+    part.len() > 1 && part.starts_with('@')
 }
 
 fn facebook(page: &Page<'_>) -> bool {
@@ -358,6 +455,99 @@ mod tests {
         "not a url",
         "",
     ];
+
+    /// Cùng bộ ca với `e2e/channel-download.spec.ts` (bản TS).
+    const CHANNEL_PAGES: &[&str] = &[
+        "https://www.tiktok.com/@tiktok",
+        "https://www.tiktok.com/@user.name?lang=en&is_from_webapp=1",
+        "https://m.tiktok.com/@user.name/",
+        "https://www.youtube.com/@SomeChannel",
+        "https://www.youtube.com/@SomeChannel/videos",
+        "https://www.youtube.com/@SomeChannel/shorts",
+        "https://www.youtube.com/@SomeChannel/streams",
+        "https://m.youtube.com/@SomeChannel/featured",
+        "https://www.youtube.com/channel/UC1234567890",
+        "https://www.youtube.com/channel/UC1234567890/videos",
+        "https://www.youtube.com/c/SomeName",
+        "https://www.youtube.com/user/SomeName/videos",
+        "https://www.youtube.com/playlist?list=PL123",
+        "https://music.youtube.com/playlist?list=OLAK5uy_abc",
+    ];
+
+    const NOT_CHANNEL_PAGES: &[&str] = &[
+        "https://www.tiktok.com/",
+        "https://www.tiktok.com/@",
+        "https://www.tiktok.com/@user.name/video/7234567890123456789",
+        "https://www.tiktok.com/@user.name/photo/7234567890123456789",
+        "https://www.tiktok.com/@user.name/live",
+        "https://www.tiktok.com/explore",
+        "https://vm.tiktok.com/ZMabc123/",
+        "https://www.youtube.com/",
+        "https://www.youtube.com/watch?v=09OGSRptb0M&list=PL123",
+        "https://www.youtube.com/playlist",
+        "https://www.youtube.com/playlist?list=",
+        "https://www.youtube.com/@SomeChannel/community",
+        "https://www.youtube.com/@SomeChannel/playlists",
+        "https://www.youtube.com/@SomeChannel/videos/extra",
+        "https://www.youtube.com/@clip.mp4",
+        "https://www.youtube.com/channel",
+        "https://www.youtube.com/feed/subscriptions",
+        "https://notyoutube.com/@SomeChannel",
+        "https://tiktok.com.evil.example/@user",
+        "https://user:pass@www.tiktok.com/@user",
+        "ftp://www.tiktok.com/@user",
+        "not a url",
+        "",
+    ];
+
+    #[test]
+    fn channel_pages_open_the_channel_flow() {
+        for url in CHANNEL_PAGES {
+            assert!(is_channel_page(url), "{url}");
+            assert!(!is_media_page(url), "{url}");
+        }
+        for url in NOT_CHANNEL_PAGES {
+            assert!(!is_channel_page(url), "{url}");
+        }
+        for url in MEDIA_PAGES {
+            assert!(!is_channel_page(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn listing_url_drops_extras_and_picks_the_videos_tab() {
+        let cases = [
+            (
+                "https://www.tiktok.com/@user.name?lang=en&is_from_webapp=1#top",
+                "https://www.tiktok.com/@user.name",
+            ),
+            ("https://m.tiktok.com/@user.name/", "https://m.tiktok.com/@user.name"),
+            ("https://www.youtube.com/@Some", "https://www.youtube.com/@Some/videos"),
+            ("https://www.youtube.com/@Some/featured", "https://www.youtube.com/@Some/videos"),
+            ("https://www.youtube.com/@Some/shorts?x=1", "https://www.youtube.com/@Some/shorts"),
+            (
+                "https://www.youtube.com/channel/UC123",
+                "https://www.youtube.com/channel/UC123/videos",
+            ),
+            (
+                "https://www.youtube.com/playlist?si=abc&list=PL123",
+                "https://www.youtube.com/playlist?list=PL123",
+            ),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(channel_listing_url(raw).as_deref(), Some(expected), "{raw}");
+        }
+        assert_eq!(channel_listing_url("https://www.youtube.com/watch?v=abc"), None);
+        assert_eq!(channel_listing_url("https://vm.tiktok.com/ZMabc123/"), None);
+    }
+
+    #[test]
+    fn channel_error_carries_the_link() {
+        assert_eq!(
+            channel_page_error(" https://www.tiktok.com/@a "),
+            "channel_page: https://www.tiktok.com/@a"
+        );
+    }
 
     #[test]
     fn video_pages_go_to_the_media_flow() {

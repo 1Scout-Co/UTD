@@ -36,6 +36,8 @@ enum Route {
     Media,
     /// Lô link đã kiểm: mở hộp Thêm hàng loạt, chưa tạo task nào.
     Batch(Vec<String>),
+    /// Trang kênh: cùng sự kiện với trang video, giao diện nhận ra link kênh và mở hộp Tải cả kênh.
+    Channel,
     Download,
 }
 
@@ -51,6 +53,8 @@ fn route(request: &PipeRequest, token: &str) -> Route {
         Route::Reject("URL quá dài.")
     } else if crate::media_pages::is_media_page(&request.url) {
         Route::Media
+    } else if crate::media_pages::is_channel_page(&request.url) {
+        Route::Channel
     } else {
         Route::Download
     }
@@ -326,14 +330,8 @@ where
         serde_json::from_str(&line).map_err(|_| "IPC payload không hợp lệ".to_string())?;
     let response = match route(&request, token) {
         Route::Reject(message) => PipeResponse::error(message),
-        Route::Media => {
-            let media = crate::events::MediaRequest {
-                url: request.url.trim().to_string(),
-                page_url: crate::media_pages::clean_page_url(request.page_url),
-            };
-            crate::media_pages::open_media_flow(&app, media);
-            PipeResponse::note(crate::media_pages::MEDIA_PAGE_NOTE)
-        }
+        Route::Media => open_media(&app, request, crate::media_pages::MEDIA_PAGE_NOTE),
+        Route::Channel => open_media(&app, request, crate::media_pages::CHANNEL_PAGE_NOTE),
         Route::Batch(urls) => {
             let batch = crate::events::BatchRequest {
                 urls,
@@ -364,6 +362,16 @@ where
         .await
         .map_err(|error| error.to_string())?;
     server.flush().await.map_err(|error| error.to_string())
+}
+
+/// Trang video hoặc trang kênh: cùng sự kiện `utd://media-request`, giao diện tự nhận ra link kênh.
+fn open_media(app: &tauri::AppHandle, request: PipeRequest, note: &str) -> PipeResponse {
+    let media = crate::events::MediaRequest {
+        url: request.url.trim().to_string(),
+        page_url: crate::media_pages::clean_page_url(request.page_url),
+    };
+    crate::media_pages::open_media_flow(app, media);
+    PipeResponse::note(note)
 }
 
 fn secure_eq(left: &str, right: &str) -> bool {
@@ -403,6 +411,10 @@ mod tests {
             route(&request(TOKEN, "https://www.youtube.com/"), TOKEN),
             Route::Download,
             "trang chủ vẫn đi đường tải thường"
+        );
+        assert_eq!(
+            route(&request(TOKEN, "https://www.tiktok.com/@tiktok"), TOKEN),
+            Route::Channel
         );
     }
 

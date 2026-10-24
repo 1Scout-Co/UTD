@@ -130,6 +130,10 @@ export interface AddMediaPayload {
   selector: string
   audioFormat?: MediaAudioFormat
   pageUrl?: string
+  /** Tải cả kênh: thư mục con (tên kênh) trong thư mục tải. */
+  subfolder?: string
+  /** Tải cả kênh: để app nhớ id video đã tải. */
+  channel?: { key: string; videoId: string }
 }
 
 /** Chất lượng chung cho link trang video trong lô (src-tauri/src/media/preset.rs). */

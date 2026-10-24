@@ -1,4 +1,6 @@
 mod auto;
+/// Tải cả kênh: `channel::channel_list`, `channel::channel_list_cancel`.
+pub(crate) mod channel;
 mod fast;
 mod finish;
 mod install;
@@ -60,6 +62,10 @@ pub struct AddMediaInput {
     /// `true` ⇒ xếp cuối hàng đợi (lô "Thêm vào hàng đợi", tải cả kênh); mặc định chen đầu hàng.
     #[serde(default)]
     pub later: bool,
+    /// Tải cả kênh: thư mục con (tên kênh) trong thư mục tải.
+    pub subfolder: Option<String>,
+    /// Tải cả kênh: video này của kênh nào, để lần sau "Tải video mới" bỏ qua.
+    pub channel: Option<channel::ChannelPick>,
 }
 
 impl AddMediaInput {
@@ -74,6 +80,8 @@ impl AddMediaInput {
             page_url: None,
             dest_dir: None,
             later: false,
+            subfolder: None,
+            channel: None,
         }
     }
 }
@@ -210,17 +218,24 @@ pub async fn add_media_download(
     Ok(task)
 }
 
-fn enqueue_media(app: AppHandle, input: AddMediaInput) -> Result<DownloadTask, String> {
+fn enqueue_media(app: AppHandle, mut input: AddMediaInput) -> Result<DownloadTask, String> {
     let (journal, queue) = {
         let state = app.state::<AppState>();
         (state.journal.clone(), state.queue.clone())
     };
-    let destination = crate::commands::download_dir_for(&app, input.dest_dir.as_deref())?;
+    let folder = crate::commands::download_dir_for(&app, input.dest_dir.as_deref())?;
+    let destination = with_subfolder(folder, input.subfolder.as_deref())?;
     let place = if input.later { Place::Back } else { Place::Front };
+    let pick = input.channel.take();
     let task = create_media(&journal, &destination, input)?;
     if let Err(error) = queue.submit(vec![Entry::new(task.id.clone())], place) {
         let _ = journal.delete_task(&task.id);
         return Err(error);
+    }
+    if let Some(pick) = &pick
+        && let Err(error) = channel::remember(&journal, pick, &task.id)
+    {
+        log::warn!("channel: không nhớ được video đã tải ({error})");
     }
     Ok(task)
 }
@@ -276,6 +291,19 @@ pub(crate) fn create_media(
         return Err(error.to_string());
     }
     Ok(task)
+}
+
+/// Thư mục tải, cộng thư mục con (tên kênh) khi tải cả kênh; tên con được làm sạch thành một tầng.
+fn with_subfolder(
+    folder: std::path::PathBuf,
+    subfolder: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    let Some(name) = subfolder.map(str::trim).filter(|name| !name.is_empty()) else {
+        return Ok(folder);
+    };
+    let destination = folder.join(safe_base(name));
+    std::fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
+    Ok(destination)
 }
 
 pub(crate) fn spawn_media_run(

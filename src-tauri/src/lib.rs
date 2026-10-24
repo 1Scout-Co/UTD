@@ -239,6 +239,8 @@ pub fn run() {
             media::retry_media_tools,
             media::media_probe,
             media::add_media_download,
+            media::channel::channel_list,
+            media::channel::channel_list_cancel,
             media_pages::take_media_request,
             batch::take_batch_request,
             batch::add_batch_downloads,

@@ -52,6 +52,10 @@ pub(crate) fn enqueue_download(
     if crate::media_pages::is_media_page(&input.url) {
         return Err(crate::media_pages::media_page_error());
     }
+    // Trang kênh: mở hộp Tải cả kênh với link đó.
+    if crate::media_pages::is_channel_page(&input.url) {
+        return Err(crate::media_pages::channel_page_error(&input.url));
+    }
     let dest_dir = download_dir_for(&app, input.dest_dir.as_deref())?;
     let place = if input.later { Place::Back } else { Place::Front };
     let (task, entry) = create_download(&engine, &dest_dir, input)?;

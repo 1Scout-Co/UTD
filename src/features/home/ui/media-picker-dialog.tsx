@@ -12,10 +12,12 @@ import {
 } from "@/components/ui/dialog"
 
 import {
+  channelPageUrl,
   mediaProbe,
   subscribeMediaRequest,
   takeMediaRequest,
 } from "../api/downloads"
+import { isChannelPage } from "../model/media-pages"
 import type { AddMediaPayload, MediaProbe } from "../model/types"
 import {
   FormatList,
@@ -72,6 +74,7 @@ export function MediaPickerDialog({
   error,
   initialUrl,
   onSubmit,
+  onChannel,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -80,6 +83,8 @@ export function MediaPickerDialog({
   error: string | null
   initialUrl?: string | null
   onSubmit: (payload: AddMediaPayload) => void | Promise<void>
+  /** Link là kênh (dán vào đây, hoặc link rút gọn app thấy trỏ tới kênh): mở hộp Tải cả kênh. */
+  onChannel: (url: string) => void
 }) {
   const autoAnalyze = Boolean(initialUrl) && desktop
   const [url, setUrl] = useState(initialUrl ?? "")
@@ -131,11 +136,13 @@ export function MediaPickerDialog({
           null,
       )
     } catch (reason) {
-      setLocalError(reason instanceof Error ? reason.message : String(reason))
+      const channel = channelPageUrl(reason)
+      if (channel) onChannel(channel)
+      else setLocalError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [onChannel])
 
   // Mở với link sẵn ⇒ phân tích ngay (ref chặn chạy hai lần ở StrictMode).
   useEffect(() => {
@@ -151,6 +158,10 @@ export function MediaPickerDialog({
     }
     if (!/^https?:\/\//i.test(value.trim())) {
       setLocalError("Nhập URL HTTP/HTTPS của video hoặc luồng media.")
+      return
+    }
+    if (isChannelPage(value)) {
+      onChannel(value.trim())
       return
     }
     setLoading(true)

@@ -132,6 +132,17 @@ export function isMediaPageError(error: unknown): boolean {
   return message.startsWith(MEDIA_PAGE_ERROR)
 }
 
+/** Mã đầu lỗi khi URL là trang kênh: `channel_page: <link kênh>` (add_download, media_probe). */
+const CHANNEL_PAGE_ERROR = "channel_page:"
+
+/** Lỗi báo link là kênh (kể cả link rút gọn trỏ tới kênh): trả link kênh để mở hộp Tải cả kênh. */
+export function channelPageUrl(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error)
+  if (!message.startsWith(CHANNEL_PAGE_ERROR)) return null
+  const url = message.slice(CHANNEL_PAGE_ERROR.length).trim()
+  return /^https?:\/\//i.test(url) ? url : null
+}
+
 /** Link trang video gửi từ trình duyệt (chuột phải / popup của extension). */
 interface MediaRequest {
   url: string

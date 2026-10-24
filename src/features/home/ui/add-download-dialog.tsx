@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from "react"
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
-import { Download, Film, FolderOpen, Link2 } from "lucide-react"
+import { Download, Film, FolderOpen, Link2, ListVideo } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 
 import { parseLinks } from "../model/batch-links"
 import { fileNameFromUrl } from "../model/download-mapper"
-import { isMediaPage } from "../model/media-pages"
+import { isChannelPage, isMediaPage } from "../model/media-pages"
 import type { AddDownloadPayload } from "../model/types"
 
 function FieldLabel({ children }: { children: ReactNode }) {
@@ -26,31 +26,39 @@ function FieldLabel({ children }: { children: ReactNode }) {
   )
 }
 
-/** Thẻ trên ô URL: gợi ý dán, tên file + máy chủ, hoặc báo đây là link video (chuyển sang Tải media). */
+/**
+ * Thẻ trên ô URL: gợi ý dán, tên file + máy chủ, hoặc báo đây là link video (chuyển sang Tải media) / link
+ * kênh (chuyển sang Tải cả kênh).
+ */
 function UrlPreview({
   url,
   host,
   name,
   mediaPage,
+  channelPage,
 }: {
   url: string
   host: string
   name: string
   mediaPage: boolean
+  channelPage: boolean
 }) {
-  if (mediaPage) {
+  if (mediaPage || channelPage) {
+    const Icon = channelPage ? ListVideo : Film
     return (
       <div
         role="status"
         className="flex items-center gap-3 rounded-xl bg-accent p-3 text-accent-foreground"
       >
         <div className="grid size-10 place-items-center rounded-lg bg-card text-primary shadow-soft">
-          <Film className="size-4" />
+          <Icon className="size-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">Đây là link video</div>
+          <div className="text-sm font-semibold">
+            {channelPage ? "Đây là link kênh" : "Đây là link video"}
+          </div>
           <div className="mt-0.5 truncate text-xs">
-            {host} · chọn chất lượng ở bước sau
+            {host} · {channelPage ? "chọn video ở bước sau" : "chọn chất lượng ở bước sau"}
           </div>
         </div>
       </div>
@@ -103,7 +111,7 @@ export function AddDownloadDialog({
   busy: boolean
   error: string | null
   onSubmit: (payload: AddDownloadPayload) => void | Promise<void>
-  /** Link trang video: đóng hộp này, mở hộp Tải media với link đó. */
+  /** Link trang video hoặc kênh: đóng hộp này, mở hộp Tải media / Tải cả kênh với link đó. */
   onMedia: (url: string) => void
   /** Dán nhiều link một lúc: đóng hộp này, mở hộp Thêm hàng loạt với các link đó. */
   onBatch?: (urls: string[]) => void
@@ -123,7 +131,9 @@ export function AddDownloadDialog({
     }
   }, [url])
 
-  const mediaPage = isMediaPage(url)
+  const channelPage = isChannelPage(url)
+  // Link kênh cũng rời hộp này (sang Tải cả kênh): như link video, không có tên file/thư mục.
+  const mediaPage = isMediaPage(url) || channelPage
   const suggestedName = fileNameFromUrl(url)
   const effectiveName = fileName.trim() || suggestedName
   const effectiveDir = destDir ?? defaultDir
@@ -193,6 +203,7 @@ export function AddDownloadDialog({
             host={host}
             name={effectiveName}
             mediaPage={mediaPage}
+            channelPage={channelPage}
           />
 
           <div className="space-y-2">
@@ -319,8 +330,14 @@ export function AddDownloadDialog({
               type="submit"
               disabled={busy || !url.trim()}
             >
-              {mediaPage ? <Film /> : <Download />}
-              {mediaPage ? "Tải video" : busy ? "Đang thêm…" : "Bắt đầu"}
+              {channelPage ? <ListVideo /> : mediaPage ? <Film /> : <Download />}
+              {channelPage
+                ? "Tải kênh"
+                : mediaPage
+                  ? "Tải video"
+                  : busy
+                    ? "Đang thêm…"
+                    : "Bắt đầu"}
             </Button>
           </div>
         </form>
