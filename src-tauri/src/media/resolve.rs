@@ -176,7 +176,8 @@ pub(super) fn parse(value: &Value) -> Option<Resolved> {
     })
 }
 
-fn parse_stream(value: &Value) -> Option<Stream> {
+/// Một format trong JSON của yt-dlp: `requested_formats[i]`, `formats[i]` hoặc thông tin gốc.
+pub(super) fn parse_stream(value: &Value) -> Option<Stream> {
     let text = |key: &str| {
         value
             .get(key)
@@ -226,7 +227,7 @@ fn number(value: Option<&Value>) -> Option<u64> {
 }
 
 /// `has_drm` có thể là `true` hoặc `"maybe"`: có nghi ngờ là không tải thẳng.
-fn flagged(value: Option<&Value>) -> bool {
+pub(super) fn flagged(value: Option<&Value>) -> bool {
     match value {
         Some(Value::Bool(flag)) => *flag,
         Some(Value::String(text)) => !text.is_empty(),

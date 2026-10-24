@@ -34,12 +34,15 @@ fn sha256(bytes: &[u8]) -> String {
 fn options(initial: u16, max: u16) -> EngineOptions {
     EngineOptions {
         initial_connections: initial,
+        large_initial_connections: initial,
         max_connections: max,
         host_connections: 8,
         global_connections: 16,
         max_attempts: 5,
         connect_timeout: Duration::from_secs(5),
         idle_timeout: Duration::from_secs(5),
+        // Nhỏ hơn idle_timeout như cấu hình thật: luật "kết nối treo" chạy trong mọi bài.
+        stall_timeout: Duration::from_secs(2),
         sample_interval: Duration::from_millis(50),
         checkpoint_interval: Duration::from_millis(100),
         balance_interval: Duration::from_millis(200),
@@ -231,6 +234,7 @@ async fn pause_then_resume_completes() {
     let control = DownloadControl {
         cancel: CancellationToken::new(),
         events: Some(events),
+        initial_connections: None,
     };
     let cancel = control.cancel.clone();
     let request = request(&server, directory.path(), "paused.bin");
@@ -355,6 +359,55 @@ async fn refuses_to_overwrite_an_existing_file() {
     assert_eq!(
         std::fs::read(downloads.join("existing.bin")).expect("file"),
         b"keep me"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn keeps_a_file_that_appears_after_the_download_finished() {
+    // Tên còn trống lúc bắt đầu; người dùng tạo đúng tên đó khi đã tải xong, lúc engine đang kiểm
+    // hash. Đưa vào chỗ phải báo trùng tên chứ không ghi đè, và giữ file tạm đã tải.
+    let data = payload(4 * 1024 * 1024);
+    let server = TestServer::start(data.clone(), ServerConfig::default()).await;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let target = directory.path().join("downloads").join("late.bin");
+    let (_journal, engine) = engine(directory.path(), options(2, 4));
+    let mut request = request(&server, directory.path(), "late.bin");
+    request.expected_sha256 = Some(sha256(&data));
+
+    let (events, mut received) = mpsc::unbounded_channel();
+    let watcher = {
+        let target = target.clone();
+        tokio::spawn(async move {
+            while let Some(event) = received.recv().await {
+                if let EngineEvent::Task { task } = event
+                    && task.status == TaskStatus::Verifying
+                {
+                    let mut file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&target)
+                        .expect("the engine placed its file before verification ended");
+                    file.write_all(b"user file").expect("user file");
+                    return true;
+                }
+            }
+            false
+        })
+    };
+    let outcome = engine
+        .download(request, DownloadControl::with_events(events))
+        .await
+        .expect("download");
+    assert!(watcher.await.expect("watcher"), "never reached verification");
+    let DownloadOutcome::Failed(task) = outcome else {
+        panic!("expected failure, got {outcome:?}");
+    };
+    assert_eq!(task.error.as_ref().expect("error").code, "file.exists");
+    assert_eq!(std::fs::read(&target).expect("user file"), b"user file");
+    assert_eq!(
+        std::fs::read(&task.temp_path).expect("part file"),
+        data,
+        "the finished part was lost"
     );
 }
 

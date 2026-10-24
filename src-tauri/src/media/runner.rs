@@ -33,6 +33,8 @@ pub async fn run(
     task_id: String,
     cancel: CancellationToken,
 ) -> Result<(), String> {
+    let started = Instant::now();
+    log::info!("media.timing task={task_id} start");
     let mut task = journal
         .load_task(&task_id)
         .map_err(|error| error.to_string())?
@@ -65,6 +67,8 @@ pub async fn run(
             return Ok(());
         }
     };
+    let elapsed = started.elapsed().as_millis();
+    log::info!("media.timing task={task_id} tools ms={elapsed}");
     if job.audio_format.is_some() && tools.ffmpeg.is_none() {
         fail(
             &app,
@@ -85,6 +89,7 @@ pub async fn run(
     }
 
     // Luồng http(s) thường: engine UTD tự tải nhiều kết nối, nhanh hơn yt-dlp (một kết nối/luồng).
+    // Lượt đầu dùng luồng của lần "Phân tích" nếu còn hạn; lấy link mới thì hỏi yt-dlp.
     let resolver = fast::YtDlp(&tools);
     let fast_path = fast::Fast {
         engine: app.state::<AppState>().engine.clone(),
@@ -93,10 +98,14 @@ pub async fn run(
         resolver: &resolver,
         ffmpeg: tools.ffmpeg.clone(),
         cancel: cancel.clone(),
+        started,
     };
     match fast::run(&fast_path, &mut task, &job).await {
         Ok(fast::FastEnd::Handled) => return Ok(()),
-        Ok(fast::FastEnd::Fallback) => {}
+        Ok(fast::FastEnd::Fallback) => {
+            let elapsed = started.elapsed().as_millis();
+            log::info!("media.timing task={task_id} fallback=yt-dlp ms={elapsed}");
+        }
         // Lỗi journal/kiểm dữ liệu: báo lỗi trên task (Tiếp tục được), không để kẹt ở "đang dò".
         Err(problem) => {
             log::warn!("media: đường tải thẳng lỗi ({problem})");

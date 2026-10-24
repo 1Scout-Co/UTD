@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,6 +19,7 @@ use super::content::{
 use super::file::{move_no_clobber, target_path, PartFile};
 use super::http::{host_key, probe, sanitize_suggested_name, Probe};
 use super::limiter::Limiter;
+use super::pulse::Pulse;
 use super::transport::{plain_policy, scoped_policy, Transport};
 use super::verify::{sha256_file, HashOutcome};
 use super::worker::{
@@ -26,6 +27,7 @@ use super::worker::{
 };
 use super::{
     DownloadControl, DownloadOutcome, DownloadRequest, EngineEvent, EngineOptions, ProgressSnapshot,
+    LARGE_FILE_BYTES,
 };
 use crate::db::Journal;
 use crate::safety::{self, GuardAction};
@@ -77,6 +79,7 @@ struct SegmentContext {
     gate: Arc<ConnectionGate>,
     cancel: CancellationToken,
     retry: RetryPolicy,
+    pulse: Arc<Pulse>,
 }
 
 impl SegmentContext {
@@ -97,6 +100,7 @@ impl SegmentContext {
             gate: self.gate.clone(),
             cancel: self.cancel.clone(),
             retry: self.retry,
+            pulse: self.pulse.clone(),
         };
         let results = results.clone();
         join_set.spawn(async move {
@@ -222,6 +226,7 @@ impl DownloadEngine {
         if control.cancel.is_cancelled() {
             return self.pause(task, &control);
         }
+        let pulse = Pulse::new(&task.id, task.parent_id.as_deref());
         task.status = TaskStatus::Resolving;
         task.error = None;
         task.updated_at = now_ms();
@@ -240,6 +245,7 @@ impl DownloadEngine {
                 return self.fail(task, error, &control);
             }
         };
+        pulse.mark("probe");
         if control.cancel.is_cancelled() {
             return self.pause(task, &control);
         }
@@ -277,17 +283,10 @@ impl DownloadEngine {
             Screen::Cancelled => return self.pause(task, &control),
         };
 
+        // Kiểm sớm cho khỏi tải phí; lúc đưa vào chỗ vẫn không ghi đè (`move_no_clobber`).
         let target = target_path(&task.dest_dir, &task.file_name);
         if target.exists() {
-            return self.fail(
-                task,
-                TaskError {
-                    class: ErrorClass::User,
-                    code: "file.exists".into(),
-                    message: "A file with this name already exists.".into(),
-                },
-                &control,
-            );
+            return self.fail(task, file_exists(), &control);
         }
 
         if task.total_bytes == Some(0) {
@@ -295,7 +294,7 @@ impl DownloadEngine {
             task.downloaded_bytes = 0;
             let file = self.open_part(&task, Some(0)).await?;
             file.reset(Some(0))?;
-            return self.finish(task, &control, sniff).await;
+            return self.finish(task, &control, sniff, &pulse).await;
         }
 
         // `task.connections` chỉ là trần; số kết nối thật do bộ điều khiển tự chọn.
@@ -346,7 +345,7 @@ impl DownloadEngine {
             self.journal.save_task(&task)?;
             emit_task(&control, &task);
             if task.downloaded_bytes >= total {
-                return self.finish(task, &control, sniff).await;
+                return self.finish(task, &control, sniff, &pulse).await;
             }
             let end = self
                 .run_segmented(
@@ -358,9 +357,10 @@ impl DownloadEngine {
                     probe.url,
                     total,
                     max_connections,
+                    pulse.clone(),
                 )
                 .await?;
-            return self.conclude(task, control, end, sniff).await;
+            return self.conclude(task, control, end, sniff, &pulse).await;
         }
 
         self.journal.reset_task_progress(&task.id)?;
@@ -372,9 +372,9 @@ impl DownloadEngine {
         let file = self.open_part(&task, task.total_bytes).await?;
         file.reset(task.total_bytes)?;
         let end = self
-            .run_single(&mut task, &control, file, transport, probe)
+            .run_single(&mut task, &control, file, transport, probe, pulse.clone())
             .await?;
-        self.conclude(task, control, end, sniff).await
+        self.conclude(task, control, end, sniff, &pulse).await
     }
 
     async fn conclude(
@@ -383,9 +383,10 @@ impl DownloadEngine {
         control: DownloadControl,
         end: SessionEnd,
         sniff: bool,
+        pulse: &Pulse,
     ) -> Result<DownloadOutcome> {
         match end {
-            SessionEnd::Completed => self.finish(task, &control, sniff).await,
+            SessionEnd::Completed => self.finish(task, &control, sniff, pulse).await,
             SessionEnd::Paused => self.pause(task, &control),
             SessionEnd::Failed(error) => self.fail(task, error, &control),
             SessionEnd::Rejected(error) => {
@@ -464,6 +465,28 @@ impl DownloadEngine {
         }
     }
 
+    /// Số kết nối mở ngay: người gọi chỉ định (media chia ngân sách), file lớn mở luôn như IDM,
+    /// file nhỏ bắt đầu ít rồi bộ điều khiển tự leo.
+    fn initial_connections(&self, control: &DownloadControl, total: u64) -> u16 {
+        control.initial_connections.unwrap_or_else(|| {
+            if total >= LARGE_FILE_BYTES {
+                self.options
+                    .initial_connections
+                    .max(self.options.large_initial_connections)
+            } else {
+                self.options.initial_connections
+            }
+        })
+    }
+
+    fn retry_policy(&self) -> RetryPolicy {
+        RetryPolicy {
+            max_attempts: self.options.max_attempts,
+            idle_timeout: self.options.idle_timeout,
+            stall_timeout: self.options.stall_timeout,
+        }
+    }
+
     async fn open_part(&self, task: &DownloadTask, total: Option<u64>) -> Result<Arc<PartFile>> {
         let path = PathBuf::from(&task.temp_path);
         let file = tokio::task::spawn_blocking(move || PartFile::open(&path, total))
@@ -483,6 +506,7 @@ impl DownloadEngine {
         url: Url,
         total: u64,
         max_connections: u16,
+        pulse: Arc<Pulse>,
     ) -> Result<SessionEnd> {
         let mut runtimes: Vec<Arc<SegmentRuntime>> = segments
             .iter()
@@ -494,11 +518,12 @@ impl DownloadEngine {
         }
         let host = host_key(&url);
         let cancel = control.cancel.clone();
-        let retry = RetryPolicy {
-            max_attempts: self.options.max_attempts,
-            idle_timeout: self.options.idle_timeout,
-        };
-        let initial = usize::from(self.options.initial_connections.min(max_connections).max(1));
+        let retry = self.retry_policy();
+        let initial = usize::from(
+            self.initial_connections(control, total)
+                .min(max_connections)
+                .max(1),
+        );
         let gate = ConnectionGate::new(initial);
         let mut controller = Controller::new(
             initial,
@@ -517,6 +542,7 @@ impl DownloadEngine {
             gate: gate.clone(),
             cancel: cancel.clone(),
             retry,
+            pulse,
         };
         let (results_tx, mut results_rx) = mpsc::unbounded_channel();
         let mut pending_workers = 0usize;
@@ -671,7 +697,8 @@ impl DownloadEngine {
         Ok(added)
     }
 
-    /// Đoạn chậm hơn một nửa đoạn nhanh nhất: tách phần đuôi cho kết nối khác làm.
+    /// Đoạn chậm hơn một nửa đoạn nhanh nhất (kể cả đoạn treo 0 B/s): tách phần đuôi cho kết
+    /// nối khác làm.
     fn split_slowest(
         &self,
         task: &mut DownloadTask,
@@ -692,23 +719,9 @@ impl DownloadEngine {
                 (runtime.clone(), per_second)
             })
             .collect();
-        let fastest = speeds.iter().map(|(_, speed)| *speed).max().unwrap_or(0);
-        if fastest == 0 {
-            return Ok(None);
-        }
-        let slowest = speeds
-            .iter()
-            .filter(|(runtime, per_second)| {
-                *per_second > 0 && per_second.saturating_mul(2) < fastest && !runtime.is_done()
-            })
-            .min_by_key(|(_, per_second)| *per_second)
-            .map(|(runtime, _)| runtime.clone());
-        let Some(runtime) = slowest else {
+        let Some(runtime) = pick_slowest(&speeds, Duration::from_secs_f64(elapsed)) else {
             return Ok(None);
         };
-        if runtime.remaining() < MIN_SPLIT_REMAINING {
-            return Ok(None);
-        }
         let Some(range) = runtime.split_tail(MIN_SPLIT_REMAINING) else {
             return Ok(None);
         };
@@ -732,6 +745,7 @@ impl DownloadEngine {
         file: Arc<PartFile>,
         transport: Transport,
         probe: Probe,
+        pulse: Arc<Pulse>,
     ) -> Result<SessionEnd> {
         let cancel = control.cancel.clone();
         let downloaded = Arc::new(AtomicU64::new(0));
@@ -744,12 +758,10 @@ impl DownloadEngine {
             file,
             limiter: self.limiter.clone(),
             cancel: cancel.clone(),
-            retry: RetryPolicy {
-                max_attempts: self.options.max_attempts,
-                idle_timeout: self.options.idle_timeout,
-            },
+            retry: self.retry_policy(),
             downloaded: downloaded.clone(),
             total: task.total_bytes,
+            pulse,
         };
         let mut join_set = JoinSet::new();
         join_set.spawn(job.run());
@@ -852,7 +864,9 @@ impl DownloadEngine {
         mut task: DownloadTask,
         control: &DownloadControl,
         sniff: bool,
+        pulse: &Pulse,
     ) -> Result<DownloadOutcome> {
+        pulse.mark("downloaded");
         let total = task.total_bytes.unwrap_or(task.downloaded_bytes);
         task.total_bytes = Some(total);
         task.downloaded_bytes = total;
@@ -935,49 +949,11 @@ impl DownloadEngine {
             };
         }
 
-        let synced = async {
-            let file = tokio::fs::OpenOptions::new()
-                .write(true)
-                .open(&temp)
-                .await?;
-            file.sync_all().await
-        }
-        .await;
-        if synced.is_err() {
-            return self.fail(
-                task,
-                TaskError {
-                    class: ErrorClass::Permanent,
-                    code: "disk.sync".into(),
-                    message: "Could not flush the download to disk.".into(),
-                },
-                control,
-            );
-        }
-
         let target = target_path(&task.dest_dir, &task.file_name);
-        if target.exists() {
-            return self.fail(
-                task,
-                TaskError {
-                    class: ErrorClass::User,
-                    code: "file.exists".into(),
-                    message: "A file with this name already exists.".into(),
-                },
-                control,
-            );
+        if let Err(error) = place(&temp, &target, pulse).await {
+            return self.fail(task, error, control);
         }
-        if move_no_clobber(&temp, &target).await.is_err() {
-            return self.fail(
-                task,
-                TaskError {
-                    class: ErrorClass::Permanent,
-                    code: "file.rename".into(),
-                    message: "Could not move the finished file into place.".into(),
-                },
-                control,
-            );
-        }
+        pulse.mark("done");
 
         let _ = safety::mark_of_the_web(&target);
         let timestamp = now_ms();
@@ -1016,6 +992,33 @@ impl DownloadEngine {
     }
 }
 
+/// Xả file tạm xuống đĩa rồi đưa vào chỗ. Không ghi đè: tên đã có (kể cả file người dùng vừa
+/// tạo sau lúc kiểm đầu lượt) ⇒ `file.exists`, file tạm giữ nguyên.
+async fn place(temp: &Path, target: &Path, pulse: &Pulse) -> std::result::Result<(), TaskError> {
+    let synced = async {
+        let file = tokio::fs::OpenOptions::new().write(true).open(temp).await?;
+        file.sync_all().await
+    }
+    .await;
+    if synced.is_err() {
+        return Err(TaskError {
+            class: ErrorClass::Permanent,
+            code: "disk.sync".into(),
+            message: "Could not flush the download to disk.".into(),
+        });
+    }
+    pulse.mark("synced");
+    match move_no_clobber(temp, target).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(file_exists()),
+        Err(_) => Err(TaskError {
+            class: ErrorClass::Permanent,
+            code: "file.rename".into(),
+            message: "Could not move the finished file into place.".into(),
+        }),
+    }
+}
+
 /// HTTP/1.1: mỗi đoạn một kết nối TCP riêng như IDM. HTTP/2 dồn mọi đoạn vào một kết nối,
 /// server giới hạn tốc độ theo kết nối thì thêm "kết nối" cũng không nhanh hơn.
 fn build_client(options: &EngineOptions, redirect: reqwest::redirect::Policy) -> Result<Client> {
@@ -1043,6 +1046,28 @@ fn metadata_changed(task: &DownloadTask, probe: &Probe) -> bool {
         (Some(left), Some(right)) if left != right
     );
     etag_changed || modified_changed || size_changed
+}
+
+/// Đoạn chậm nhất còn đủ lớn để tách, chậm hơn một nửa đoạn nhanh nhất. Đoạn 0 B/s chỉ tính
+/// khi giữ kết nối mở suốt cửa sổ đo (treo thật), không phải đang chờ tới lượt.
+fn pick_slowest(
+    speeds: &[(Arc<SegmentRuntime>, u64)],
+    window: Duration,
+) -> Option<Arc<SegmentRuntime>> {
+    let fastest = speeds.iter().map(|(_, speed)| *speed).max().unwrap_or(0);
+    if fastest == 0 {
+        return None;
+    }
+    speeds
+        .iter()
+        .filter(|(runtime, per_second)| {
+            (*per_second > 0 || runtime.connected_for(window))
+                && per_second.saturating_mul(2) < fastest
+                && !runtime.is_done()
+                && runtime.remaining() >= MIN_SPLIT_REMAINING
+        })
+        .min_by_key(|(_, per_second)| *per_second)
+        .map(|(runtime, _)| runtime.clone())
 }
 
 /// Thêm đoạn đuôi vừa tách ngay sau đoạn gốc và đánh lại số thứ tự.
@@ -1109,6 +1134,14 @@ fn emit_progress(
     }
 }
 
+fn file_exists() -> TaskError {
+    TaskError {
+        class: ErrorClass::User,
+        code: "file.exists".into(),
+        message: "A file with this name already exists.".into(),
+    }
+}
+
 fn cancelled_error() -> TaskError {
     client_error("network.cancelled", "The download was cancelled.")
 }
@@ -1126,5 +1159,65 @@ fn internal_error() -> TaskError {
         class: ErrorClass::Permanent,
         code: "internal.worker".into(),
         message: "A download worker stopped unexpectedly.".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runtime(start: u64, connected: bool) -> Arc<SegmentRuntime> {
+        let runtime = Arc::new(SegmentRuntime::new(&Segment {
+            index: 0,
+            start,
+            end: start + 4 * MIN_SPLIT_REMAINING - 1,
+            downloaded: 0,
+            status: SegmentStatus::Active,
+        }));
+        runtime.set_connected(connected);
+        runtime
+    }
+
+    #[test]
+    fn a_hung_connection_is_the_slowest() {
+        let fast = runtime(0, true);
+        let slow = runtime(1 << 30, true);
+        let hung = runtime(2 << 30, true);
+        let speeds = vec![(fast, 8_000_000), (slow, 1_000_000), (hung.clone(), 0)];
+        let picked = pick_slowest(&speeds, Duration::ZERO).expect("a segment to split");
+        assert!(Arc::ptr_eq(&picked, &hung));
+    }
+
+    #[test]
+    fn a_segment_waiting_for_its_turn_is_not_hung() {
+        let fast = runtime(0, true);
+        let slow = runtime(1 << 30, true);
+        let waiting = runtime(2 << 30, false);
+        let speeds = vec![(fast, 8_000_000), (slow.clone(), 1_000_000), (waiting, 0)];
+        let picked = pick_slowest(&speeds, Duration::ZERO).expect("a segment to split");
+        assert!(Arc::ptr_eq(&picked, &slow));
+        // Mới mở kết nối, chưa đủ một cửa sổ đo: chưa tính là treo.
+        let fresh = runtime(3 << 30, true);
+        let speeds = vec![(runtime(0, true), 8_000_000), (fresh, 0)];
+        assert!(pick_slowest(&speeds, Duration::from_secs(60)).is_none());
+    }
+
+    #[test]
+    fn large_files_open_more_connections_right_away() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let journal = Arc::new(Journal::open(directory.path().join("utd.db")).expect("journal"));
+        let engine = DownloadEngine::new(journal, EngineOptions::default()).expect("engine");
+        let control = DownloadControl::new();
+        assert_eq!(engine.initial_connections(&control, LARGE_FILE_BYTES - 1), 4);
+        assert_eq!(engine.initial_connections(&control, LARGE_FILE_BYTES), 8);
+        let shared = DownloadControl {
+            initial_connections: Some(12),
+            ..DownloadControl::new()
+        };
+        assert_eq!(
+            engine.initial_connections(&shared, 1024),
+            12,
+            "người gọi chia ngân sách thì theo người gọi"
+        );
     }
 }

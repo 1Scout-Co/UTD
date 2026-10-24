@@ -467,6 +467,7 @@ fn spawn_run(
         let control = DownloadControl {
             cancel,
             events: Some(sender),
+            initial_connections: None,
         };
         let result = if resume {
             engine.resume(&task_id, control).await

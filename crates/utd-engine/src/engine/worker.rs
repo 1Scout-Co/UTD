@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use reqwest::header::CONTENT_RANGE;
 use reqwest::{Method, Response, StatusCode};
@@ -12,13 +12,27 @@ use super::adaptive::{is_throttle, ConnectionGate, GateSlot};
 use super::file::PartFile;
 use super::http::{classify_error, failure_from_status, parse_content_range, RequestFailure};
 use super::limiter::Limiter;
+use super::pulse::Pulse;
 use super::transport::Transport;
 use crate::model::{ErrorClass, Segment, SegmentStatus, TaskError};
+
+/// Nhịp hỏi "kết nối khác có đang nhận byte không" của luật treo (tối đa; hạn treo ngắn thì nửa hạn).
+const STALL_RECHECK: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RetryPolicy {
     pub max_attempts: u32,
     pub idle_timeout: Duration,
+    pub stall_timeout: Duration,
+}
+
+impl RetryPolicy {
+    /// Hạn coi là treo sau `stalls` lần cắt liền nhau mà đoạn không thêm byte: gấp đôi mỗi lần
+    /// (mạng chậm thật thì không cắt mãi); chạm `idle_timeout` thì thôi, chỉ còn hạn idle.
+    pub fn stall_window(&self, stalls: u32) -> Option<Duration> {
+        let window = self.stall_timeout.saturating_mul(1 << stalls.min(16));
+        (window < self.idle_timeout).then_some(window)
+    }
 }
 
 pub(crate) struct SegmentRuntime {
@@ -31,6 +45,8 @@ struct RuntimeState {
     end: u64,
     downloaded: u64,
     status: SegmentStatus,
+    /// Lúc mở kết nối đang dùng cho đoạn (`None` khi đoạn đang chờ lượt).
+    connected: Option<Instant>,
 }
 
 impl SegmentRuntime {
@@ -42,6 +58,7 @@ impl SegmentRuntime {
                 end: segment.end,
                 downloaded: segment.downloaded,
                 status: segment.status,
+                connected: None,
             }),
         }
     }
@@ -89,6 +106,18 @@ impl SegmentRuntime {
 
     pub fn mark_status(&self, status: SegmentStatus) {
         self.lock().status = status;
+    }
+
+    /// Đánh dấu đoạn có/không có kết nối mở: đoạn 0 B/s là treo hay chỉ đang chờ tới lượt.
+    pub fn set_connected(&self, connected: bool) {
+        self.lock().connected = connected.then(Instant::now);
+    }
+
+    /// Đoạn đã giữ một kết nối mở liền ít nhất `window`.
+    pub fn connected_for(&self, window: Duration) -> bool {
+        self.lock()
+            .connected
+            .is_some_and(|since| since.elapsed() >= window)
     }
 
     /// Số byte còn phải tải.
@@ -152,27 +181,38 @@ pub(crate) struct SegmentJob {
     pub gate: Arc<ConnectionGate>,
     pub cancel: CancellationToken,
     pub retry: RetryPolicy,
+    pub pulse: Arc<Pulse>,
 }
 
 pub(crate) struct SegmentFailure {
     pub error: TaskError,
 }
 
+/// Đếm lượt của một worker.
+#[derive(Default)]
+struct Tries {
+    attempts: u32,
+    /// Số lần liền nhau kết nối bị cắt vì treo mà đoạn không thêm byte nào.
+    stalls: u32,
+}
+
+/// Việc tiếp theo sau một lượt kết nối.
+enum Next {
+    Now,
+    After(Duration),
+    Stop(Result<(), SegmentFailure>),
+}
+
 pub(crate) async fn run_segment(job: SegmentJob) -> Result<(), SegmentFailure> {
-    let mut attempts = 0u32;
+    let mut tries = Tries::default();
     loop {
-        if job.cancel.is_cancelled() {
-            return Ok(());
-        }
-        if job.segment.is_done() {
-            job.segment.mark_status(SegmentStatus::Done);
+        if job.cancel.is_cancelled() || job.finished() {
             return Ok(());
         }
         let Some(slot) = job.gate.enter(&job.cancel).await else {
             return Ok(());
         };
-        if job.segment.is_done() {
-            job.segment.mark_status(SegmentStatus::Done);
+        if job.finished() {
             return Ok(());
         }
         let Some(limit) = job.limiter.acquire(&job.host, &job.cancel).await else {
@@ -182,53 +222,108 @@ pub(crate) async fn run_segment(job: SegmentJob) -> Result<(), SegmentFailure> {
         if slot.yield_if_over() {
             continue;
         }
-        let live = job.gate.connect();
-        let outcome = job.attempt(&slot).await;
-        drop(live);
+        let stall = job.retry.stall_window(tries.stalls);
+        let (outcome, moved) = job.connected(&slot, stall).await;
         drop(limit);
         drop(slot);
-        match outcome {
-            Attempt::Complete | Attempt::Yielded | Attempt::RangeDone => attempts = 0,
-            Attempt::Progress(failure) => {
-                job.gate.report(&failure);
-                attempts = 0;
-            }
-            Attempt::Cancelled => return Ok(()),
-            Attempt::Retry(failure) => {
-                job.gate.report(&failure);
-                // Server chê nhiều kết nối mà các kết nối khác vẫn chạy: chỉ cần bớt, không phải hỏng.
-                if !(is_throttle(&failure) && job.gate.live() > 0) {
-                    attempts += 1;
-                }
-                if attempts >= job.retry.max_attempts {
-                    job.segment.mark_status(SegmentStatus::Failed);
-                    return Err(SegmentFailure { error: failure.error });
-                }
-                let delay = retry_delay(&failure, attempts.max(1), job.segment.index());
-                tokio::select! {
-                    _ = job.cancel.cancelled() => return Ok(()),
-                    _ = sleep(delay) => {}
-                }
-            }
-            Attempt::Fatal(error) => {
-                job.segment.mark_status(SegmentStatus::Failed);
-                return Err(SegmentFailure { error });
-            }
+        let delay = match job.next_step(outcome, moved, &mut tries) {
+            Next::Now => continue,
+            Next::After(delay) => delay,
+            Next::Stop(result) => return result,
+        };
+        tokio::select! {
+            _ = job.cancel.cancelled() => return Ok(()),
+            _ = sleep(delay) => {}
         }
     }
 }
 
 impl SegmentJob {
+    fn finished(&self) -> bool {
+        let done = self.segment.is_done();
+        if done {
+            self.segment.mark_status(SegmentStatus::Done);
+        }
+        done
+    }
+
+    /// Sau một lượt kết nối: thử lại ngay, chờ rồi thử, hay dừng (`moved`: đoạn có thêm byte).
+    fn next_step(&self, outcome: Attempt, moved: bool, tries: &mut Tries) -> Next {
+        if moved {
+            tries.stalls = 0;
+        }
+        match outcome {
+            Attempt::Complete | Attempt::Yielded | Attempt::RangeDone => {
+                tries.attempts = 0;
+                Next::Now
+            }
+            Attempt::Progress(failure) => {
+                self.gate.report(&failure);
+                tries.attempts = 0;
+                Next::Now
+            }
+            // Im trong khi kết nối khác vẫn nhận byte: đóng rồi mở lại sau một chút, không tính
+            // lượt (đã có byte thì như Progress).
+            Attempt::Stalled(failure) => {
+                self.gate.report(&failure);
+                if moved {
+                    tries.attempts = 0;
+                } else {
+                    tries.stalls += 1;
+                }
+                Next::After(stall_delay(tries.stalls))
+            }
+            Attempt::Cancelled => Next::Stop(Ok(())),
+            Attempt::Retry(failure) => {
+                self.gate.report(&failure);
+                // Server chê nhiều kết nối mà các kết nối khác vẫn chạy: chỉ cần bớt, không phải hỏng.
+                if !(is_throttle(&failure) && self.gate.live() > 0) {
+                    tries.attempts += 1;
+                }
+                if tries.attempts >= self.retry.max_attempts {
+                    self.segment.mark_status(SegmentStatus::Failed);
+                    return Next::Stop(Err(SegmentFailure { error: failure.error }));
+                }
+                let delay = retry_delay(&failure, tries.attempts.max(1), self.segment.index());
+                Next::After(delay)
+            }
+            Attempt::Fatal(error) => {
+                self.segment.mark_status(SegmentStatus::Failed);
+                Next::Stop(Err(SegmentFailure { error }))
+            }
+        }
+    }
+
+    /// Mở một kết nối cho đoạn và tải tới khi xong/hỏng; kèm cờ đoạn có thêm byte không.
+    async fn connected(&self, slot: &GateSlot, stall: Option<Duration>) -> (Attempt, bool) {
+        let live = self.gate.connect();
+        self.segment.set_connected(true);
+        let before = self.segment.downloaded();
+        let outcome = self.attempt(slot, stall).await;
+        self.segment.set_connected(false);
+        drop(live);
+        (outcome, self.segment.downloaded() > before)
+    }
+
+    fn watch(&self, stall: Option<Duration>) -> Watch<'_> {
+        Watch {
+            pulse: &self.pulse,
+            idle: self.retry.idle_timeout,
+            stall,
+        }
+    }
+
     /// Một lượt giữ kết nối: tải tiếp đoạn bằng các yêu cầu nối nhau (mỗi yêu cầu không quá
     /// trần byte của task), dùng lại cùng kết nối keep-alive giữa các yêu cầu.
-    async fn attempt(&self, slot: &GateSlot) -> Attempt {
+    async fn attempt(&self, slot: &GateSlot, stall: Option<Duration>) -> Attempt {
+        let watch = self.watch(stall);
         let mut wrote = false;
         loop {
             let Some(next) = self.segment.next_offset() else {
                 return Attempt::Complete;
             };
             let end = self.transport.request_end(next, self.segment.end());
-            match self.request(next, end, slot).await {
+            match self.request(next, end, slot, &watch).await {
                 Attempt::RangeDone => {
                     wrote = true;
                     if self.cancel.is_cancelled() {
@@ -247,12 +342,12 @@ impl SegmentJob {
         }
     }
 
-    async fn request(&self, next: u64, end: u64, slot: &GateSlot) -> Attempt {
+    async fn request(&self, next: u64, end: u64, slot: &GateSlot, watch: &Watch<'_>) -> Attempt {
         let range = format!("bytes={next}-{end}");
-        let sent = send_within(&self.transport, &self.url, Some(&range), self.retry.idle_timeout);
-        let response = match sent.await {
-            Ok(response) => response,
-            Err(failure) => return Attempt::Retry(failure),
+        let response = match send_within(&self.transport, &self.url, Some(&range), watch).await {
+            Some(Ok(response)) => response,
+            Some(Err(failure)) => return Attempt::Retry(failure),
+            None => return Attempt::Stalled(stall_failure()),
         };
         let status = response.status();
         if status == StatusCode::PARTIAL_CONTENT {
@@ -282,7 +377,7 @@ impl SegmentJob {
                     "The file size changed on the server.",
                 ));
             }
-            return self.stream(response, slot, end).await;
+            return self.stream(response, slot, end, watch).await;
         }
         if status.is_success() {
             return Attempt::Fatal(task_error(
@@ -295,15 +390,24 @@ impl SegmentJob {
     }
 
     /// Nhận thân của yêu cầu đã xin tới byte `stop` (gồm).
-    async fn stream(&self, mut response: Response, slot: &GateSlot, stop: u64) -> Attempt {
+    async fn stream(
+        &self,
+        mut response: Response,
+        slot: &GateSlot,
+        stop: u64,
+        watch: &Watch<'_>,
+    ) -> Attempt {
         let mut wrote = false;
         loop {
             let chunk = tokio::select! {
                 _ = self.cancel.cancelled() => return Attempt::Cancelled,
-                result = timeout(self.retry.idle_timeout, response.chunk()) => match result {
-                    Err(_) => return retry_or_progress(idle_failure(), wrote),
-                    Ok(Err(error)) => return retry_or_progress(classify_error(&error), wrote),
-                    Ok(Ok(None)) => {
+                waited = watch.wait(response.chunk()) => match waited {
+                    Waited::Idle => return retry_or_progress(idle_failure(), wrote),
+                    Waited::Stalled => return Attempt::Stalled(stall_failure()),
+                    Waited::Done(Err(error)) => {
+                        return retry_or_progress(classify_error(&error), wrote);
+                    }
+                    Waited::Done(Ok(None)) => {
                         // Thân kết thúc đúng như server khai: hết phần đã xin, hoặc server trả
                         // một khúc ngắn hơn ⇒ xin tiếp từ chỗ đang dở, không phải lỗi mạng.
                         return match self.segment.next_offset() {
@@ -312,7 +416,7 @@ impl SegmentJob {
                             Some(_) => Attempt::Retry(closed_failure()),
                         };
                     }
-                    Ok(Ok(Some(chunk))) => chunk,
+                    Waited::Done(Ok(Some(chunk))) => chunk,
                 },
             };
             if chunk.is_empty() {
@@ -341,6 +445,7 @@ impl SegmentJob {
         if self.file.write_at(next, &chunk[..take]).is_err() {
             return WriteResult::Disk;
         }
+        self.pulse.beat();
         state.downloaded += take as u64;
         state.status = SegmentStatus::Active;
         if self.segment.start + state.downloaded > state.end {
@@ -364,6 +469,7 @@ pub(crate) struct StreamJob {
     pub total: Option<u64>,
     /// Server nhận Range: theo trần byte mỗi yêu cầu của task (nếu có).
     pub ranged: bool,
+    pub pulse: Arc<Pulse>,
 }
 
 impl StreamJob {
@@ -387,13 +493,9 @@ impl StreamJob {
                 None if position > 0 => Some(format!("bytes={position}-")),
                 None => None,
             };
-            let sent = send_within(
-                &self.transport,
-                &self.url,
-                range.as_deref(),
-                self.retry.idle_timeout,
-            )
-            .await;
+            let sent = send_within(&self.transport, &self.url, range.as_deref(), &self.watch())
+                .await
+                .unwrap_or_else(|| Err(idle_failure()));
             let mut response = match sent {
                 Ok(response) => response,
                 Err(failure) => {
@@ -505,7 +607,7 @@ impl StreamJob {
                 Attempt::Complete | Attempt::Yielded => return Ok(()),
                 Attempt::Cancelled => return Ok(()),
                 Attempt::RangeDone | Attempt::Progress(_) => attempts = 0,
-                Attempt::Retry(failure) => {
+                Attempt::Retry(failure) | Attempt::Stalled(failure) => {
                     attempts += 1;
                     if attempts >= self.retry.max_attempts {
                         return Err(SegmentFailure { error: failure.error });
@@ -521,6 +623,15 @@ impl StreamJob {
         }
     }
 
+    /// Chỉ một kết nối: không có kết nối khác để so, chờ đủ `idle_timeout`.
+    fn watch(&self) -> Watch<'_> {
+        Watch {
+            pulse: &self.pulse,
+            idle: self.retry.idle_timeout,
+            stall: None,
+        }
+    }
+
     /// Byte cuối (gồm) cho yêu cầu kế tiếp khi task có trần byte và server nhận Range.
     fn request_stop(&self, position: u64) -> Option<u64> {
         let cap = self.transport.max_request().filter(|_| self.ranged)?;
@@ -530,15 +641,20 @@ impl StreamJob {
 
     /// Nhận thân; `stop` là byte cuối đã xin khi yêu cầu có trần.
     async fn stream(&self, response: &mut Response, stop: Option<u64>) -> Attempt {
+        let watch = self.watch();
         let mut wrote = false;
         loop {
             let chunk = tokio::select! {
                 _ = self.cancel.cancelled() => return Attempt::Cancelled,
-                result = timeout(self.retry.idle_timeout, response.chunk()) => match result {
-                    Err(_) => return retry_or_progress(idle_failure(), wrote),
-                    Ok(Err(error)) => return retry_or_progress(classify_error(&error), wrote),
-                    Ok(Ok(None)) => return self.body_ended(stop, wrote),
-                    Ok(Ok(Some(chunk))) => chunk,
+                waited = watch.wait(response.chunk()) => match waited {
+                    Waited::Idle | Waited::Stalled => {
+                        return retry_or_progress(idle_failure(), wrote);
+                    }
+                    Waited::Done(Err(error)) => {
+                        return retry_or_progress(classify_error(&error), wrote);
+                    }
+                    Waited::Done(Ok(None)) => return self.body_ended(stop, wrote),
+                    Waited::Done(Ok(Some(chunk))) => chunk,
                 },
             };
             if chunk.is_empty() {
@@ -555,6 +671,7 @@ impl StreamJob {
             if self.file.write_at(position, &chunk[..take]).is_err() {
                 return Attempt::Fatal(disk_error());
             }
+            self.pulse.beat();
             self.downloaded
                 .store(position + take as u64, Ordering::Relaxed);
             wrote = true;
@@ -587,6 +704,8 @@ enum Attempt {
     RangeDone,
     /// Đã tải được một phần rồi kết nối hỏng: thử lại ngay, không tính lượt.
     Progress(RequestFailure),
+    /// Kết nối im quá hạn treo trong khi kết nối khác vẫn nhận byte: đóng, mở lại, không tính lượt.
+    Stalled(RequestFailure),
     /// Nhả kết nối vì đang thừa so với mục tiêu.
     Yielded,
     Retry(RequestFailure),
@@ -600,19 +719,96 @@ enum WriteResult {
     Disk,
 }
 
-/// Gửi GET, chờ đầu phản hồi tối đa `idle`: kết nối chết lặng (NAT rớt, server treo) không giữ
-/// đoạn mãi; quá hạn thì báo như rớt mạng để thử lại.
+/// Hạn chờ byte của một kết nối.
+struct Watch<'a> {
+    pulse: &'a Pulse,
+    idle: Duration,
+    /// Có ⇒ im quá chừng này mà kết nối khác của lượt tải đang nhận byte (xem `stalled`) thì coi
+    /// là treo (học Surge `health.go`, fast-down `multi.rs`).
+    stall: Option<Duration>,
+}
+
+enum Waited<T> {
+    Done(T),
+    /// Im quá `idle`.
+    Idle,
+    /// Im quá hạn treo trong khi kết nối khác vẫn nhận byte.
+    Stalled,
+}
+
+impl Watch<'_> {
+    async fn wait<T>(&self, work: impl Future<Output = T>) -> Waited<T> {
+        let _waiting = self.pulse.waiting();
+        let Some(stall) = self.stall else {
+            return match timeout(self.idle, work).await {
+                Ok(output) => Waited::Done(output),
+                Err(_) => Waited::Idle,
+            };
+        };
+        tokio::pin!(work);
+        let since = Instant::now();
+        let idle_at = since + self.idle;
+        let recheck = stall_recheck(stall);
+        // Nhịp hỏi đầu sớm hơn hạn treo một nhịp: tới hạn đã có đủ hai nhịp để xét.
+        let mut check_at = (since + stall.saturating_sub(recheck)).min(idle_at);
+        let mut heard_from = since.max(check_at - recheck);
+        let mut heard_before = false;
+        loop {
+            tokio::select! {
+                biased;
+                output = &mut work => return Waited::Done(output),
+                _ = sleep(check_at.saturating_duration_since(Instant::now())) => {}
+            }
+            let now = Instant::now();
+            if now >= idle_at {
+                return Waited::Idle;
+            }
+            let heard = self.pulse.heard_since(heard_from);
+            if now >= since + stall && self.stalled(since, heard, heard_before) {
+                return Waited::Stalled;
+            }
+            (heard_from, heard_before) = (now, heard);
+            check_at = (now + recheck).min(idle_at);
+        }
+    }
+
+    /// Đã im quá hạn treo: chỉ riêng kết nối này hỏng hay mạng rớt cả loạt. Còn kết nối khác đang
+    /// mở thì chúng phải đang nhận byte (trong cả hai nhịp hỏi gần nhất): cả loạt cùng im là mạng
+    /// rớt, chờ đủ `idle` như cũ; một kết nối chạy lại trước vài ms lúc mạng có lại cũng chưa tính.
+    /// Chỉ còn mình mở: kết nối khác đã nhận byte sau lúc mình im (xong việc trong lúc mình treo).
+    fn stalled(&self, since: Instant, heard: bool, heard_before: bool) -> bool {
+        if self.pulse.others_waiting() {
+            heard && heard_before
+        } else {
+            self.pulse.heard_since(since)
+        }
+    }
+}
+
+/// Nhịp hỏi của luật treo: nửa hạn treo, không quá `STALL_RECHECK`.
+fn stall_recheck(stall: Duration) -> Duration {
+    (stall / 2).clamp(Duration::from_millis(1), STALL_RECHECK)
+}
+
+/// Gửi GET, chờ đầu phản hồi trong hạn của `watch`: kết nối chết lặng (NAT rớt, server treo)
+/// không giữ đoạn mãi; quá hạn thì báo như rớt mạng để thử lại, `None` khi bị coi là treo.
 async fn send_within(
     transport: &Transport,
     url: &Url,
     range: Option<&str>,
-    idle: Duration,
-) -> Result<Response, RequestFailure> {
-    match timeout(idle, transport.send(Method::GET, url, range, None)).await {
-        Ok(Ok(response)) => Ok(response),
-        Ok(Err(error)) => Err(classify_error(&error)),
-        Err(_) => Err(idle_failure()),
+    watch: &Watch<'_>,
+) -> Option<Result<Response, RequestFailure>> {
+    let sent = transport.send(Method::GET, url, range, None);
+    match watch.wait(sent).await {
+        Waited::Done(sent) => Some(sent.map_err(|error| classify_error(&error))),
+        Waited::Idle => Some(Err(idle_failure())),
+        Waited::Stalled => None,
     }
+}
+
+/// Chờ trước khi mở lại kết nối vừa cắt vì treo: ngắn, tăng dần để không xoáy.
+fn stall_delay(stalls: u32) -> Duration {
+    Duration::from_millis(200u64 << stalls.min(3))
 }
 
 fn retry_or_progress(failure: RequestFailure, wrote: bool) -> Attempt {
@@ -644,6 +840,17 @@ fn idle_failure() -> RequestFailure {
             ErrorClass::Transient,
             "network.idle",
             "The server stopped sending data.",
+        ),
+        retry_after: None,
+    }
+}
+
+fn stall_failure() -> RequestFailure {
+    RequestFailure {
+        error: task_error(
+            ErrorClass::Transient,
+            "network.stalled",
+            "The connection stopped sending data while others kept going.",
         ),
         retry_after: None,
     }
@@ -714,6 +921,108 @@ mod tests {
             runtime
                 .split_tail(8 * crate::model::MIN_SEGMENT_BYTES)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn stall_window_doubles_then_leaves_only_the_idle_timeout() {
+        let policy = RetryPolicy {
+            max_attempts: 8,
+            idle_timeout: Duration::from_secs(30),
+            stall_timeout: Duration::from_secs(5),
+        };
+        let windows: Vec<_> = (0..4).map(|stalls| policy.stall_window(stalls)).collect();
+        let seconds = |value| Some(Duration::from_secs(value));
+        assert_eq!(windows, vec![seconds(5), seconds(10), seconds(20), None]);
+        assert!(policy.stall_window(u32::MAX).is_none());
+    }
+
+    fn watch(pulse: &Pulse, idle: Duration) -> Watch<'_> {
+        Watch {
+            pulse,
+            idle,
+            stall: Some(Duration::from_millis(200)),
+        }
+    }
+
+    /// Chờ im (không bao giờ có byte) cạnh một kết nối khác chạy `other`.
+    async fn silent_beside(watch: &Watch<'_>, other: impl Future<Output = ()>) -> Waited<()> {
+        tokio::select! {
+            waited = watch.wait(std::future::pending::<()>()) => waited,
+            _ = other => unreachable!("the other connection never ends"),
+        }
+    }
+
+    #[tokio::test]
+    async fn waits_the_idle_timeout_when_no_other_connection_is_heard() {
+        let pulse = Pulse::new("task", None);
+        let watch = watch(&pulse, Duration::from_millis(600));
+        let started = Instant::now();
+        let waited = watch.wait(std::future::pending::<()>()).await;
+        assert!(matches!(waited, Waited::Idle));
+        assert!(started.elapsed() >= Duration::from_millis(600));
+    }
+
+    #[tokio::test]
+    async fn cuts_a_silent_wait_once_the_others_finished_without_it() {
+        // Kết nối khác nhận byte sau lúc kết nối này im rồi xong việc, đóng: mạng vẫn chạy.
+        let pulse = Pulse::new("task", None);
+        let watch = watch(&pulse, Duration::from_secs(30));
+        let other = async {
+            sleep(Duration::from_millis(20)).await;
+            pulse.beat();
+            std::future::pending::<()>().await
+        };
+        let started = Instant::now();
+        assert!(matches!(silent_beside(&watch, other).await, Waited::Stalled));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn cuts_a_silent_wait_while_another_open_connection_keeps_receiving() {
+        let pulse = Pulse::new("task", None);
+        let watch = watch(&pulse, Duration::from_secs(30));
+        let other = async {
+            let _open = pulse.waiting();
+            loop {
+                sleep(Duration::from_millis(10)).await;
+                pulse.beat();
+            }
+        };
+        let started = Instant::now();
+        assert!(matches!(silent_beside(&watch, other).await, Waited::Stalled));
+        let elapsed = started.elapsed();
+        assert!(elapsed >= Duration::from_millis(200), "cut after {elapsed:?}");
+        assert!(elapsed < Duration::from_secs(5), "cut after {elapsed:?}");
+    }
+
+    #[tokio::test]
+    async fn waits_the_idle_timeout_when_every_open_connection_goes_quiet() {
+        // Mạng rớt cả loạt: kết nối khác vẫn mở, nhận khúc cuối ngay sau lúc kết nối này im rồi
+        // cũng im. Không phải treo riêng một kết nối ⇒ chờ đủ idle, không cắt.
+        let pulse = Pulse::new("task", None);
+        let watch = watch(&pulse, Duration::from_millis(1200));
+        let other = async {
+            let _open = pulse.waiting();
+            sleep(Duration::from_millis(20)).await;
+            pulse.beat();
+            std::future::pending::<()>().await
+        };
+        let started = Instant::now();
+        assert!(matches!(silent_beside(&watch, other).await, Waited::Idle));
+        assert!(started.elapsed() >= Duration::from_millis(1200));
+    }
+
+    #[test]
+    fn stall_recheck_is_half_the_window_at_most_the_recheck() {
+        assert_eq!(stall_recheck(Duration::from_secs(5)), STALL_RECHECK);
+        assert_eq!(
+            stall_recheck(Duration::from_millis(200)),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            stall_recheck(Duration::from_nanos(1)),
+            Duration::from_millis(1)
         );
     }
 }

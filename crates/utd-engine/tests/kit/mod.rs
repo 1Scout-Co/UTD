@@ -6,8 +6,8 @@ use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -62,8 +62,55 @@ pub struct Reply {
     pub rate: Option<u64>,
     /// Gửi chừng này byte thân rồi đóng kết nối.
     pub cut_after: Option<usize>,
+    /// Gửi chừng này byte thân rồi im, giữ kết nối mở tới khi phía tải đóng (kết nối treo).
+    pub stall_after: Option<usize>,
     /// Chờ chừng này rồi mới gửi đầu phản hồi (server treo, kết nối chết lặng).
     pub delay: Option<Duration>,
+    /// Đợt rớt mạng dùng chung: mọi phản hồi mang nó cùng im trong cùng một khoảng.
+    pub outage: Option<Arc<Outage>>,
+}
+
+/// Mạng rớt cả loạt (Wi-Fi chuyển điểm phát, modem khởi động lại): mọi phản hồi mang cùng một
+/// `Outage` cùng im trong `[from, from + length)`, tính từ lúc phản hồi đầu tiên bắt đầu gửi.
+pub struct Outage {
+    epoch: OnceLock<Instant>,
+    from: Duration,
+    length: Duration,
+    held: AtomicUsize,
+}
+
+impl Outage {
+    pub fn new(from: Duration, length: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            epoch: OnceLock::new(),
+            from,
+            length,
+            held: AtomicUsize::new(0),
+        })
+    }
+
+    /// Khoảng im `[đầu, cuối)`; `None` khi chưa có phản hồi nào.
+    pub fn window(&self) -> Option<(Instant, Instant)> {
+        let begin = *self.epoch.get()? + self.from;
+        Some((begin, begin + self.length))
+    }
+
+    /// Số lần một phản hồi phải im chờ hết đợt rớt.
+    pub fn held(&self) -> usize {
+        self.held.load(Ordering::SeqCst)
+    }
+
+    async fn hold(&self) {
+        self.epoch.get_or_init(Instant::now);
+        let Some((begin, end)) = self.window() else {
+            return;
+        };
+        let now = Instant::now();
+        if now >= begin && now < end {
+            self.held.fetch_add(1, Ordering::SeqCst);
+            sleep(end - now).await;
+        }
+    }
 }
 
 impl Reply {
@@ -76,7 +123,9 @@ impl Reply {
             no_length: false,
             rate: None,
             cut_after: None,
+            stall_after: None,
             delay: None,
+            outage: None,
         }
     }
 
@@ -204,6 +253,9 @@ async fn write_reply(stream: &mut TcpStream, reply: &Reply, head: bool) -> bool 
     if let Some(delay) = reply.delay {
         sleep(delay).await;
     }
+    if let Some(outage) = &reply.outage {
+        outage.hold().await;
+    }
     let mut text = format!("HTTP/1.1 {} {}\r\n", reply.status, reason(reply.status));
     for (name, value) in &reply.headers {
         let _ = write!(text, "{name}: {value}\r\n");
@@ -224,9 +276,16 @@ async fn write_reply(stream: &mut TcpStream, reply: &Reply, head: bool) -> bool 
     if head {
         return stream.flush().await.is_ok();
     }
-    let limit = reply.cut_after.unwrap_or(usize::MAX).min(reply.body.len());
+    let limit = reply
+        .cut_after
+        .unwrap_or(usize::MAX)
+        .min(reply.stall_after.unwrap_or(usize::MAX))
+        .min(reply.body.len());
     let mut written = 0;
     while written < limit {
+        if let Some(outage) = &reply.outage {
+            outage.hold().await;
+        }
         let end = (written + PIECE).min(limit);
         let piece = &reply.body[written..end];
         let sent = if reply.chunked {
@@ -247,6 +306,16 @@ async fn write_reply(stream: &mut TcpStream, reply: &Reply, head: bool) -> bool 
             ))
             .await;
         }
+    }
+    if reply
+        .stall_after
+        .is_some_and(|stall| stall < reply.body.len())
+    {
+        // Treo: không gửi thêm, chờ phía tải tự đóng (đọc được EOF) hoặc hết giờ thử.
+        let _ = stream.flush().await;
+        let mut byte = [0u8; 1];
+        let _ = tokio::time::timeout(Duration::from_secs(60), stream.read(&mut byte)).await;
+        return false;
     }
     if reply.cut_after.is_some_and(|cut| cut < reply.body.len()) {
         let _ = stream.flush().await;
@@ -404,12 +473,15 @@ pub fn sha256(bytes: &[u8]) -> String {
 pub fn options(initial: u16, max: u16) -> EngineOptions {
     EngineOptions {
         initial_connections: initial,
+        large_initial_connections: initial,
         max_connections: max,
         host_connections: 16,
         global_connections: 32,
         max_attempts: 5,
         connect_timeout: Duration::from_secs(5),
         idle_timeout: Duration::from_secs(5),
+        // Nhỏ hơn idle_timeout như cấu hình thật: luật "kết nối treo" chạy trong mọi bài.
+        stall_timeout: Duration::from_secs(2),
         sample_interval: Duration::from_millis(50),
         checkpoint_interval: Duration::from_millis(100),
         balance_interval: Duration::from_millis(200),

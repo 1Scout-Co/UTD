@@ -83,6 +83,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "utd-engine",
+ "utd-mp4",
  "uuid",
  "windows",
  "windows-core",
@@ -4641,6 +4642,7 @@ name = "utd-engine"
 version = "0.1.0"
 dependencies = [
  "httpdate",
+ "log",
  "percent-encoding",
  "reqwest",
  "rusqlite",
@@ -4654,6 +4656,10 @@ dependencies = [
  "url",
  "uuid",
 ]
+
+[[package]]
+name = "utd-mp4"
+version = "0.1.0"
 
 [[package]]
 name = "utf8_iter"

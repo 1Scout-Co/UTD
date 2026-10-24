@@ -6,6 +6,7 @@ mod output;
 /// `parts::discard_parts`: dọn luồng con trước khi xoá task media khỏi danh sách.
 pub(crate) mod parts;
 mod probe;
+mod probe_cache;
 mod resolve;
 mod rollup;
 mod runner;
@@ -77,9 +78,14 @@ pub async fn add_media_download(
     app: AppHandle,
     input: AddMediaInput,
 ) -> Result<DownloadTask, String> {
-    tauri::async_runtime::spawn_blocking(move || enqueue_media(app, input))
+    let started = std::time::Instant::now();
+    let task = tauri::async_runtime::spawn_blocking(move || enqueue_media(app, input))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())??;
+    // Mốc đo: thời gian lệnh "Tải" (job đã chạy song song, log `media.timing … start`).
+    let elapsed = started.elapsed().as_millis();
+    log::info!("media.timing task={} queued ms={elapsed}", task.id);
+    Ok(task)
 }
 
 fn enqueue_media(app: AppHandle, input: AddMediaInput) -> Result<DownloadTask, String> {

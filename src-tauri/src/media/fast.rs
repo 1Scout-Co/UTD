@@ -1,7 +1,8 @@
 //! Đường tải nhanh kiểu IDM: yt-dlp chỉ cho URL của từng luồng; engine UTD tải mỗi luồng bằng
 //! nhiều kết nối (mỗi yêu cầu HTTP ≤ `http_chunk_size`, YouTube bóp yêu cầu lớn hơn), video và
-//! âm thanh cùng lúc, rồi ffmpeg ghép. Không dùng được (HLS, DRM, thiếu ffmpeg…) hoặc hỏng trước
-//! khi có byte nào thì để yt-dlp tải như cũ.
+//! âm thanh cùng lúc, rồi ffmpeg ghép. Lượt đầu dùng luồng của lần "Phân tích" nếu còn hạn (khỏi
+//! chạy yt-dlp lần hai). Không dùng được (HLS, DRM, thiếu ffmpeg…) hoặc hỏng trước khi có byte nào
+//! thì để yt-dlp tải như cũ.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -23,7 +24,7 @@ use crate::media::mux::Hint;
 use crate::media::resolve::{self, Layout, Resolved, Stream};
 use crate::media::rollup::Rollup;
 use crate::media::tools::MediaTools;
-use crate::media::{output, parts};
+use crate::media::{output, parts, probe_cache};
 
 /// Lấy link mới tối đa chừng này lần mỗi lượt khi máy chủ báo link hết hạn (403/410).
 const MAX_REFRESHES: u32 = 2;
@@ -36,6 +37,19 @@ pub(super) type ResolveFuture<'a> =
 /// Hỏi URL các luồng; bài thử thay yt-dlp bằng kết quả cố định.
 pub(super) trait Resolver: Send + Sync {
     fn resolve<'a>(&'a self, url: &'a str, selector: &'a str) -> ResolveFuture<'a>;
+
+    /// Luồng của lần "Phân tích" còn hạn, khỏi chạy yt-dlp lần hai. Chỉ lượt đầu (`start`) hỏi;
+    /// lấy link mới (`refresh`) luôn qua `resolve`.
+    fn cached(&self, job: &MediaJob) -> Option<Resolved> {
+        probe_cache::lookup(&job_urls(job), &job.selector, resolve::now_secs())
+    }
+}
+
+/// URL tải và URL trang của job: khoá của luồng đã phân tích.
+fn job_urls(job: &MediaJob) -> Vec<&str> {
+    std::iter::once(job.url.as_str())
+        .chain(job.page_url.as_deref())
+        .collect()
 }
 
 pub(super) struct YtDlp<'a>(pub &'a MediaTools);
@@ -54,6 +68,8 @@ pub(super) struct Fast<'a> {
     pub ffmpeg: Option<PathBuf>,
     /// Token của task media: huỷ ⇒ mọi task con dừng, giữ đoạn đã tải.
     pub cancel: CancellationToken,
+    /// Lúc job bắt đầu chạy: mốc của log `media.timing`.
+    pub started: Instant,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -76,6 +92,25 @@ struct Plan {
     children: Vec<DownloadTask>,
     hints: Vec<Hint>,
     estimates: Vec<Option<u64>>,
+    source: Source,
+}
+
+/// Link của kế hoạch tải vừa hỏi yt-dlp hay lấy lại từ chỗ đã lưu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// Lần "Phân tích" hoặc journal của lượt trước: có thể đã cũ (đổi mạng, hết hạn sớm).
+    Cached,
+    /// Vừa hỏi yt-dlp.
+    Fresh,
+}
+
+impl Source {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Cached => "cached",
+            Self::Fresh => "fresh",
+        }
+    }
 }
 
 enum Batch {
@@ -131,42 +166,73 @@ pub(super) async fn run(
                 return Ok(FastEnd::Handled);
             }
             Batch::Failed(failure) => {
-                if !parts::has_bytes(&fast.journal, &task.id) {
-                    parts::discard_parts(&fast.journal, &task.id);
-                    // yt-dlp tự báo kích thước của nó.
-                    task.total_bytes = None;
-                    return Ok(FastEnd::Fallback);
+                let step = recover(fast, task, job, plan.source, &failure, &mut refreshes).await?;
+                match step {
+                    Step::Go(next) => plan = next,
+                    Step::Fallback => return Ok(FastEnd::Fallback),
+                    Step::Stop => return Ok(FastEnd::Handled),
                 }
-                if link_refused(&failure) && refreshes < MAX_REFRESHES {
-                    refreshes += 1;
-                    let children = fast.journal.list_children(&task.id).map_err(text)?;
-                    match refresh(fast, task, job, children).await? {
-                        Step::Go(next) => plan = next,
-                        Step::Fallback => return Ok(FastEnd::Fallback),
-                        Step::Stop => return Ok(FastEnd::Handled),
-                    }
-                    continue;
-                }
-                finish::fail(fast.sink, &fast.journal, task, part_error(&failure))?;
-                return Ok(FastEnd::Handled);
             }
         }
     }
+    timing(fast, task, "downloaded");
     output::mux_and_finish(fast, task, plan.layout, &plan.hints).await?;
+    timing(fast, task, &format!("output status={:?}", task.status));
     Ok(FastEnd::Handled)
 }
 
-/// Lượt đầu: hỏi yt-dlp, kiểm tải thẳng được không, tạo task con.
+/// Mốc đo từng pha (`media.timing task=… <pha> ms=…`), tính từ lúc job bắt đầu chạy.
+pub(super) fn timing(fast: &Fast<'_>, task: &DownloadTask, phase: &str) {
+    let elapsed = fast.started.elapsed().as_millis();
+    log::info!("media.timing task={} {phase} ms={elapsed}", task.id);
+}
+
+/// Luồng con hỏng. Chưa có byte: link đã lưu (lần "Phân tích", lượt trước) thì hỏi yt-dlp link mới
+/// trước, link vừa hỏi thì để yt-dlp tự tải. Đã có byte: máy chủ từ chối link thì lấy link mới.
+async fn recover(
+    fast: &Fast<'_>,
+    task: &mut DownloadTask,
+    job: &MediaJob,
+    source: Source,
+    failure: &TaskError,
+    refreshes: &mut u32,
+) -> Result<Step<Plan>, String> {
+    let has_bytes = parts::has_bytes(&fast.journal, &task.id);
+    let stale = source == Source::Cached && !has_bytes;
+    if (stale || (has_bytes && link_refused(failure))) && *refreshes < MAX_REFRESHES {
+        *refreshes += 1;
+        if stale {
+            log::info!(
+                "media: link đã lưu hỏng ({}), hỏi yt-dlp link mới",
+                failure.code
+            );
+            probe_cache::forget(&job_urls(job));
+        }
+        let children = fast.journal.list_children(&task.id).map_err(text)?;
+        return refresh(fast, task, job, children).await;
+    }
+    if !has_bytes {
+        parts::discard_parts(&fast.journal, &task.id);
+        // yt-dlp tự báo kích thước của nó.
+        task.total_bytes = None;
+        return Ok(Step::Fallback);
+    }
+    finish::fail(fast.sink, &fast.journal, task, part_error(failure))?;
+    Ok(Step::Stop)
+}
+
+/// Lượt đầu: luồng của lần "Phân tích" hoặc hỏi yt-dlp; kiểm tải thẳng được không, tạo task con.
 async fn start(
     fast: &Fast<'_>,
     task: &mut DownloadTask,
     job: &MediaJob,
 ) -> Result<Step<Plan>, String> {
-    let resolved = match ask(fast, task, job).await? {
-        Step::Go(Ok(resolved)) => resolved,
-        Step::Go(Err(_)) | Step::Fallback => return Ok(Step::Fallback),
+    let (resolved, source) = match first_streams(fast, task, job).await? {
+        Step::Go(found) => found,
+        Step::Fallback => return Ok(Step::Fallback),
         Step::Stop => return Ok(Step::Stop),
     };
+    timing(fast, task, &format!("resolved source={}", source.label()));
     let ffmpeg = fast.ffmpeg.is_some();
     let audio = job.audio_format.as_deref();
     let (layout, streams) = match resolve::check(&resolved, audio, ffmpeg, resolve::now_secs()) {
@@ -182,7 +248,10 @@ async fn start(
     }
     let connections = fast.engine.options().max_connections;
     match parts::create(&fast.journal, task, &streams, connections) {
-        Ok(children) => Ok(Step::Go(plan_for(layout, children, &streams))),
+        Ok(children) => {
+            timing(fast, task, "parts");
+            Ok(Step::Go(plan_for(layout, children, &streams, source)))
+        }
         Err(message) => {
             log::warn!("media: không tạo được luồng con ({message})");
             Ok(Step::Fallback)
@@ -190,12 +259,35 @@ async fn start(
     }
 }
 
-fn plan_for(layout: Layout, children: Vec<DownloadTask>, streams: &[Stream]) -> Plan {
+/// Luồng của lần "Phân tích" nếu còn hạn, không thì hỏi yt-dlp (`Fallback` khi yt-dlp báo lỗi).
+async fn first_streams(
+    fast: &Fast<'_>,
+    task: &mut DownloadTask,
+    job: &MediaJob,
+) -> Result<Step<(Resolved, Source)>, String> {
+    if let Some(resolved) = fast.resolver.cached(job) {
+        finish::set_status(fast.sink, &fast.journal, task, TaskStatus::Resolving)?;
+        return Ok(Step::Go((resolved, Source::Cached)));
+    }
+    match ask(fast, task, job).await? {
+        Step::Go(Ok(resolved)) => Ok(Step::Go((resolved, Source::Fresh))),
+        Step::Go(Err(_)) | Step::Fallback => Ok(Step::Fallback),
+        Step::Stop => Ok(Step::Stop),
+    }
+}
+
+fn plan_for(
+    layout: Layout,
+    children: Vec<DownloadTask>,
+    streams: &[Stream],
+    source: Source,
+) -> Plan {
     Plan {
         layout,
         children,
         hints: parts::hints_from_streams(streams),
         estimates: streams.iter().map(|stream| stream.size).collect(),
+        source,
     }
 }
 
@@ -245,6 +337,7 @@ async fn resume_plan(
         hints: parts::hints_from_children(&children),
         estimates: Vec::new(),
         children,
+        source: Source::Cached,
     }))
 }
 
@@ -289,7 +382,13 @@ async fn refresh(
     }
     let connections = fast.engine.options().max_connections;
     let children = parts::reconcile(&fast.journal, task, children, &streams, connections)?;
-    Ok(Step::Go(plan_for(layout, children, &streams)))
+    timing(fast, task, "refreshed source=fresh");
+    Ok(Step::Go(plan_for(
+        layout,
+        children,
+        &streams,
+        Source::Fresh,
+    )))
 }
 
 /// Luồng chưa mở (`available_at`, tối đa 60 s): chờ. `false` = người dùng tạm dừng.
@@ -313,15 +412,31 @@ async fn wait_available(streams: &[Stream], cancel: &CancellationToken) -> bool 
 /// Tải song song mọi luồng chưa xong; gộp tiến độ vào task cha.
 async fn download(fast: &Fast<'_>, task: &mut DownloadTask, plan: &Plan) -> Result<Batch, String> {
     let mut rollup = Rollup::new(&plan.children, &plan.estimates);
-    let pending: Vec<String> = plan
+    let unfinished: Vec<(usize, &DownloadTask)> = plan
         .children
         .iter()
-        .filter(|child| child.status != TaskStatus::Completed)
-        .map(|child| child.id.clone())
+        .enumerate()
+        .filter(|(_, child)| child.status != TaskStatus::Completed)
         .collect();
-    if pending.is_empty() {
+    if unfinished.is_empty() {
         return Ok(Batch::Done);
     }
+    let remaining: Vec<Option<u64>> = unfinished
+        .iter()
+        .map(|(index, child)| {
+            let estimate = plan.estimates.get(*index).copied().flatten();
+            child
+                .total_bytes
+                .or(estimate)
+                .map(|total| total.saturating_sub(child.downloaded_bytes))
+        })
+        .collect();
+    let budget = fast.engine.options().host_connections;
+    let pending: Vec<(String, Option<u16>)> = unfinished
+        .iter()
+        .map(|(_, child)| child.id.clone())
+        .zip(connection_shares(&remaining, budget))
+        .collect();
     task.total_bytes = rollup.total();
     task.downloaded_bytes = finish::clamp(rollup.downloaded(), task.total_bytes);
     finish::set_status(fast.sink, &fast.journal, task, TaskStatus::Downloading)?;
@@ -350,23 +465,45 @@ async fn download(fast: &Fast<'_>, task: &mut DownloadTask, plan: &Plan) -> Resu
     settle(fast, task, &rollup, outcomes)
 }
 
-/// Mỗi luồng một task engine; số kết nối do bộ điều khiển tự chọn (trần = mức tối đa).
+/// Mỗi luồng một task engine, mở ngay phần kết nối được chia; sau đó bộ điều khiển tự chỉnh.
 fn spawn_parts(
     fast: &Fast<'_>,
-    pending: Vec<String>,
+    pending: Vec<(String, Option<u16>)>,
     siblings: &CancellationToken,
     events: &mpsc::UnboundedSender<EngineEvent>,
 ) -> JoinSet<utd_engine::Result<DownloadOutcome>> {
     let mut workers = JoinSet::new();
-    for id in pending {
+    for (id, initial_connections) in pending {
         let engine = fast.engine.clone();
         let control = DownloadControl {
             cancel: siblings.child_token(),
             events: Some(events.clone()),
+            initial_connections,
         };
         workers.spawn(async move { engine.resume(&id, control).await });
     }
     workers
+}
+
+/// Chia ngân sách kết nối tới một host (hình và tiếng cùng máy chủ) theo số byte còn lại của mỗi
+/// luồng: hình 403 MB + tiếng 144 MB ⇒ 12 + 4, hai luồng xong gần cùng lúc thay vì hình chạy một
+/// mình ở đoạn cuối. Một luồng hoặc không rõ kích thước ⇒ để engine tự chọn.
+fn connection_shares(remaining: &[Option<u64>], budget: u16) -> Vec<Option<u16>> {
+    let sizes: Option<Vec<u64>> = remaining.iter().copied().collect();
+    let total: u64 = sizes.iter().flatten().sum();
+    let (Some(sizes), true) = (sizes, remaining.len() >= 2 && total > 0) else {
+        return vec![None; remaining.len()];
+    };
+    let budget = u64::from(budget);
+    let ceiling = budget.saturating_sub(2).max(2);
+    sizes
+        .iter()
+        .map(|size| {
+            let share = (u128::from(budget) * u128::from(*size) + u128::from(total) / 2)
+                / u128::from(total);
+            u16::try_from(u64::try_from(share).unwrap_or(ceiling).clamp(2, ceiling)).ok()
+        })
+        .collect()
 }
 
 /// Kết quả các luồng con của một lượt.

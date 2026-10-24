@@ -34,7 +34,9 @@ jobs:
           workspaces: ". -> target"
       - run: pnpm install --frozen-lockfile
       - run: cargo test -p utd-engine
+      - run: cargo test -p utd-mp4
       - run: cargo test -p app --lib
+      - run: cargo clippy -p utd-mp4 --all-targets -- -D warnings
       - run: cargo clippy -p app --all-targets -- -D warnings
       - run: pnpm lint
       - run: pnpm build

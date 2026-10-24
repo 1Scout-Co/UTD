@@ -1,0 +1,9 @@
+[package]
+name = "utd-mp4"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Merges fragmented MP4 (DASH) streams into a plain MP4 with moov first, std only"
+
+# Chỉ dùng std: không thêm dependency.
+[dependencies]

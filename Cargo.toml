@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["src-tauri", "crates/utd-engine"]
+members = ["src-tauri", "crates/utd-engine", "crates/utd-mp4"]
 
 [workspace.package]
 version = "0.1.0"

@@ -26,6 +26,8 @@ log = "0.4"
 tauri = { version = "2.12.5", features = [] }
 tauri-plugin-log = "2"
 utd-engine = { path = "../crates/utd-engine" }
+# Ghép fMP4 → MP4 bằng Rust (nhanh hơn ffmpeg nhiều lần), ffmpeg làm đường lui: src/media/output.rs.
+utd-mp4 = { path = "../crates/utd-mp4" }
 tokio = { version = "1.54.1", features = ["io-util", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7.20", features = ["rt"] }
 fs2 = "0.4.3"

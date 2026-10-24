@@ -7,7 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
 use utd_engine::{
@@ -298,8 +298,21 @@ impl Lab {
     }
 
     fn parent(&self) -> (DownloadTask, MediaJob) {
-        let mut task = DownloadTask::new(
+        self.parent_for(
             "https://www.youtube.com/watch?v=09OGSRptb0M",
+            None,
+            "bv*+ba/b",
+        )
+    }
+
+    fn parent_for(
+        &self,
+        url: &str,
+        page_url: Option<&str>,
+        selector: &str,
+    ) -> (DownloadTask, MediaJob) {
+        let mut task = DownloadTask::new(
+            url,
             "Clip.mp4",
             self.downloads.to_string_lossy().into_owned(),
             1,
@@ -311,8 +324,8 @@ impl Lab {
         let job = MediaJob {
             task_id: task.id.clone(),
             url: task.url.clone(),
-            page_url: None,
-            selector: "bv*+ba/b".into(),
+            page_url: page_url.map(str::to_string),
+            selector: selector.into(),
             audio_format: None,
             title: "Clip".into(),
             created_at: now_ms(),
@@ -355,6 +368,23 @@ impl Lab {
         }
     }
 
+    /// Trang vừa "Phân tích": luồng nằm trong cache theo URL trang (mỗi bài thử một trang, cache
+    /// dùng chung cả tiến trình); job tải theo link rút gọn như khi dán `youtu.be/…`.
+    fn analysed(&self, resolved: &Resolved) -> (DownloadTask, MediaJob) {
+        let id = uuid::Uuid::new_v4();
+        let page = format!("https://www.youtube.com/watch?v={id}");
+        probe_cache::store(
+            vec![page.clone()],
+            resolved.streams.clone(),
+            resolve::now_secs(),
+        );
+        self.parent_for(
+            &format!("https://youtu.be/{id}"),
+            Some(&page),
+            "399+140/bv*+ba/b",
+        )
+    }
+
     fn fast<'a>(
         &self,
         sink: &'a dyn Sink,
@@ -368,6 +398,7 @@ impl Lab {
             resolver,
             ffmpeg: Some(self.ffmpeg.clone()),
             cancel,
+            started: Instant::now(),
         }
     }
 
@@ -663,4 +694,117 @@ async fn pause_keeps_the_downloaded_ranges_and_resume_finishes() {
         "chỉ tải phần còn thiếu: lượt sau xin {again} byte, còn thiếu {} byte",
         video - kept
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn starts_from_the_analysed_streams_without_asking_yt_dlp() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    let (mut task, job) = lab.analysed(&lab.streams(&server, "/v.mp4", "/a.m4a"));
+    let resolver = Fixed {
+        resolved: lab.streams(&server, "/gone", "/gone"),
+        calls: AtomicUsize::new(0),
+    };
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_eq!(
+        resolver.calls.load(Ordering::Relaxed),
+        0,
+        "không chạy yt-dlp lần hai"
+    );
+    assert!(server.hits("/gone").is_empty());
+    assert_finished(&lab, &task);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn analysed_links_refused_before_any_byte_get_new_links_from_yt_dlp() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    // Link của lần "Phân tích" đã chết (đổi mạng…): 403 ngay yêu cầu đầu.
+    let (mut task, job) = lab.analysed(&lab.streams(&server, "/gone", "/gone"));
+    let resolver = Fixed {
+        resolved: lab.streams(&server, "/v.mp4", "/a.m4a"),
+        calls: AtomicUsize::new(0),
+    };
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(
+        run(&fast, &mut task, &job).await.unwrap(),
+        FastEnd::Handled,
+        "không rơi về yt-dlp tải một kết nối"
+    );
+    assert_eq!(
+        resolver.calls.load(Ordering::Relaxed),
+        1,
+        "hỏi yt-dlp link mới một lần"
+    );
+    assert!(!server.hits("/gone").is_empty());
+    assert!(resolver.cached(&job).is_none(), "quên link hỏng");
+    assert_finished(&lab, &task);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_asks_for_new_links_when_saved_ones_fail_before_any_byte() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    let (mut task, job) = lab.parent();
+    // Lượt trước dừng trước byte đầu; link còn hạn nhưng máy chủ đã từ chối.
+    let saved = lab.streams(&server, "/gone", "/gone");
+    parts::create(&lab.journal, &task, &saved.streams, 16).unwrap();
+    let resolver = Fixed {
+        resolved: lab.streams(&server, "/v.mp4", "/a.m4a"),
+        calls: AtomicUsize::new(0),
+    };
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_eq!(resolver.calls.load(Ordering::Relaxed), 1);
+    assert_finished(&lab, &task);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_links_refused_twice_still_fall_back_to_yt_dlp() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    // Link vừa phân tích hỏng, link mới của yt-dlp cũng hỏng: để yt-dlp tự tải như cũ.
+    let (mut task, job) = lab.analysed(&lab.streams(&server, "/gone", "/gone"));
+    let resolver = Fixed {
+        resolved: lab.streams(&server, "/gone", "/gone"),
+        calls: AtomicUsize::new(0),
+    };
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(
+        run(&fast, &mut task, &job).await.unwrap(),
+        FastEnd::Fallback
+    );
+    assert_eq!(resolver.calls.load(Ordering::Relaxed), 1);
+    assert!(lab.journal.list_children(&task.id).unwrap().is_empty());
+    assert!(
+        lab.files().is_empty(),
+        "không để lại .part: {:?}",
+        lab.files()
+    );
+}
+
+#[test]
+fn shares_the_host_connection_budget_by_remaining_bytes() {
+    // Hình 403 MB + tiếng 144 MB của 09OGSRptb0M: 12 + 4 kết nối, xong gần cùng lúc.
+    assert_eq!(
+        connection_shares(&[Some(402_957_281), Some(144_165_177)], 16),
+        [Some(12), Some(4)]
+    );
+    assert_eq!(
+        connection_shares(&[Some(10), Some(10_000)], 16),
+        [Some(2), Some(14)],
+        "luồng nhỏ vẫn có ít nhất 2 kết nối"
+    );
+    assert_eq!(
+        connection_shares(&[Some(500), None], 16),
+        [None, None],
+        "không rõ kích thước ⇒ engine tự chọn"
+    );
+    assert_eq!(connection_shares(&[Some(500)], 16), [None]);
+    assert_eq!(connection_shares(&[Some(0), Some(0)], 16), [None, None]);
 }

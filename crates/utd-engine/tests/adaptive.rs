@@ -306,12 +306,15 @@ fn sha256(bytes: &[u8]) -> String {
 fn options(initial: u16, max: u16) -> EngineOptions {
     EngineOptions {
         initial_connections: initial,
+        large_initial_connections: initial,
         max_connections: max,
         host_connections: 16,
         global_connections: 32,
         max_attempts: 8,
         connect_timeout: Duration::from_secs(5),
         idle_timeout: Duration::from_secs(5),
+        // Nhỏ hơn idle_timeout như cấu hình thật: luật "kết nối treo" chạy trong mọi bài.
+        stall_timeout: Duration::from_secs(2),
         sample_interval: Duration::from_millis(50),
         checkpoint_interval: Duration::from_millis(200),
         balance_interval: Duration::from_millis(300),

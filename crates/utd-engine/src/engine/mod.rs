@@ -3,6 +3,7 @@ mod content;
 mod file;
 mod http;
 mod limiter;
+mod pulse;
 mod session;
 mod transport;
 mod verify;
@@ -24,15 +25,24 @@ pub(crate) const USER_AGENT: &str = concat!("utd/", env!("CARGO_PKG_VERSION"));
 /// Trần số kết nối mặc định của một lượt tải. Số kết nối thật do engine tự dò (kiểu IDM).
 const AUTO_CONNECTIONS: u16 = 16;
 
+/// File từ chừng này trở lên mở luôn `large_initial_connections` kết nối: cả lượt tải có khi chỉ vài
+/// giây, leo dần từ 4 (mỗi bậc một cửa sổ đo 3 s) là phí băng thông.
+pub(crate) const LARGE_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
     pub initial_connections: u16,
+    /// Số kết nối mở ngay cho file ≥ 64 MiB (IDM mặc định 8).
+    pub large_initial_connections: u16,
     pub max_connections: u16,
     pub host_connections: u16,
     pub global_connections: u16,
     pub max_attempts: u32,
     pub connect_timeout: Duration,
     pub idle_timeout: Duration,
+    /// Một kết nối im chừng này trong khi kết nối khác của lượt tải vẫn nhận byte ⇒ treo: đóng
+    /// và mở lại (không tính lượt thử). Không có kết nối khác chạy thì chờ đủ `idle_timeout`.
+    pub stall_timeout: Duration,
     pub sample_interval: Duration,
     pub checkpoint_interval: Duration,
     pub balance_interval: Duration,
@@ -44,12 +54,14 @@ impl Default for EngineOptions {
     fn default() -> Self {
         Self {
             initial_connections: 4,
+            large_initial_connections: 8,
             max_connections: AUTO_CONNECTIONS,
             host_connections: 16,
             global_connections: 32,
             max_attempts: 8,
             connect_timeout: Duration::from_secs(15),
             idle_timeout: Duration::from_secs(30),
+            stall_timeout: Duration::from_secs(5),
             sample_interval: Duration::from_millis(500),
             checkpoint_interval: Duration::from_secs(1),
             balance_interval: Duration::from_secs(3),
@@ -64,6 +76,11 @@ impl EngineOptions {
         if self.initial_connections == 0 || self.initial_connections > self.max_connections {
             return Err(crate::Error::InvalidInput(
                 "initial_connections must be 1..=max_connections".into(),
+            ));
+        }
+        if self.large_initial_connections == 0 {
+            return Err(crate::Error::InvalidInput(
+                "large_initial_connections must be at least 1".into(),
             ));
         }
         if self.max_connections > crate::model::MAX_CONNECTIONS {
@@ -82,7 +99,8 @@ impl EngineOptions {
                 "max_attempts must be at least 1".into(),
             ));
         }
-        if self.sample_interval.is_zero()
+        if self.stall_timeout.is_zero()
+            || self.sample_interval.is_zero()
             || self.checkpoint_interval.is_zero()
             || self.balance_interval.is_zero()
         {
@@ -131,6 +149,9 @@ impl DownloadRequest {
 pub struct DownloadControl {
     pub cancel: CancellationToken,
     pub events: Option<UnboundedSender<EngineEvent>>,
+    /// Số kết nối mở ngay từ đầu lượt này (vd media chia ngân sách kết nối giữa hình và tiếng).
+    /// `None` = theo `EngineOptions`. Bộ điều khiển vẫn tự tăng/giảm sau đó.
+    pub initial_connections: Option<u16>,
 }
 
 impl DownloadControl {
@@ -138,13 +159,14 @@ impl DownloadControl {
         Self {
             cancel: CancellationToken::new(),
             events: None,
+            initial_connections: None,
         }
     }
 
     pub fn with_events(events: UnboundedSender<EngineEvent>) -> Self {
         Self {
-            cancel: CancellationToken::new(),
             events: Some(events),
+            ..Self::new()
         }
     }
 }
