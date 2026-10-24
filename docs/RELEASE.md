@@ -54,15 +54,18 @@ Cần macOS 11 (Big Sur) trở lên, Mac chip Apple hay Intel đều được (m
 
 **Cài**: mở file `.dmg` → kéo biểu tượng **UTD** vào thư mục **Applications** → tháo đĩa UTD (nút ⏏ trong Finder). Không có bước cài nào khác.
 
-**Mở lần đầu** — UTD chưa được Apple "công chứng" (notarize: cần tài khoản Apple Developer, xem [Ký mã](#ký-mã-code-signing)), nên macOS chặn lần mở đầu tiên. Gửi người dùng đoạn này:
+**Mở lần đầu** — UTD chưa được Apple "công chứng" (notarize: cần tài khoản Apple Developer, xem [Ký mã](#ký-mã-code-signing)), nên macOS chặn lần mở đầu tiên. Gửi người dùng đoạn này (chữ theo macOS tiếng Việt, đã chụp thật trên macOS 27 — ảnh ở `docs/specs/2026-10-23-utd-v1/ui-demos/macos-gatekeeper-*.png`):
 
-> 1. Mở **Applications**, nhấp đúp **UTD**. macOS báo không kiểm được UTD → bấm **Done** (đừng bấm Move to Trash).
-> 2. Mở **System Settings** (Cài đặt hệ thống) → **Privacy & Security** (Quyền riêng tư & Bảo mật) → kéo xuống mục **Security**, thấy dòng *"UTD" was blocked…* → bấm **Open Anyway** (Vẫn mở) → nhập mật khẩu máy hoặc Touch ID → **Open**.
-> 3. Từ lần sau mở bình thường. macOS 14 trở về trước còn cách nhanh: chuột phải (hoặc Control + bấm) vào UTD → **Open** → **Open**.
+> 1. Mở **Ứng dụng** (Applications), nhấp đúp **UTD**. macOS báo *"UTD" chưa được mở* → bấm **Xong** (Done). Đừng bấm "Chuyển vào Thùng rác".
+> 2. Mở **Cài đặt hệ thống** → **Quyền riêng tư & Bảo mật** → kéo xuống mục **Bảo mật**, thấy dòng *"UTD" đã bị chặn để bảo vệ máy Mac của bạn* → bấm **Vẫn mở** (Open Anyway).
+> 3. Hiện hộp *Mở "UTD"?* — nút xanh nổi bật là **Chuyển vào Thùng rác**, đừng bấm nút đó; bấm **Vẫn mở**.
+> 4. Nhập tên và mật khẩu của máy (hoặc Touch ID) → **OK**. UTD mở ra; từ lần sau mở bình thường.
 >
-> Cách dùng Terminal (cho người quen): `xattr -dr com.apple.quarantine /Applications/UTD.app` rồi mở UTD. Terminal có thể xin quyền "quản lý app" lần đầu, bấm cho phép.
+> macOS 14 trở về trước còn cách nhanh: chuột phải (hoặc Control + bấm) vào UTD → **Mở** → **Mở**.
+>
+> Cách dùng Terminal (cho người quen): `xattr -dr com.apple.quarantine /Applications/UTD.app` rồi mở UTD. Terminal có thể xin quyền "quản lý ứng dụng" lần đầu, bấm cho phép.
 
-Lần tải đầu tiên vào `~/Downloads/UTD`, macOS hỏi *"UTD muốn truy cập tệp trong thư mục Tải về"* → bấm **Allow**. Vì chỉ ký ad-hoc, sau mỗi lần tự cập nhật macOS **có thể** hỏi lại câu này một lần.
+Tải vào thư mục được bảo vệ (`~/Downloads`, Desktop, Documents, ổ ngoài), macOS có thể hỏi *"UTD muốn truy cập tệp trong thư mục…"* → bấm **Cho phép**. Vì chỉ ký ad-hoc, sau mỗi lần tự cập nhật macOS **có thể** hỏi lại một lần.
 
 **Mở UTD thẳng từ file .dmg** (không kéo vào Applications) vẫn chạy được, nhưng tích hợp trình duyệt sẽ báo "Kéo UTD vào thư mục Applications…" vì app nằm ở chỗ tạm sẽ biến mất.
 

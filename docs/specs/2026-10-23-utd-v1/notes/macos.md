@@ -45,18 +45,40 @@ Rust 1.99.1 (rustup bản người dùng), Node 24 + pnpm, Xcode Command Line To
 - App Nap: luồng của UTD ở ưu tiên 4 khi màn hình khoá; có download thì lên 46; tải xong trở về 4.
 - Menu bar đọc qua Accessibility: Apple, UTD (About UTD, Services, Hide UTD, Hide Others, Quit UTD), File, Edit (Undo, Redo, Cut, Copy, Paste, Select All…), View, Window, Help. Cửa sổ chính 1320×861.
 
-## Chưa kiểm được (và vì sao)
+### Giao diện, bấm thật trên Mac (màn hình đã mở khoá)
 
-Mac mini **khoá màn hình** suốt lúc kiểm (cần mật khẩu, không nhập hộ) ⇒ không chụp được màn hình, không bấm được giao diện:
+Ảnh ở `ui-demos/macos-*.png` (thu về 1x, cắt riêng cửa sổ, không lộ màn hình riêng của máy).
 
-- Ảnh chụp giao diện trên Mac cho `ui-demos/` — chưa có.
-- Bấm Tạm dừng / Tiếp tục trong giao diện (engine giống hệt Windows; test engine xanh trên mac).
-- Hộp Tải media (chọn chất lượng) chạy hết đường trong app; menu chuột phải: Mở file, Mở thư mục, Thùng rác, icon hiện trong bảng (từng hàm Rust đã có test chạy thật trên mac).
-- Nút "Cài tích hợp trình duyệt" trong Cài đặt và extension Chrome thật gọi host (đã thử host bằng tin nhắn y hệt Chrome).
-- Hộp Gatekeeper và hộp xin quyền thư mục Downloads (nội dung chữ trong RELEASE.md theo hành vi chuẩn của macOS, chưa chụp được trên macOS 27).
-- Hộp chọn thư mục (NSOpenPanel), kéo-thả.
+- Màn chính: bảng có icon thật của Finder (gói `.pkg` hiện icon Installer, `.command` icon script, `.mp4` icon YouTube…), ô tìm hiện `⌘ K` — `macos-01-main.png`.
+- Thêm URL → gõ link 1 GB → Bắt đầu: tải 16 kết nối, 3,5 → 15 MB/s khi app đang hiện — `macos-02-downloading.png`.
+- Chuột phải → **Tạm dừng** (journal `paused`, 273 MB) → **Tiếp tục** (tải nối từ 25%, không tải lại) → hoàn tất 1 GiB — `macos-03-context-menu.png`.
+- **Mở file** (PDF thật tải về) → Preview mở đúng file. **Mở thư mục** → Finder mở thư mục tải và chọn sẵn file — `macos-06-finder-reveal.png`. **Xoá file (vào Thùng rác)** → file rời thư mục, hiện "Đã chuyển file vào Thùng rác.", dòng biến khỏi danh sách.
+- Media: gửi link YouTube từ "trình duyệt" (native host) → app tự mở hộp **Tải media**, phân tích xong (ảnh, tên, thời lượng, mức chất lượng) — `macos-04-media-dialog.png`. "Me at the zoo" (19 s) xong ngay; video 2,5 giờ 1080p (544 MB) tải + ghép xong trong **9,4 s** (~58 MB/s), tên file tiếng Việt đúng, ffprobe: AV1 1920×1080 + AAC, có cờ quarantine.
+- Cài đặt: thấy yt-dlp 2026.08.19 của Homebrew ("bản có sẵn trên máy"). **Cài extension** → trạng thái "Đã cài", tạo script host đúng (kèm `UTD_DATA_DIR` của bản thử), manifest ghi vào Chrome, Chromium, Edge, Brave, Vivaldi (Firefox chưa cài trên máy nên bỏ qua đúng), Finder mở thư mục extension — `macos-05-browser-integration.png`. Chạy đúng script mà manifest của Chrome trỏ tới (y như Chrome sẽ chạy) → app nhận link và tên file gợi ý.
+- **Đổi thư mục** → hộp chọn thư mục gốc của macOS ("Chọn thư mục tải") mở đúng thư mục hiện tại; Cancel không đổi gì.
+- Menu UTD (`macos-07-app-menu.png`), **About UTD** (icon, phiên bản 0.1.0, bản quyền — `macos-08-about.png`), **⌘Q** thoát app.
+- Mở lần đầu khi có cờ quarantine (macOS 27, tiếng Việt), chụp đủ 4 bước: *"UTD" chưa được mở* → Cài đặt hệ thống → Quyền riêng tư & Bảo mật → *"UTD" đã bị chặn…* **Vẫn mở** → hộp *Mở "UTD"?* (nút xanh mặc định là "Chuyển vào Thùng rác"!) → hỏi mật khẩu quản trị — `macos-gatekeeper-1..4`. Tôi dừng ở bước mật khẩu (bấm Huỷ, không nhập). RELEASE.md đã viết theo đúng các bước này.
+
+Sự cố nhỏ lúc kiểm (đã xử lý): lệnh `osascript` tới Finder làm macOS hỏi cấp quyền tự động hoá cho `sshd-keygen-wrapper` → đã bấm **Từ chối**; một cú bấm lệch toạ độ mở cửa sổ "Giới thiệu về Safari" → đã đóng.
+
+## Chưa kiểm được
+
+- Extension thật nạp vào trình duyệt (Load unpacked) rồi bấm chuột phải trên trang web — chưa làm để không sửa hồ sơ trình duyệt của chủ máy; đã thử đúng script/manifest mà trình duyệt sẽ chạy.
+- Hộp xin quyền thư mục Downloads: lúc tải vào `~/Downloads/UTD` macOS không hỏi gì (tải được), nên chưa chụp được hộp này.
+- Kéo-thả file/link vào cửa sổ.
 - Bản universal (x86_64) và job CI macOS chưa chạy thật (chưa push); bản arm64 dựng và chạy trên Mac thật.
 - Tự cập nhật trên mac (cần một bản phát hành thật có `latest.json` mới).
+- Thanh tiêu đề riêng (phiên điều phối đang làm): sẽ kiểm trên Mac khi ghép vào main.
+
+## Lỗi nhỏ thấy trên Mac (chưa sửa, ngoài phạm vi hoặc để phiên khác)
+
+- Menu app tiếng Anh ("About UTD", "Hide UTD", "Quit UTD"…) dù macOS đặt tiếng Việt: menu mặc định của Tauri — phiên (1) đa ngôn ngữ có thể tự dựng menu theo ngôn ngữ.
+- Cài đặt → yt-dlp ghi "Giấy phép: Unlicense (bản .exe có phần GPLv3+)" cả trên Mac — phiên (2).
+- Ô dung lượng đĩa ghi nhãn `/` trên Mac (Windows ghi `C:`) — nên hiện tên ổ ("Macintosh HD").
+
+## Đã dọn trên Mac
+
+App thử, máy chủ thử, dữ liệu thử, manifest `app.utd.desktop.json` của 5 trình duyệt, `~/Library/{Caches,WebKit}/app.utd.desktop`, `defaults` của `app.utd.desktop` — đã xoá. Còn lại có chủ ý: `~/utd` (mã + bản build 5,8 GB, để kiểm thanh tiêu đề sau), `~/utd-test` (công cụ chụp/bấm + venv pyobjc, 44 MB), Rust (`~/.rustup`, `~/.cargo`), `yt-dlp` cài bằng Homebrew. **Thùng rác của Mac** còn 2 file thử do UTD chuyển vào (`bao-cao.pdf` 13 KB, `1Gb.dat.*.part` 1 GB) — chủ máy dọn Thùng rác khi tiện.
 
 ## Việc còn lại / gợi ý
 
