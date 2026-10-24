@@ -80,6 +80,16 @@ Sự cố nhỏ lúc kiểm (đã xử lý): lệnh `osascript` tới Finder là
 
 App thử, máy chủ thử, dữ liệu thử, manifest `app.utd.desktop.json` của 5 trình duyệt, `~/Library/{Caches,WebKit}/app.utd.desktop`, `defaults` của `app.utd.desktop` — đã xoá. Còn lại có chủ ý: `~/utd` (mã + bản build 5,8 GB, để kiểm thanh tiêu đề sau), `~/utd-test` (công cụ chụp/bấm + venv pyobjc, 44 MB), Rust (`~/.rustup`, `~/.cargo`), `yt-dlp` cài bằng Homebrew. **Thùng rác của Mac** còn 2 file thử do UTD chuyển vào (`bao-cao.pdf` 13 KB, `1Gb.dat.*.part` 1 GB) — chủ máy dọn Thùng rác khi tiện.
 
+## Sau khi ghép vào main (e847c4d: thanh tiêu đề + 5 nhánh)
+
+Nhánh này tua nhanh lên `e847c4d`, kiểm lại trên Mac thật:
+
+- `cargo test`: utd-engine 143, utd-mp4 19, app 201 — xanh. `cargo clippy --all-targets -D warnings` 3 crate — sạch sau khi sửa `media/install_tests.rs` (`fetch_update` Rust 1.99 báo deprecated ⇒ vòng `compare_exchange_weak` như `engine/adaptive.rs`). Code chỉ-mac mới sau ghép (socket nhận tin nhắn hàng loạt/kênh, đường dự phòng `sun_path`, `app_nap.rs` mới, nhãn ổ, `titlebar` phần mac) biên dịch và chạy test được. Windows: 3 crate + clippy + lint + build + Playwright 65/65 xanh.
+- Tự tải công cụ với `UTD_DATA_DIR` rỗng + `UTD_TOOLS_OWN_ONLY=1` (bỏ qua Homebrew): mở app là tự tải đủ `yt-dlp` (yt-dlp_macos universal, 2026.10.21), `deno` 2.9.8 (aarch64), `ffmpeg`/`ffprobe` 9.0.2 của Martin Riedl (ký Developer ID) vào `<data>/bin`, có quyền chạy, không mang cờ quarantine; chạy `--version` cả bốn đều được.
+- **Lỗi tìm ra và đã sửa**: yt-dlp_macos (PyInstaller một file) đẻ một tiến trình con; giết tiến trình ngoài thì tiến trình con vẫn sống và vẫn ghi stdout (đo thật) ⇒ nút Dừng của Tải cả kênh trên Mac sẽ treo như lỗi Windows trước đây. Sửa: `tokio_command` đặt `process_group(0)`, `kill_tree` gửi `killpg(SIGKILL)` cho cả nhóm (`media/mod.rs`). Đo lại với yt-dlp_macos thật: tiến trình con chết theo, stdout đóng ngay. Test `kill_tree_also_stops_children_holding_the_pipe` giờ chạy cả Windows và macOS.
+- Socket Unix nhận đúng tin nhắn mới từ extension: lô link ("Đã mở UTD để chọn link") và link kênh TikTok ("Đã mở UTD để tải cả kênh").
+- **Chưa kiểm (Mac khoá màn hình lại lúc 16:49, không nhập mật khẩu)**: thanh tiêu đề (đèn giao thông thẳng hàng logo, kéo ở dải đầu, nhấp đúp theo cài đặt hệ thống, toàn màn hình, menu ⋯/chuột phải không lấn dải, hộp thoại vẫn kéo được, ảnh `titlebar-macos-*.png`), tải 1 video YouTube ra MP4 bằng bộ công cụ tự tải, hộp Thêm hàng loạt và Tải cả kênh (bấm Dừng thật trong app).
+
 ## Việc còn lại / gợi ý
 
 - Phiên (2) (tự tải công cụ): trên mac nút tải yt-dlp/ffmpeg hiện vẫn theo bảng Windows (`yt-dlp.exe`, `System32\tar.exe`) — phiên (2) đang làm bảng nguồn theo nền tảng; xem ghi chú bàn giao trong thư mục ghi chú chung. Người dùng mac tạm thời cài bằng `brew install yt-dlp ffmpeg` (UTD tự thấy).
