@@ -415,14 +415,25 @@ pub(crate) fn tokio_command(program: &Path) -> tokio::process::Command {
     {
         command.creation_flags(0x0800_0000);
     }
+    // Nhóm tiến trình riêng (pgid = pid của nó) để `kill_tree` giết được cả tiến trình con.
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+    }
     command
 }
 
-/// Dừng tiến trình cùng các tiến trình con. yt-dlp.exe (PyInstaller một file) chạy lại chính nó thành
-/// tiến trình con: chỉ giết tiến trình ngoài thì tiến trình con vẫn liệt kê/tải tiếp và giữ ống
-/// stdout/stderr, bên đọc chờ tới khi nó tự xong (nút Dừng của Tải cả kênh treo cả phút). Windows:
-/// `taskkill /T` giết cả cây, phải gọi lúc tiến trình ngoài còn sống.
+/// Dừng tiến trình cùng các tiến trình con. yt-dlp.exe và yt-dlp_macos (PyInstaller một file) chạy lại
+/// chính nó thành tiến trình con: chỉ giết tiến trình ngoài thì tiến trình con vẫn liệt kê/tải tiếp và
+/// giữ ống stdout/stderr, bên đọc chờ tới khi nó tự xong (nút Dừng của Tải cả kênh treo cả phút).
+/// Windows: `taskkill /T` giết cả cây. macOS: `killpg` cả nhóm mà `tokio_command` tạo. Phải gọi lúc
+/// tiến trình ngoài còn sống (chưa `wait`).
 pub(crate) async fn kill_tree(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) {
+        // SAFETY: chỉ gửi tín hiệu tới nhóm của tiến trình con này (chưa được thu dọn nên pid chưa bị dùng lại).
+        unsafe { libc::killpg(pid, libc::SIGKILL) };
+    }
     #[cfg(windows)]
     if let Some(pid) = child.id() {
         let taskkill = std::env::var_os("SystemRoot")
@@ -546,16 +557,21 @@ mod tests {
         assert!(js_runtime_args(&tools_with("không rõ", Some(deno))).is_empty());
     }
 
-    /// Như yt-dlp.exe: `cmd` chạy `ping` làm tiến trình con, `ping` giữ ống stdout. Giết cả cây thì đọc
-    /// stdout tới EOF ngay; chỉ giết `cmd` thì phải chờ `ping` tự xong (~30 s).
-    #[cfg(windows)]
+    /// Như yt-dlp.exe / yt-dlp_macos: `cmd` chạy `ping` (macOS: `sh` chạy `sleep`) làm tiến trình con,
+    /// tiến trình con giữ ống stdout. Giết cả cây thì đọc stdout tới EOF ngay; chỉ giết tiến trình ngoài
+    /// thì phải chờ tiến trình con tự xong (~30 s). `; :` để `sh` không `exec` thẳng `sleep`.
     #[test]
     fn kill_tree_also_stops_children_holding_the_pipe() {
         use tokio::io::AsyncReadExt;
+        let (program, args) = if cfg!(windows) {
+            ("cmd.exe", ["/C", "ping -n 30 127.0.0.1"])
+        } else {
+            ("/bin/sh", ["-c", "echo x; sleep 30; :"])
+        };
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {
-            let mut child = tokio_command(Path::new("cmd.exe"))
-                .args(["/C", "ping -n 30 127.0.0.1"])
+            let mut child = tokio_command(Path::new(program))
+                .args(args)
                 .stdout(std::process::Stdio::piped())
                 .kill_on_drop(true)
                 .spawn()

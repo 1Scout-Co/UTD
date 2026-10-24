@@ -95,6 +95,19 @@ impl Server {
     }
 }
 
+/// Bớt 1 nếu còn lớn hơn 0 (như `fetch_update`, mà Rust mới đổi tên thành `try_update` và báo
+/// deprecated): viết tay để dựng được trên mọi bản stable, giống `engine/adaptive.rs::update_if`.
+fn take_one(left: &AtomicUsize) -> bool {
+    let mut current = left.load(Ordering::SeqCst);
+    while current > 0 {
+        match left.compare_exchange_weak(current, current - 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+    false
+}
+
 /// Một yêu cầu mỗi kết nối (`Connection: close`).
 fn answer(
     mut stream: TcpStream,
@@ -113,12 +126,7 @@ fn answer(
     let text = String::from_utf8_lossy(&request);
     let path = text.split_whitespace().nth(1).unwrap_or("/").to_string();
     log.lock().expect("log").push(path.clone());
-    if drops
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-            left.checked_sub(1)
-        })
-        .is_ok()
-    {
+    if take_one(drops) {
         return;
     }
     let reply = routes.lock().expect("routes").get(&path).cloned();
