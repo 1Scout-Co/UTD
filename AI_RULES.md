@@ -12,7 +12,8 @@ Luật cho AI sửa app này. Người dùng không viết code: giữ giao di�
 | Việc | Dùng | Không |
 |---|---|---|
 | Nút, ô nhập, hộp thoại | `src/components/ui/*` (shadcn). Thêm: `pnpm dlx shadcn@4.21.4 add <tên>` | tự viết lại, thêm thư viện giao diện khác |
-| Icon | `lucide-react`, luôn kèm nhãn chữ (trừ nhà · in · tìm kiếm · đóng (X)) | icon trần |
+| Icon | `lucide-react`, luôn kèm nhãn chữ (trừ nhà · in · tìm kiếm · đóng (X) · 3 nút cửa sổ trên thanh tiêu đề — 2026-10-24: Thu nhỏ/Phóng to/Đóng là quy ước của hệ điều hành, có `aria-label` + chú thích khi rê do app vẽ — `title` không hiện vì chuột trên nút đi vào cửa sổ con) | icon trần |
+| Thanh tiêu đề, nút cửa sổ | `src/shared/window` (`TitleBar`); ghi chú: `docs/specs/2026-10-23-utd-v1/notes/titlebar.md` | khung gốc của Windows, nút cửa sổ giả trên macOS |
 | Kiểu dáng | class Tailwind | CSS tự viết, style inline |
 | Gọi dữ liệu / dịch vụ ngoài | `src/features/<tên>/api` | gọi từ `ui` |
 | Tiền, ngày | hàm định dạng chung trong `src/shared` (tạo khi cần) | định dạng rải rác |

@@ -138,6 +138,17 @@
     }
 }
 
+/* Thanh tiêu đề riêng (src/shared/window/title-bar.tsx). WebView2 coi vùng `app-region: drag` như thanh tiêu
+   đề gốc: kéo đi, Aero Snap, nhấp đúp phóng to, chuột phải ra menu hệ thống. Trình duyệt thường bỏ qua. */
+@utility drag-region {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+@utility no-drag-region {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
 /* Thanh cuộn mảnh cho toàn app (WebView2 = Chromium): 8px, thumb bo tròn cách mép 2px, track trong suốt,
    không nút mũi tên, đậm hơn khi rê chuột. Trình duyệt không có ::-webkit-scrollbar thì dùng thuộc tính chuẩn. */
 ::-webkit-scrollbar {

@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Menu as MenuPrimitive } from "@base-ui/react/menu"
 import { cn } from "cn"
+import { POPUP_COLLISION_PADDING } from "@/shared/window/metrics"
 import { ChevronRightIcon, CheckIcon } from "lucide-react"
 
 function DropdownMenu({ ...props }: MenuPrimitive.Root.Props) {
@@ -31,6 +32,7 @@ function DropdownMenuContent({
     <MenuPrimitive.Portal>
       <MenuPrimitive.Positioner
         className="isolate z-50 outline-none"
+        collisionPadding={POPUP_COLLISION_PADDING}
         align={align}
         alignOffset={alignOffset}
         side={side}

@@ -8,6 +8,7 @@ mod media;
 mod media_pages;
 pub mod native_host;
 mod state;
+mod titlebar;
 mod updater;
 
 #[cfg(windows)]
@@ -214,6 +215,10 @@ pub fn run() {
             updater::install_update,
             updater::get_update_check,
             updater::set_update_check,
+            titlebar::set_caption_buttons,
+            titlebar::show_window_menu,
+            titlebar::title_bar_double_click,
+            titlebar::is_window_active,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

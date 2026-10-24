@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { TitleBar } from "@/shared/window/title-bar"
 import { cn } from "cn"
 
 import { formatNumber } from "../../model/download-mapper"
@@ -65,9 +66,10 @@ function SettingsNav({
   )
 }
 
+// Tên app nằm trên thanh tiêu đề (thay chữ "UTD" của khung gốc), không lặp lại trong thanh bên.
 function SonioxLogo() {
   return (
-    <div className="flex items-baseline gap-1.5 px-2.5">
+    <div className="flex items-baseline gap-1.5">
       <span className="text-xl font-extrabold tracking-tighter text-foreground">
         utd
       </span>
@@ -146,9 +148,8 @@ function SonioxSidebar({
   onUpdates?: () => void
 }) {
   return (
-    <aside className="flex w-52 shrink-0 flex-col px-3 py-5">
-      <SonioxLogo />
-      <nav aria-label="Chính" className="mt-8 space-y-1">
+    <aside className="flex w-52 shrink-0 flex-col px-3 pt-6 pb-5">
+      <nav aria-label="Chính" className="space-y-1">
         <NavItem
           icon={Download}
           label="Tải xuống"
@@ -352,8 +353,11 @@ export function Soniox({
   return (
     <div
       data-variant="soniox"
-      className="flex h-svh w-full overflow-hidden bg-background bg-[radial-gradient(circle_at_14%_0%,#e8f1ff_0,transparent_36%),radial-gradient(circle_at_100%_100%,#eef4ff_0,transparent_34%)] text-foreground"
+      className="relative flex h-svh w-full overflow-hidden bg-background bg-[radial-gradient(circle_at_14%_0%,#e8f1ff_0,transparent_36%),radial-gradient(circle_at_100%_100%,#eef4ff_0,transparent_34%)] pt-10 text-foreground"
     >
+      <TitleBar className="absolute inset-x-0 top-0">
+        <SonioxLogo />
+      </TitleBar>
       <SonioxSidebar
         total={items.length}
         storage={storage}
@@ -363,7 +367,7 @@ export function Soniox({
         onSettings={onSettings}
         onUpdates={onUpdates}
       />
-      <main className="m-3 ml-0 flex min-w-0 flex-1 flex-col rounded-2xl bg-card p-6 shadow-panel ring-1 ring-foreground/5">
+      <main className="mr-3 mb-3 flex min-w-0 flex-1 flex-col rounded-2xl bg-card p-6 shadow-panel ring-1 ring-foreground/5">
         <PageHeader items={state === "data" ? items : undefined} />
         {state === "data" ? (
           <DownloadsView

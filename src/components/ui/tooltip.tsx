@@ -2,6 +2,7 @@
 
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 import { cn } from "cn"
+import { POPUP_COLLISION_PADDING } from "@/shared/window/metrics"
 
 function TooltipProvider({
   delay = 0,
@@ -44,6 +45,7 @@ function TooltipContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
+        collisionPadding={POPUP_COLLISION_PADDING}
         className="isolate z-50"
       >
         <TooltipPrimitive.Popup
