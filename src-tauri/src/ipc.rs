@@ -196,10 +196,56 @@ pub fn pipe_path(pipe: &str) -> String {
 }
 
 /// macOS: Unix domain socket trong thư mục dữ liệu (quyền 0600), vẫn kèm token của `ipc.json`.
-/// Tên ngắn cố định: `sun_path` chỉ chứa 104 byte.
+/// `sun_path` chỉ chứa 104 byte (kể cả byte NUL cuối): thư mục dữ liệu dài (bản thử `UTD_DATA_DIR` trong
+/// `$TMPDIR`) thì socket nằm ở thư mục tạm riêng của người dùng, tên theo băm thư mục dữ liệu — app và
+/// native host tính ra cùng một chỗ.
 #[cfg(unix)]
 pub fn socket_path(directory: &Path) -> PathBuf {
-    directory.join("ipc.sock")
+    socket_path_in(directory, &user_temp_dir())
+}
+
+#[cfg(any(unix, test))]
+const SUN_PATH_LEN: usize = 104;
+
+#[cfg(any(unix, test))]
+fn socket_path_in(directory: &Path, short_dir: &Path) -> PathBuf {
+    let path = directory.join("ipc.sock");
+    if path.as_os_str().len() < SUN_PATH_LEN {
+        return path;
+    }
+    // FNV-1a 64 bit: cố định giữa các lần chạy và giữa app với native host.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in directory.as_os_str().as_encoded_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    short_dir.join(format!("utd-{hash:016x}.sock"))
+}
+
+/// macOS: thư mục tạm riêng của người dùng (0700) theo hệ thống (`_CS_DARWIN_USER_TEMP_DIR`), không theo
+/// biến `TMPDIR` — trình duyệt chạy native host có thể mang môi trường khác app.
+#[cfg(target_os = "macos")]
+fn user_temp_dir() -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    let mut buffer = vec![0u8; 1024];
+    // SAFETY: đưa đúng cỡ bộ đệm; confstr ghi chuỗi kết thúc NUL, trả cỡ cần kể cả NUL (0 = lỗi).
+    let needed = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_TEMP_DIR,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    if needed == 0 || needed > buffer.len() {
+        return std::env::temp_dir();
+    }
+    buffer.truncate(needed - 1);
+    PathBuf::from(std::ffi::OsString::from_vec(buffer))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn user_temp_dir() -> PathBuf {
+    std::env::temp_dir()
 }
 
 pub fn spawn_server(
@@ -222,13 +268,7 @@ async fn accept_loop(
     config: IpcConfig,
     directory: PathBuf,
 ) {
-    let listener = match bind_private(&socket_path(&directory)) {
-        Ok(listener) => listener,
-        Err(error) => {
-            log::error!("IPC socket bind failed: {error}");
-            return;
-        }
-    };
+    let listener = bind_until_ready(&socket_path(&directory)).await;
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -247,6 +287,26 @@ async fn accept_loop(
                 log::warn!("IPC request rejected: {error}");
             }
         });
+    }
+}
+
+/// Như bản Windows tạo lại pipe: lỗi (vd chưa gỡ được socket cũ) thì thử lại, không bỏ kênh IPC tới khi
+/// tắt app. Chỉ ghi log khi lỗi đổi, khỏi đầy log.
+#[cfg(unix)]
+async fn bind_until_ready(path: &Path) -> tokio::net::UnixListener {
+    let mut last: Option<String> = None;
+    loop {
+        match bind_private(path) {
+            Ok(listener) => return listener,
+            Err(error) => {
+                let message = error.to_string();
+                if last.as_deref() != Some(message.as_str()) {
+                    log::error!("IPC socket bind failed at {}: {message}", path.display());
+                    last = Some(message);
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
     }
 }
 
@@ -492,6 +552,46 @@ mod tests {
             let mode = std::fs::metadata(directory.join("ipc.json")).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "token chỉ chủ máy đọc được");
         }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Thư mục dữ liệu dài (bản thử trong `$TMPDIR` của macOS): socket vẫn vừa `sun_path`, cùng một chỗ
+    /// cho app và native host, khác nhau giữa hai thư mục dữ liệu.
+    #[test]
+    fn socket_path_fits_sun_path_even_for_a_long_data_dir() {
+        let short = Path::new("/tmp/utd-data");
+        assert_eq!(socket_path_in(short, Path::new("/t")), short.join("ipc.sock"));
+        let long = PathBuf::from(format!(
+            "/var/folders/h4/{}/T/utd-integrate-{}",
+            "x".repeat(30),
+            Uuid::new_v4()
+        ));
+        let other = long.with_file_name("utd-integrate-khac");
+        let user_tmp = Path::new("/var/folders/h4/abc/T");
+        let path = socket_path_in(&long, user_tmp);
+        assert!(path.as_os_str().len() < SUN_PATH_LEN, "{}", path.display());
+        assert!(path.starts_with(user_tmp));
+        assert_eq!(path, socket_path_in(&long, user_tmp), "app và native host cùng một chỗ");
+        assert_ne!(path, socket_path_in(&other, user_tmp));
+    }
+
+    /// Bản thật trên Mac: thư mục dữ liệu dài vẫn nhận kết nối qua socket.
+    #[cfg(unix)]
+    #[test]
+    fn unix_socket_binds_for_a_long_data_dir() {
+        let directory = std::env::temp_dir().join(format!(
+            "utd-sock-dai-{}-{}",
+            Uuid::new_v4(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = socket_path(&directory);
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let _listener = bind_private(&path).unwrap();
+            std::os::unix::net::UnixStream::connect(&path).unwrap();
+        });
+        let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

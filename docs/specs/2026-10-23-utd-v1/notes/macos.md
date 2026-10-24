@@ -9,7 +9,7 @@ Rust 1.99.1 (rustup bản người dùng), Node 24 + pnpm, Xcode Command Line To
 |---|---|---|
 | Thư mục dữ liệu | `~/Library/Application Support/UTD-Data`; chế độ thử `UTD_DATA_DIR` giữ nguyên | `ipc.rs::data_dir` |
 | Thư mục tải mặc định | `~/Downloads/UTD` (Tauri `download_dir`, có sẵn); ổ ngoài `/Volumes/<tên>` rút ra ⇒ về mặc định | `commands.rs::volume_root` |
-| IPC native host ↔ app | Unix domain socket `<data>/ipc.sock` quyền 0600, socket sót lại thì thay; `ipc.json` tạo quyền 0600; vẫn kiểm token như named pipe | `ipc.rs`, `native_host.rs` |
+| IPC native host ↔ app | Unix domain socket `<data>/ipc.sock` quyền 0600 (thư mục dữ liệu dài quá `sun_path` 104 byte, vd bản thử trong `$TMPDIR` ⇒ `<thư mục tạm riêng của người dùng>/utd-<băm>.sock`), socket sót lại thì thay, bind lỗi thì thử lại; `ipc.json` tạo quyền 0600; vẫn kiểm token như named pipe | `ipc.rs`, `native_host.rs` |
 | Native host | script `<data>/utd-native-host` (`UTD_NATIVE_HOST=1 exec …/UTD.app/Contents/MacOS/UTD "$@"`), không chép binary ra ngoài bundle (giữ chữ ký, cập nhật xong vẫn đúng bản). App bị kéo sang chỗ khác ⇒ lúc mở viết lại script. Chạy từ .dmg hay AppTranslocation (ổ chỉ đọc) ⇒ báo "Kéo UTD vào Applications…" | `browser_integration/mac.rs` |
 | Đăng ký trình duyệt | chép manifest `app.utd.desktop.json` vào `~/Library/Application Support/<Google/Chrome, Chrome Beta, Chrome Canary, Chromium, Microsoft Edge, BraveSoftware/Brave-Browser, Vivaldi, Mozilla>/NativeMessagingHosts/` — chỉ trình duyệt đã cài | `browser_integration/mac.rs` |
 | Mở file / mở thư mục chứa | `/usr/bin/open` / `open -R` (chọn sẵn file trong Finder); thư mục dạng gói (`X.app`) thì chỉ chọn sẵn, không chạy | `files/shell/mac.rs` |
