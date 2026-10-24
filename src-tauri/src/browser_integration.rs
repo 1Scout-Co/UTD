@@ -204,6 +204,28 @@ fn extension_root() -> Result<PathBuf, String> {
     Ok(directory)
 }
 
+/// Mở app: tích hợp đã cài (thư mục extension có manifest) thì ghi lại file nào khác bản đi kèm app, để
+/// code extension mới (menu, quyền mới) tới được người đã cài sau khi cập nhật UTD; trình duyệt nạp khi
+/// khởi động lại hoặc bấm Reload. Không xoá thư mục (trình duyệt đang nạp từ đó). Trả số file đã ghi.
+pub fn sync_extensions(directory: &Path) -> Result<usize, String> {
+    if !directory.join("chromium").join("manifest.json").is_file() {
+        return Ok(0);
+    }
+    let mut written = 0;
+    for (relative, bytes) in EXTENSION_FILES {
+        let path = directory.join(relative);
+        if std::fs::read(&path).is_ok_and(|current| current == *bytes) {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+        written += 1;
+    }
+    Ok(written)
+}
+
 fn refresh_extensions() -> Result<PathBuf, String> {
     let directory = crate::ipc::data_dir()?.join("extension");
     if directory.exists() {
@@ -259,4 +281,34 @@ fn write_registry(root: &winreg::RegKey, key: &str, manifest: &Path) -> Result<(
     subkey
         .set_value("", &manifest.to_string_lossy().to_string())
         .map_err(|error| format!("Không ghi được đăng ký tích hợp: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch() -> PathBuf {
+        std::env::temp_dir().join(format!("utd-extension-{}", uuid::Uuid::new_v4()))
+    }
+
+    /// Cập nhật UTD (extension có menu "Tải tất cả link", quyền `scripting`): mở app thì file trong thư
+    /// mục extension đã cài được ghi lại; chưa cài tích hợp thì không tạo gì.
+    #[test]
+    fn startup_refreshes_an_installed_extension_only() {
+        let root = scratch();
+        let directory = root.join("extension");
+        assert_eq!(sync_extensions(&directory), Ok(0));
+        assert!(!directory.exists(), "chưa cài tích hợp: không tạo thư mục");
+
+        write_extensions(&directory).unwrap();
+        assert_eq!(sync_extensions(&directory), Ok(0), "đã khớp: không ghi lại");
+        let background = directory.join("chromium").join("background.js");
+        std::fs::write(&background, b"// ban cu, chua co MENU_ALL").unwrap();
+        std::fs::remove_file(directory.join("firefox").join("popup.js")).unwrap();
+        assert_eq!(sync_extensions(&directory), Ok(2));
+        let fresh = std::fs::read(&background).unwrap();
+        assert_eq!(fresh, include_bytes!("../../extensions/chromium/background.js"));
+        assert!(directory.join("firefox").join("popup.js").is_file());
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

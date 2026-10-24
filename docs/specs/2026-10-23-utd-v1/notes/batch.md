@@ -64,6 +64,9 @@ Nhánh `claude/batch-download-4d17fc`. Ngày 2026-10-24.
 - Gom `<a href>` có đuôi tệp quen thuộc hoặc là trang xem video (regex gần đúng luật media_pages, app kiểm lại),
   và mọi `img/video/audio/source` http(s); bỏ `#…`, bỏ trùng; tối đa 2000 link, ~900 KB.
 - Thêm quyền `scripting` (không hiện cảnh báo quyền mới; dùng cùng `activeTab`).
+- Người đã cài tích hợp: mở app bản mới thì `browser_integration::sync_extensions` ghi lại file extension
+  khác bản đi kèm trong `UTD-Data/extension` (trước đây chỉ ghi khi bấm "Cài extension"), trình duyệt nạp
+  bản mới khi khởi động lại hoặc bấm Reload. (Thêm khi ghép.)
 - Tin nhắn mới `{version:1, type:"batch", urls, pageUrl}` → native host kiểm (`pipe_payload`) → pipe
   `{token, url, pageUrl, batch}` → `ipc::route` kiểm token rồi `batch::clean_links` (http/https, ≤ 8192 ký tự,
   bỏ trùng, ≤ 2000) → `utd://batch-request` (giữ lô mới nhất nếu giao diện chưa nghe, `take_batch_request`).

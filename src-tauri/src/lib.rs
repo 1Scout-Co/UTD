@@ -181,6 +181,18 @@ pub fn run() {
                 let directory = directory.clone();
                 std::thread::spawn(move || refresh_native_host(&directory));
             }
+            // Extension đã cài nạp từ UTD-Data\extension: sau khi cập nhật UTD thì ghi bản mới vào đó
+            // (`tauri dev` không ghi đè extension của bản đã cài).
+            if isolated || !cfg!(debug_assertions) {
+                let extension = directory.join("extension");
+                std::thread::spawn(move || {
+                    match browser_integration::sync_extensions(&extension) {
+                        Ok(0) => {}
+                        Ok(count) => log::info!("Browser extension refreshed: {count} files"),
+                        Err(error) => log::warn!("Browser extension refresh failed: {error}"),
+                    }
+                });
+            }
             // App bị kéo sang chỗ khác sau khi bật tích hợp: script host phải trỏ theo.
             #[cfg(target_os = "macos")]
             if !isolated
