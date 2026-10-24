@@ -12,33 +12,42 @@ import { ChannelDialog } from "./channel-dialog"
  * Gửi video của kênh vào hàng đợi chung của app: lần lượt từng video với `later` (cuối hàng, đúng thứ tự
  * chọn); app tự giới hạn số download chạy cùng lúc (Cài đặt → Tải cùng lúc). Việc gửi sống ở màn chính
  * nên đóng hộp vẫn gửi tiếp; "Dừng" thôi gửi phần còn lại (video đã vào hàng thì tạm dừng ở danh sách).
+ * Kênh lớn gửi mất một lúc: bấm tải kênh khác giữa chừng thì nối vào sau, không bỏ phần còn lại.
  */
 function useChannelSender(onAdded: (task: EngineTask) => void) {
   const [waiting, setWaiting] = useState(0)
   const [failed, setFailed] = useState(0)
-  const run = useRef(0)
+  const pending = useRef<AddMediaPayload[]>([])
+  const sending = useRef(false)
+
+  const drain = useCallback(async () => {
+    if (sending.current) return
+    sending.current = true
+    for (let payload = pending.current.shift(); payload; payload = pending.current.shift()) {
+      setWaiting(pending.current.length + 1)
+      try {
+        onAdded(await addMediaDownload({ ...payload, later: true }))
+      } catch (reason: unknown) {
+        console.error("UTD channel:", reason)
+        setFailed((count) => count + 1)
+      }
+    }
+    sending.current = false
+    setWaiting(0)
+  }, [onAdded])
 
   const send = useCallback(
-    async (payloads: AddMediaPayload[]) => {
-      const current = ++run.current
-      setFailed(0)
-      for (const [index, payload] of payloads.entries()) {
-        if (run.current !== current) return
-        setWaiting(payloads.length - index)
-        try {
-          onAdded(await addMediaDownload({ ...payload, later: true }))
-        } catch (reason: unknown) {
-          console.error("UTD channel:", reason)
-          setFailed((count) => count + 1)
-        }
-      }
-      if (run.current === current) setWaiting(0)
+    (payloads: AddMediaPayload[]) => {
+      if (!sending.current) setFailed(0)
+      pending.current = [...pending.current, ...payloads]
+      setWaiting(pending.current.length + (sending.current ? 1 : 0))
+      void drain()
     },
-    [onAdded],
+    [drain],
   )
 
   const clear = useCallback(() => {
-    run.current += 1
+    pending.current = []
     setWaiting(0)
   }, [])
 
@@ -62,7 +71,7 @@ export function useChannelFlow(onAdded: (task: EngineTask) => void) {
 
   const start = useCallback(
     (payloads: AddMediaPayload[]) => {
-      void send(payloads)
+      send(payloads)
       setOpen(false)
     },
     [send],

@@ -92,6 +92,9 @@ function mockDesktop(scenario: Scenario) {
   const first = [entry(5, '2026-10-20'), entry(4, '2026-10-12', { downloaded: true }), entry(3, '2026-10-05')]
   const rest = [entry(2, '2026-09-28', { blocked: 'Riêng tư' }), entry(1, '2026-09-01')]
   const later = (ms: number, run: () => void) => setTimeout(run, ms)
+  // `hold()`: lệnh thêm video chờ tới `release()` (kênh lớn gửi lâu, như app thật).
+  let holding = false
+  const gate: (() => void)[] = []
   const task = (args: Args) => {
     const input = args.input as Record<string, unknown>
     return {
@@ -136,7 +139,11 @@ function mockDesktop(scenario: Scenario) {
       Promise.reject(`channel_page: ${String((args.input as Args).url)}`),
     // Hàm này chạy trong trang (addInitScript): không dùng được hằng của file test.
     media_probe: () => Promise.reject('channel_page: https://www.tiktok.com/@kenh.mau'),
-    add_media_download: (args) => task(args),
+    add_media_download: async (args) => {
+      const added = task(args)
+      if (holding) await new Promise<void>((resolve) => gate.push(resolve))
+      return added
+    },
     channel_list_cancel: (args) => {
       const send = channels.get(String(args.listingId))
       send?.({ kind: 'done', total: 3, complete: false, error: null })
@@ -200,6 +207,13 @@ function mockDesktop(scenario: Scenario) {
       }
     },
     listening: (event: string) => listeners.filter((item) => item.event === event).length,
+    hold: () => {
+      holding = true
+    },
+    release: () => {
+      holding = false
+      for (const resolve of gate.splice(0)) resolve()
+    },
   }
 }
 
@@ -207,6 +221,8 @@ interface DesktopProbe {
   calls: (cmd: string) => Record<string, unknown>[]
   emit: (event: string, payload: unknown) => void
   listening: (event: string) => number
+  hold: () => void
+  release: () => void
 }
 
 const desktop = (page: Page) => ({
@@ -219,6 +235,8 @@ const desktop = (page: Page) => ({
     ),
   listening: (event: string) =>
     page.evaluate((name) => (window as unknown as { __utd: DesktopProbe }).__utd.listening(name), event),
+  hold: () => page.evaluate(() => (window as unknown as { __utd: DesktopProbe }).__utd.hold()),
+  release: () => page.evaluate(() => (window as unknown as { __utd: DesktopProbe }).__utd.release()),
 })
 
 // Chờ hiệu ứng mở/đóng hộp thoại chạy xong: giữa chừng chữ còn mờ, axe đo tương phản sai.
@@ -358,6 +376,30 @@ test('S-61: lọc, chọn, một chất lượng chung, cả kênh vào hàng đ
     '770000000000000001',
   ])
   await expect(page.getByRole('status').filter({ hasText: 'đang thêm' })).toHaveCount(0)
+})
+
+test('S-61: tải kênh thứ hai lúc kênh đầu còn đang gửi thì nối vào sau, không bỏ video nào', async ({ page }) => {
+  await page.addInitScript(mockDesktop, 'full')
+  await page.goto('/')
+  const app = desktop(page)
+  await app.hold()
+  const first = await openFromAdd(page)
+  await first.getByRole('button', { name: 'Tải 3 video' }).click()
+  await expect(first).not.toBeVisible()
+  const pill = page.getByRole('status').filter({ hasText: 'đang thêm' })
+  await expect(pill).toContainText('đang thêm 3 video')
+
+  await expect.poll(() => app.listening('utd://media-request')).toBe(1)
+  await app.emit('utd://media-request', { url: CHANNEL })
+  const second = page.getByRole('dialog')
+  await second.getByRole('button', { name: 'Tải 3 video' }).click()
+  await expect(pill).toContainText('đang thêm 6 video')
+
+  // Gửi lần lượt: mới có một lệnh (đang chờ app trả lời).
+  expect(await app.calls('add_media_download')).toHaveLength(1)
+  await app.release()
+  await expect.poll(async () => (await app.calls('add_media_download')).length).toBe(6)
+  await expect(pill).toHaveCount(0)
 })
 
 test('S-60: kênh dài liệt kê dần, Dừng giữ phần đã nhận', async ({ page }) => {
