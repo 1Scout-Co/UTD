@@ -1,67 +1,50 @@
-//! Tải hộ yt-dlp / ffmpeg từ GitHub khi người dùng bấm (bấm = đồng ý). Kiểm SHA-256 trước
-//! khi dùng, giữ bản cũ của UTD thành `.bak` để quay lại, không đụng vào bản của app khác.
+//! Tải công cụ media chính chủ (yt-dlp, deno, ffmpeg) vào `<data>\bin`: lấy SHA-256 trước, tải và
+//! kiểm hash, giải nén, chạy thử, rồi mới thay bản cũ (bản cũ của UTD giữ thành `.bak` để quay lại).
+//! Không đụng vào bản của app khác. Người dùng bấm nút trong Cài đặt (bấm = đồng ý) hoặc app tự tải
+//! lần đầu / tự cập nhật (auto.rs, có công tắc trong Cài đặt). Nguồn theo nền tảng: sources.rs.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
-use utd_engine::fetch::{self, FetchError, FetchPolicy, Url};
+use utd_engine::fetch::{self, FetchError, FetchPolicy};
 
-use crate::events::{ToolProgress, TOOL_PROGRESS_EVENT};
-use crate::media::{tokio_command, tools};
+use crate::events::{TOOL_PROGRESS_EVENT, ToolProgress};
+use crate::media::sources::{self, Asset, Pack, Platform, Release, Sums, Tool};
+use crate::media::{tools, unpack, verify};
 
-/// GitHub chuyển `releases/.../download` sang CDN đã ký; `objects.` là CDN cũ.
-const HOSTS: &[&str] = &[
-    "github.com",
-    "release-assets.githubusercontent.com",
-    "objects.githubusercontent.com",
-];
 const SUMS_MAX: u64 = 64 * 1024;
 const MIB: u64 = 1024 * 1024;
 const TMP_PREFIX: &str = "utd-tmp-";
 const CHECK_TIMEOUT: Duration = Duration::from_secs(90);
-const EXTRACT_TIMEOUT: Duration = Duration::from_secs(600);
 /// Bản `latest` của FFmpeg-Builds được dựng lại mỗi ngày: lệch hash/404 thì chờ rồi thử lại một lần.
-const RETRY_DELAY: Duration = Duration::from_secs(20);
+pub(crate) const RETRY_DELAY: Duration = Duration::from_secs(20);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    YtDlp,
-    Ffmpeg,
+/// Kết quả một lần cài.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    Installed,
+    /// Bản đang dùng đã mới nhất: không tải gì.
+    Current,
 }
 
-struct Release {
-    tool: &'static str,
-    kind: Kind,
-    asset: &'static str,
-    url: &'static str,
-    sums_url: &'static str,
-    max_bytes: u64,
-    need_free: u64,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InstallError {
+    /// Đang có lần cài khác (người dùng bấm, hoặc app tự tải).
+    Busy(String),
+    Cancelled(String),
+    Failed(String),
 }
 
-const YT_DLP: Release = Release {
-    tool: "yt-dlp",
-    kind: Kind::YtDlp,
-    asset: "yt-dlp.exe",
-    url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
-    sums_url: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS",
-    max_bytes: 64 * MIB,
-    need_free: 200 * MIB,
-};
-
-const FFMPEG: Release = Release {
-    tool: "ffmpeg",
-    kind: Kind::Ffmpeg,
-    asset: "ffmpeg-master-latest-win64-gpl.zip",
-    url: "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
-    sums_url: "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/checksums.sha256",
-    max_bytes: 400 * MIB,
-    need_free: 1200 * MIB,
-};
+impl InstallError {
+    pub(crate) fn into_message(self) -> String {
+        match self {
+            Self::Busy(message) | Self::Cancelled(message) | Self::Failed(message) => message,
+        }
+    }
+}
 
 /// Mỗi lúc chỉ một lần cài; giữ token để nút Huỷ dừng được.
 static ACTIVE: Mutex<Option<(&'static str, CancellationToken)>> = Mutex::new(None);
@@ -76,12 +59,14 @@ impl Drop for ActiveGuard {
     }
 }
 
-fn begin(tool: &'static str) -> Result<(ActiveGuard, CancellationToken), String> {
+fn begin(tool: &'static str) -> Result<(ActiveGuard, CancellationToken), InstallError> {
     let mut active = ACTIVE
         .lock()
-        .map_err(|_| "Không bắt đầu được việc tải công cụ.".to_string())?;
+        .map_err(|_| InstallError::Failed("Không bắt đầu được việc tải công cụ.".into()))?;
     if let Some((name, _)) = active.as_ref() {
-        return Err(format!("Đang tải {name}. Chờ xong rồi thử lại."));
+        return Err(InstallError::Busy(format!(
+            "Đang tải {name}. Chờ xong rồi thử lại."
+        )));
     }
     let token = CancellationToken::new();
     *active = Some((tool, token.clone()));
@@ -105,13 +90,19 @@ pub fn cancel() -> bool {
         .is_some()
 }
 
-fn policy() -> FetchPolicy {
-    FetchPolicy::https_only(HOSTS)
+/// Nơi nhận tiến độ: giao diện (sự kiện) hoặc bài thử.
+pub(crate) type Emit = Arc<dyn Fn(ToolProgress) + Send + Sync>;
+
+pub(crate) fn emitter(app: &AppHandle) -> Emit {
+    let app = app.clone();
+    Arc::new(move |progress| {
+        let _ = app.emit(TOOL_PROGRESS_EVENT, progress);
+    })
 }
 
-/// Gửi tiến độ ra UI, tối đa ~4 lần/giây (đổi bước thì gửi ngay).
+/// Gửi tiến độ, tối đa ~4 lần/giây (đổi bước thì gửi ngay).
 struct Reporter {
-    app: AppHandle,
+    emit: Emit,
     tool: &'static str,
     stage: &'static str,
     last: Option<Instant>,
@@ -134,15 +125,12 @@ impl Reporter {
             return;
         }
         self.last = Some(Instant::now());
-        let _ = self.app.emit(
-            TOOL_PROGRESS_EVENT,
-            ToolProgress {
-                tool: self.tool.to_string(),
-                stage: self.stage,
-                downloaded_bytes: downloaded,
-                total_bytes: total,
-            },
-        );
+        (self.emit)(ToolProgress {
+            tool: self.tool.to_string(),
+            stage: self.stage,
+            downloaded_bytes: downloaded,
+            total_bytes: total,
+        });
     }
 }
 
@@ -152,9 +140,9 @@ struct WorkDir {
 }
 
 impl WorkDir {
-    fn new(bin: &Path) -> Result<Self, String> {
+    fn new(bin: &Path) -> Result<Self, InstallError> {
         let path = bin.join(format!("{TMP_PREFIX}{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir(&path).map_err(|error| write_error(&error))?;
+        std::fs::create_dir_all(path.join("x")).map_err(|error| write_error(&error))?;
         Ok(Self { path })
     }
 }
@@ -165,137 +153,233 @@ impl Drop for WorkDir {
     }
 }
 
+/// Một lần cài: gói nào, vào đâu, luật mạng, bản đang dùng (để bỏ qua khi đã mới nhất).
+pub(crate) struct Job<'a> {
+    pub release: &'a Release,
+    pub bin: &'a Path,
+    pub policy: FetchPolicy,
+    /// `None` = luôn tải (ffmpeg, hoặc chưa có bản nào).
+    pub current: Option<String>,
+    pub emit: Emit,
+    pub retry_delay: Duration,
+}
+
+/// Nút "Tải/Cập nhật" trong Cài đặt.
 pub async fn install(app: AppHandle, tool: &str) -> Result<tools::MediaToolsStatus, String> {
-    let release = match tool {
-        "yt-dlp" => &YT_DLP,
-        "ffmpeg" => &FFMPEG,
-        _ => return Err("Công cụ không hợp lệ.".into()),
+    let tool = Tool::parse(tool).ok_or_else(|| "Công cụ không hợp lệ.".to_string())?;
+    let platform = Platform::current()
+        .ok_or_else(|| "Chưa tự tải được công cụ trên hệ điều hành này.".to_string())?;
+    let release = sources::release(tool, platform);
+    let current = if tool == Tool::Ffmpeg {
+        None
+    } else {
+        tauri::async_runtime::spawn_blocking(tools::detect)
+            .await
+            .ok()
+            .and_then(|status| status.info(tool).map(|info| info.version))
     };
-    let (_guard, cancel) = begin(release.tool)?;
     let bin = tools::bin_dir();
-    std::fs::create_dir_all(&bin).map_err(|error| write_error(&error))?;
-    clean_stale(&bin);
-    check_space(&bin, release)?;
-    let mut reporter = Reporter {
-        app,
-        tool: release.tool,
-        stage: "checksum",
-        last: None,
+    let job = Job {
+        release: &release,
+        bin: &bin,
+        policy: release.policy(),
+        current,
+        emit: emitter(&app),
+        retry_delay: RETRY_DELAY,
     };
-    let result = match release.kind {
-        Kind::YtDlp => install_yt_dlp(&bin, &cancel, &mut reporter).await,
-        Kind::Ffmpeg => install_ffmpeg(&bin, &cancel, &mut reporter).await,
-    };
-    tools::forget_versions();
-    if let Err(message) = &result {
-        log::warn!("Installing {} failed: {message}", release.tool);
-    }
-    result?;
+    install_job(&job)
+        .await
+        .map_err(InstallError::into_message)?;
     tauri::async_runtime::spawn_blocking(tools::detect)
         .await
         .map_err(|error| error.to_string())
 }
 
-async fn install_yt_dlp(
-    bin: &Path,
-    cancel: &CancellationToken,
-    reporter: &mut Reporter,
-) -> Result<(), String> {
-    let current = tauri::async_runtime::spawn_blocking(tools::detect)
-        .await
-        .ok()
-        .and_then(|status| status.yt_dlp)
-        .map(|info| info.version);
-    let work = WorkDir::new(bin)?;
-    let fresh = work.path.join("yt-dlp.exe");
-    if !fetch_verified(&YT_DLP, &fresh, current.as_deref(), cancel, reporter).await? {
-        return Ok(());
+/// Cài theo `job` (một lần cài mỗi lúc trong cả app).
+pub(crate) async fn install_job(job: &Job<'_>) -> Result<Outcome, InstallError> {
+    let tool = job.release.tool.name();
+    let (_guard, cancel) = begin(tool)?;
+    std::fs::create_dir_all(job.bin).map_err(|error| write_error(&error))?;
+    clean_stale(job.bin);
+    check_space(job.bin, job.release)?;
+    let mut reporter = Reporter {
+        emit: job.emit.clone(),
+        tool,
+        stage: "checksum",
+        last: None,
+    };
+    let result = run_job(job, &cancel, &mut reporter).await;
+    tools::forget_versions();
+    match &result {
+        Ok(outcome) => log::info!("Tool {tool}: {outcome:?}"),
+        Err(error) => log::warn!("Installing {tool} failed: {error:?}"),
     }
-    reporter.stage("check");
-    let version = run_check(&fresh, "--version").await;
-    if !version.as_deref().is_some_and(is_date_version) {
-        return Err("Bản yt-dlp vừa tải không chạy được nên UTD giữ nguyên bản cũ.".into());
-    }
-    reporter.stage("install");
-    swap_in(&[(fresh, bin.join("yt-dlp.exe"))])
+    result
 }
 
-async fn install_ffmpeg(
-    bin: &Path,
+async fn run_job(
+    job: &Job<'_>,
     cancel: &CancellationToken,
     reporter: &mut Reporter,
-) -> Result<(), String> {
-    let work = WorkDir::new(bin)?;
-    let archive = work.path.join("pkg.zip");
-    fetch_verified(&FFMPEG, &archive, None, cancel, reporter).await?;
-    reporter.stage("extract");
+) -> Result<Outcome, InstallError> {
+    let work = WorkDir::new(job.bin)?;
     let out = work.path.join("x");
-    std::fs::create_dir(&out).map_err(|error| write_error(&error))?;
-    extract(&work.path, cancel).await?;
-    let _ = std::fs::remove_file(&archive);
-    let files = locate_ffmpeg(&out)?;
-    let mut checked = vec![&files.ffmpeg, &files.ffprobe];
-    checked.extend(files.license.as_ref());
-    if !checked.iter().all(|path| inside(&out, path)) {
-        return Err("Gói ffmpeg có đường dẫn lạ nên UTD đã dừng.".into());
+    for (index, asset) in job.release.assets.iter().enumerate() {
+        let archive = format!("a{index}.zip");
+        let dest = match asset.pack {
+            Pack::Binary => out.join(&job.release.binaries[0].name),
+            Pack::Zip => work.path.join(&archive),
+        };
+        // Chỉ gói đầu so phiên bản: các gói sau thuộc cùng một bản.
+        let current = job.current.as_deref().filter(|_| index == 0);
+        if !fetch_asset(job, asset, &dest, current, cancel, reporter).await? {
+            return Ok(Outcome::Current);
+        }
+        if asset.pack == Pack::Zip {
+            reporter.stage("extract");
+            unpack::extract(&work.path, &archive, cancel)
+                .await
+                .map_err(|message| stopped(cancel, job.release.tool, message))?;
+            let _ = std::fs::remove_file(&dest);
+        }
     }
-    reporter.stage("check");
-    let ffmpeg_ok = run_check(&files.ffmpeg, "-version").await;
-    let ffprobe_ok = run_check(&files.ffprobe, "-version").await;
-    if !ffmpeg_ok.is_some_and(|line| line.starts_with("ffmpeg version"))
-        || !ffprobe_ok.is_some_and(|line| line.starts_with("ffprobe version"))
-    {
-        return Err("Bản ffmpeg vừa tải không chạy được nên UTD giữ nguyên bản cũ.".into());
-    }
+    let pairs = check_binaries(job, &out, reporter).await?;
     reporter.stage("install");
-    swap_in(&[
-        (files.ffmpeg, bin.join("ffmpeg.exe")),
-        (files.ffprobe, bin.join("ffprobe.exe")),
-    ])?;
-    // Giấy phép GPL đi kèm bản build: giữ cạnh binary.
-    if let Some(license) = files.license {
-        let _ = std::fs::copy(license, bin.join("ffmpeg-LICENSE.txt"));
+    swap_in(&pairs).map_err(InstallError::Failed)?;
+    // Giấy phép đi kèm bản build (GPL của ffmpeg): giữ cạnh binary.
+    if let (Some(name), Some((first, _))) = (job.release.license, pairs.first())
+        && let Some(license) = unpack::locate_license(&out, first, name)
+    {
+        let target = job
+            .bin
+            .join(format!("{}-LICENSE.txt", job.release.tool.name()));
+        let _ = std::fs::copy(license, target);
     }
-    Ok(())
+    Ok(Outcome::Installed)
+}
+
+fn stopped(cancel: &CancellationToken, tool: Tool, message: String) -> InstallError {
+    if cancel.is_cancelled() {
+        describe(FetchError::Cancelled, tool.name())
+    } else {
+        InstallError::Failed(message)
+    }
+}
+
+/// Tìm từng file chạy được trong gói, cấp quyền chạy, chạy thử; trả cặp (file mới, chỗ đặt).
+async fn check_binaries(
+    job: &Job<'_>,
+    out: &Path,
+    reporter: &mut Reporter,
+) -> Result<Vec<(PathBuf, PathBuf)>, InstallError> {
+    reporter.stage("check");
+    let tool = job.release.tool.name();
+    let mut pairs = Vec::new();
+    for binary in &job.release.binaries {
+        let found = unpack::locate(out, &binary.name).ok_or_else(|| {
+            InstallError::Failed(format!(
+                "Gói {tool} không có {} nên UTD đã dừng.",
+                binary.name
+            ))
+        })?;
+        unpack::make_executable(&found).map_err(|error| write_error(&error))?;
+        let line = run_check(&found, binary.flag).await;
+        if !line.as_deref().is_some_and(binary.accept) {
+            return Err(InstallError::Failed(format!(
+                "Bản {tool} vừa tải không chạy được nên UTD giữ nguyên bản cũ."
+            )));
+        }
+        pairs.push((found, job.bin.join(&binary.name)));
+    }
+    Ok(pairs)
+}
+
+/// Link tải thật và SHA-256 của nó.
+struct Located {
+    url: String,
+    name: String,
+    hash: Option<String>,
+    /// Tag thật của bản mới nhất (GitHub), để so với bản đang dùng.
+    tag: Option<String>,
+}
+
+async fn locate_asset(asset: &Asset, policy: &FetchPolicy) -> Result<Located, FetchError> {
+    let (url, name, sidecar) = match &asset.sums {
+        Sums::List { url, name } => (url, name, false),
+        Sums::Sidecar { url, name } => (url, name, true),
+        Sums::Beside => {
+            let target = fetch::resolve_redirect(&asset.url, policy).await?;
+            let name = target
+                .path_segments()
+                .and_then(|mut segments| segments.next_back())
+                .unwrap_or_default()
+                .to_string();
+            let sums = fetch::fetch_text(&format!("{target}.sha256"), SUMS_MAX, policy).await?;
+            return Ok(Located {
+                url: target.to_string(),
+                hash: verify::checksum_for(&sums.text, &name),
+                name,
+                tag: None,
+            });
+        }
+    };
+    let sums = fetch::fetch_text(url, SUMS_MAX, policy).await?;
+    let tag = verify::release_tag(&sums.redirects);
+    let hash = if sidecar {
+        verify::sidecar_hash(&sums.text, name)
+    } else {
+        verify::checksum_for(&sums.text, name)
+    };
+    let url = match (&asset.pinned, &tag) {
+        (Some(pinned), Some(tag)) => pinned.replace("{tag}", tag),
+        _ => asset.url.clone(),
+    };
+    Ok(Located {
+        url,
+        name: name.clone(),
+        hash,
+        tag,
+    })
 }
 
 /// Lấy SHA-256 rồi tải file vào `dest`. `false` = bản đang có đã mới nhất, không tải.
-async fn fetch_verified(
-    release: &Release,
+async fn fetch_asset(
+    job: &Job<'_>,
+    asset: &Asset,
     dest: &Path,
     current: Option<&str>,
     cancel: &CancellationToken,
     reporter: &mut Reporter,
-) -> Result<bool, String> {
+) -> Result<bool, InstallError> {
+    let tool = job.release.tool;
     for attempt in 0..2 {
         reporter.stage("checksum");
-        let sums = match fetch::fetch_text(release.sums_url, SUMS_MAX, &policy()).await {
-            Ok(sums) => sums,
+        let located = match locate_asset(asset, &job.policy).await {
+            Ok(located) => located,
             Err(FetchError::Status(404)) if attempt == 0 => {
-                wait_retry(cancel, release.tool).await?;
+                wait_retry(job, cancel).await?;
                 continue;
             }
-            Err(error) => return Err(describe(error, release.tool)),
+            Err(error) => return Err(describe(error, tool.name())),
         };
-        if let (Some(current), Some(tag)) = (current, release_tag(&sums.redirects))
-            && is_date_version(current)
-            && current >= tag.as_str()
+        if let (Some(current), Some(tag)) = (current, located.tag.as_deref())
+            && verify::is_current(tool, current, tag)
         {
             return Ok(false);
         }
-        let expected = checksum_for(&sums.text, release.asset).ok_or_else(|| {
-            format!(
+        let expected = located.hash.ok_or_else(|| {
+            InstallError::Failed(format!(
                 "Danh sách SHA-256 không có {} nên UTD đã dừng.",
-                release.asset
-            )
+                located.name
+            ))
         })?;
         reporter.stage("download");
         let result = fetch::download_verified(
-            release.url,
+            &located.url,
             &expected,
             dest,
-            release.max_bytes,
-            &policy(),
+            job.release.max_bytes,
+            &job.policy,
             cancel,
             |done, total| reporter.bytes(done, total),
         )
@@ -303,39 +387,42 @@ async fn fetch_verified(
         match result {
             Ok(_) => return Ok(true),
             Err(FetchError::HashMismatch { .. } | FetchError::Status(404)) if attempt == 0 => {
-                wait_retry(cancel, release.tool).await?;
+                wait_retry(job, cancel).await?;
             }
-            Err(error) => return Err(describe(error, release.tool)),
+            Err(error) => return Err(describe(error, tool.name())),
         }
     }
-    Err(format!(
+    Err(InstallError::Failed(format!(
         "Không tải được {}. Thử lại sau ít phút.",
-        release.tool
-    ))
+        tool.name()
+    )))
 }
 
-async fn wait_retry(cancel: &CancellationToken, tool: &str) -> Result<(), String> {
+async fn wait_retry(job: &Job<'_>, cancel: &CancellationToken) -> Result<(), InstallError> {
     tokio::select! {
-        _ = cancel.cancelled() => Err(describe(FetchError::Cancelled, tool)),
-        _ = tokio::time::sleep(RETRY_DELAY) => Ok(()),
+        _ = cancel.cancelled() => Err(describe(FetchError::Cancelled, job.release.tool.name())),
+        _ = tokio::time::sleep(job.retry_delay) => Ok(()),
     }
 }
 
-fn describe(error: FetchError, tool: &str) -> String {
+fn describe(error: FetchError, tool: &str) -> InstallError {
     log::warn!("Tool download error ({tool}): {error}");
-    match error {
+    let message = match error {
+        FetchError::Cancelled => return InstallError::Cancelled(format!("Đã huỷ tải {tool}.")),
         FetchError::HostNotAllowed(host) | FetchError::InsecureUrl(host) => {
             format!("Nguồn tải chuyển tới máy chủ lạ ({host}) nên UTD đã dừng.")
         }
-        FetchError::TooManyRedirects => "GitHub chuyển hướng quá nhiều lần nên UTD đã dừng.".into(),
+        FetchError::TooManyRedirects => {
+            "Nguồn tải chuyển hướng quá nhiều lần nên UTD đã dừng.".into()
+        }
         FetchError::Status(404) => {
-            "GitHub chưa có bản phát hành (HTTP 404, có thể đang cập nhật). Thử lại sau ít phút."
+            "Nguồn tải chưa có bản phát hành (HTTP 404, có thể đang cập nhật). Thử lại sau ít phút."
                 .into()
         }
         FetchError::Status(403 | 429) => {
-            "GitHub đang giới hạn lượt tải. Thử lại sau ít phút.".into()
+            "Nguồn tải đang giới hạn lượt tải. Thử lại sau ít phút.".into()
         }
-        FetchError::Status(code) => format!("GitHub trả lỗi HTTP {code}. Thử lại sau."),
+        FetchError::Status(code) => format!("Nguồn tải trả lỗi HTTP {code}. Thử lại sau."),
         FetchError::TooLarge(_) => "File tải về lớn bất thường nên UTD đã dừng.".into(),
         FetchError::Truncated { .. } => "Kết nối bị ngắt giữa chừng. Thử lại.".into(),
         FetchError::NotText | FetchError::InvalidUrl | FetchError::InvalidHash => {
@@ -344,27 +431,27 @@ fn describe(error: FetchError, tool: &str) -> String {
         FetchError::HashMismatch { .. } => {
             "SHA-256 không khớp nên UTD đã xoá file vừa tải. Thử lại sau ít phút.".into()
         }
-        FetchError::Timeout => "GitHub phản hồi quá lâu. Kiểm tra mạng rồi thử lại.".into(),
-        FetchError::Cancelled => format!("Đã huỷ tải {tool}."),
-        FetchError::Network(_) => "Không kết nối được GitHub. Kiểm tra mạng rồi thử lại.".into(),
-        FetchError::Io(error) => write_error(&error),
-    }
+        FetchError::Timeout => "Nguồn tải phản hồi quá lâu. Kiểm tra mạng rồi thử lại.".into(),
+        FetchError::Network(_) => "Không kết nối được nguồn tải. Kiểm tra mạng rồi thử lại.".into(),
+        FetchError::Io(error) => return write_error(&error),
+    };
+    InstallError::Failed(message)
 }
 
-fn write_error(error: &std::io::Error) -> String {
-    format!("Không ghi được vào thư mục công cụ: {error}")
+fn write_error(error: &std::io::Error) -> InstallError {
+    InstallError::Failed(format!("Không ghi được vào thư mục công cụ: {error}"))
 }
 
-fn check_space(bin: &Path, release: &Release) -> Result<(), String> {
+fn check_space(bin: &Path, release: &Release) -> Result<(), InstallError> {
     let Ok(free) = fs2::available_space(bin) else {
         return Ok(());
     };
     if free < release.need_free {
-        return Err(format!(
+        return Err(InstallError::Failed(format!(
             "Ổ đĩa còn ít chỗ: cần khoảng {} MB trống để tải {}.",
             release.need_free / MIB,
-            release.tool
-        ));
+            release.tool.name()
+        )));
     }
     Ok(())
 }
@@ -383,162 +470,12 @@ fn clean_stale(bin: &Path) {
     }
 }
 
-/// Dòng `<sha256>  <tên>` hoặc `<sha256> *<tên>`; tên phải khớp đúng (không khớp tiền tố).
-/// Có hai dòng cùng tên mà khác hash ⇒ không tin.
-fn checksum_for(text: &str, asset: &str) -> Option<String> {
-    let mut found: Option<String> = None;
-    for line in text.lines() {
-        let line = line.trim_start_matches('\u{feff}').trim();
-        let Some((hash, name)) = line.split_once(char::is_whitespace) else {
-            continue;
-        };
-        let name = name.trim_start();
-        let name = name.strip_prefix('*').unwrap_or(name);
-        if name != asset {
-            continue;
-        }
-        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return None;
-        }
-        let hash = hash.to_ascii_lowercase();
-        if found.as_ref().is_some_and(|previous| *previous != hash) {
-            return None;
-        }
-        found = Some(hash);
-    }
-    found
-}
-
-/// Tag thật của bản `latest`, đọc từ bước chuyển hướng
-/// `github.com/<chủ>/<repo>/releases/download/<tag>/<tên>`.
-fn release_tag(redirects: &[Url]) -> Option<String> {
-    redirects.iter().find_map(|url| {
-        if url.host_str()? != "github.com" {
-            return None;
-        }
-        let segments: Vec<&str> = url.path_segments()?.collect();
-        match segments.as_slice() {
-            [_, _, "releases", "download", tag, _] if *tag != "latest" => Some(tag.to_string()),
-            _ => None,
-        }
-    })
-}
-
-/// Phiên bản yt-dlp dạng `2026.10.21` (có thể thêm `.123456` ở bản nightly).
-fn is_date_version(version: &str) -> bool {
-    let bytes = version.as_bytes();
-    bytes.len() >= 10
-        && bytes[..4].iter().all(u8::is_ascii_digit)
-        && bytes[4] == b'.'
-        && bytes[5..7].iter().all(u8::is_ascii_digit)
-        && bytes[7] == b'.'
-        && bytes[8..10].iter().all(u8::is_ascii_digit)
-}
-
 async fn run_check(path: &Path, flag: &'static str) -> Option<String> {
     let path = path.to_path_buf();
     tauri::async_runtime::spawn_blocking(move || tools::run_version(&path, flag, CHECK_TIMEOUT))
         .await
         .ok()
         .flatten()
-}
-
-fn system_tar() -> Result<PathBuf, String> {
-    let root = std::env::var_os("SystemRoot")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-    let tar = root.join("System32").join("tar.exe");
-    if tar.is_file() {
-        Ok(tar)
-    } else {
-        Err(
-            "Windows thiếu tar.exe (cần Windows 10 1803 trở lên) nên chưa giải nén được ffmpeg."
-                .into(),
-        )
-    }
-}
-
-/// Giải nén `pkg.zip` vào `x` bằng tar.exe của Windows (bsdtar, từ chối đường dẫn `..`).
-/// bsdtar đổi tham số sang bảng mã ANSI nên chỉ truyền tên ASCII tương đối; thư mục có
-/// thể chứa chữ Unicode (tên người dùng) được đặt qua `current_dir`.
-async fn extract(work: &Path, cancel: &CancellationToken) -> Result<(), String> {
-    let tar = system_tar()?;
-    let mut command = tokio_command(&tar);
-    command
-        .current_dir(work)
-        .args(["-xf", "pkg.zip", "-C", "x"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let child = command
-        .spawn()
-        .map_err(|error| format!("Không chạy được tar.exe: {error}"))?;
-    let output = tokio::select! {
-        _ = cancel.cancelled() => return Err(describe(FetchError::Cancelled, "ffmpeg")),
-        output = tokio::time::timeout(EXTRACT_TIMEOUT, child.wait_with_output()) => output,
-    };
-    let output = output
-        .map_err(|_| "Giải nén ffmpeg quá lâu nên UTD đã dừng.".to_string())?
-        .map_err(|error| format!("Không chạy được tar.exe: {error}"))?;
-    if !output.status.success() {
-        let detail: String = String::from_utf8_lossy(&output.stderr)
-            .lines()
-            .next()
-            .unwrap_or("")
-            .chars()
-            .take(160)
-            .collect();
-        log::warn!("tar.exe failed: {detail}");
-        return Err("Giải nén ffmpeg lỗi nên UTD đã dừng.".into());
-    }
-    Ok(())
-}
-
-struct FfmpegFiles {
-    ffmpeg: PathBuf,
-    ffprobe: PathBuf,
-    license: Option<PathBuf>,
-}
-
-fn is_regular(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
-}
-
-/// Gói có dạng `<tên gói>/bin/ffmpeg.exe`; tìm một tầng thư mục, có giới hạn.
-fn locate_ffmpeg(out: &Path) -> Result<FfmpegFiles, String> {
-    let mut roots = vec![out.to_path_buf()];
-    if let Ok(entries) = std::fs::read_dir(out) {
-        roots.extend(
-            entries
-                .flatten()
-                .take(16)
-                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-                .map(|entry| entry.path()),
-        );
-    }
-    for root in roots {
-        let ffmpeg = root.join("bin").join("ffmpeg.exe");
-        let ffprobe = root.join("bin").join("ffprobe.exe");
-        if is_regular(&ffmpeg) && is_regular(&ffprobe) {
-            let license = Some(root.join("LICENSE.txt")).filter(|path| is_regular(path));
-            return Ok(FfmpegFiles {
-                ffmpeg,
-                ffprobe,
-                license,
-            });
-        }
-    }
-    Err("Gói ffmpeg không có bin\\ffmpeg.exe và bin\\ffprobe.exe nên UTD đã dừng.".into())
-}
-
-/// `path` (sau khi phân giải symlink/junction) nằm hẳn trong `root`.
-fn inside(root: &Path, path: &Path) -> bool {
-    match (std::fs::canonicalize(root), std::fs::canonicalize(path)) {
-        (Ok(root), Ok(path)) => path != root && path.starts_with(&root),
-        _ => false,
-    }
 }
 
 struct Placed {
@@ -612,117 +549,10 @@ fn undo(placed: &Placed) {
 mod tests {
     use super::*;
 
-    const A: &str = "33121d192d706e62f684a06f80918e3f3a8ba52ac3a65213b6951c39c7d9f555";
-    const B: &str = "7ce38c77db13db50c64e656b1056a0448e6c38ec0f0ccf28e30dd5271c008850";
-
     fn scratch() -> PathBuf {
         let path = std::env::temp_dir().join(format!("utd-install-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&path).expect("dir");
         path
-    }
-
-    #[test]
-    fn checksum_matches_exact_names_only() {
-        let sums =
-            format!("{B}  yt-dlp_x86.exe\n{A}  yt-dlp.exe\n{B}  yt-dlp.exe.sig\n{B}  yt-dlp\n");
-        assert_eq!(checksum_for(&sums, "yt-dlp.exe").as_deref(), Some(A));
-        assert_eq!(checksum_for(&sums, "yt-dlp.ex"), None);
-
-        let ffmpeg = format!(
-            "{B}  ffmpeg-master-latest-win64-gpl-shared.zip\r\n{}  ffmpeg-master-latest-win64-gpl.zip\r\n",
-            A.to_ascii_uppercase()
-        );
-        assert_eq!(
-            checksum_for(&ffmpeg, "ffmpeg-master-latest-win64-gpl.zip").as_deref(),
-            Some(A)
-        );
-    }
-
-    #[test]
-    fn checksum_accepts_binary_marker_and_rejects_bad_lines() {
-        assert_eq!(
-            checksum_for(&format!("\u{feff}{A} *yt-dlp.exe\n"), "yt-dlp.exe").as_deref(),
-            Some(A)
-        );
-        assert_eq!(
-            checksum_for(&format!("{A}\tyt-dlp.exe"), "yt-dlp.exe").as_deref(),
-            Some(A)
-        );
-        assert_eq!(checksum_for("abc123  yt-dlp.exe\n", "yt-dlp.exe"), None);
-        assert_eq!(
-            checksum_for(&format!("{}  yt-dlp.exe", "z".repeat(64)), "yt-dlp.exe"),
-            None
-        );
-        assert_eq!(checksum_for("", "yt-dlp.exe"), None);
-        // Hai hash khác nhau cho cùng một tên: không tin.
-        assert_eq!(
-            checksum_for(&format!("{A}  yt-dlp.exe\n{B}  yt-dlp.exe\n"), "yt-dlp.exe"),
-            None
-        );
-        assert_eq!(
-            checksum_for(&format!("{A}  yt-dlp.exe\n{A}  yt-dlp.exe\n"), "yt-dlp.exe").as_deref(),
-            Some(A)
-        );
-    }
-
-    #[test]
-    fn reads_release_tag_from_redirects() {
-        let hops = [
-            Url::parse(
-                "https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.21/SHA2-256SUMS",
-            )
-            .expect("url"),
-            Url::parse(
-                "https://release-assets.githubusercontent.com/github-production-release-asset/1/x",
-            )
-            .expect("url"),
-        ];
-        assert_eq!(release_tag(&hops).as_deref(), Some("2026.10.21"));
-        let latest = [Url::parse(
-            "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/checksums.sha256",
-        )
-        .expect("url")];
-        assert_eq!(release_tag(&latest), None);
-        assert_eq!(release_tag(&[]), None);
-        assert!(is_date_version("2026.10.21"));
-        assert!(is_date_version("2026.10.22.123456"));
-        assert!(!is_date_version("không rõ"));
-        assert!(!is_date_version("8.1.2"));
-    }
-
-    #[test]
-    fn archive_paths_must_stay_inside_the_extract_dir() {
-        let root = scratch();
-        let out = root.join("x");
-        std::fs::create_dir_all(out.join("pkg").join("bin")).expect("dirs");
-        let good = out.join("pkg").join("bin").join("ffmpeg.exe");
-        std::fs::write(&good, b"exe").expect("file");
-        let outside = root.join("evil.exe");
-        std::fs::write(&outside, b"exe").expect("file");
-
-        assert!(inside(&out, &good));
-        assert!(!inside(&out, &out.join("..").join("evil.exe")));
-        assert!(!inside(&out, &outside));
-        assert!(!inside(&out, &out));
-        assert!(!inside(&out, &out.join("missing.exe")));
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn locates_ffmpeg_pair_in_package_folder() {
-        let root = scratch();
-        let bin = root.join("ffmpeg-master-latest-win64-gpl").join("bin");
-        std::fs::create_dir_all(&bin).expect("dirs");
-        assert!(locate_ffmpeg(&root).is_err());
-        std::fs::write(bin.join("ffmpeg.exe"), b"a").expect("file");
-        assert!(locate_ffmpeg(&root).is_err(), "ffprobe is required too");
-        std::fs::write(bin.join("ffprobe.exe"), b"b").expect("file");
-        std::fs::write(bin.parent().expect("pkg").join("LICENSE.txt"), b"GPL").expect("file");
-        let files = locate_ffmpeg(&root).expect("found");
-        assert_eq!(files.ffmpeg, bin.join("ffmpeg.exe"));
-        assert_eq!(files.ffprobe, bin.join("ffprobe.exe"));
-        assert!(files.license.is_some());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -759,9 +589,10 @@ mod tests {
 
     #[test]
     fn only_one_install_at_a_time() {
+        let _serial = crate::media::install_tests::serial_blocking();
         let (guard, token) = begin("yt-dlp").expect("first");
         assert_eq!(current().as_deref(), Some("yt-dlp"));
-        assert!(begin("ffmpeg").is_err());
+        assert!(matches!(begin("ffmpeg"), Err(InstallError::Busy(_))));
         assert!(cancel());
         assert!(token.is_cancelled());
         drop(guard);

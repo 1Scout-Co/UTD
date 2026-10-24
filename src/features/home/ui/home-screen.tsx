@@ -29,6 +29,7 @@ import { AddDownloadDialog } from "./add-download-dialog"
 import { DoctorDialog } from "./doctor-dialog"
 import { MediaPickerDialog, useMediaRequests } from "./media-picker-dialog"
 import { SettingsDialog } from "./settings-dialog"
+import { ToolsAutoCard } from "./tools-auto"
 import { useUpdateAvailable } from "./use-update-available"
 import { Soniox } from "./variants/soniox"
 
@@ -279,6 +280,7 @@ export function HomeScreen() {
         state={desktop ? shownState : "data"}
         items={items}
         storage={storageSummary}
+        sideStatus={<ToolsAutoCard desktop={desktop} />}
         onAdd={openAdd}
         onMedia={openMedia}
         onRetry={() => void refresh()}

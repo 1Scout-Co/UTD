@@ -7,6 +7,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
+use crate::media::sources::Tool;
+use crate::media::verify;
+
 /// Nơi tìm thấy công cụ: bản riêng của UTD hoặc bản đã có sẵn trên máy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -31,22 +34,45 @@ pub struct ToolInfo {
 pub struct MediaToolsStatus {
     pub yt_dlp: Option<ToolInfo>,
     pub ffmpeg: Option<ToolInfo>,
+    /// Runtime JavaScript yt-dlp dùng để giải thử thách của YouTube.
+    pub deno: Option<ToolInfo>,
     pub bin_dir: String,
     /// Công cụ đang được tải/cài (nếu có).
     pub installing: Option<String>,
 }
 
+impl MediaToolsStatus {
+    pub fn info(&self, tool: Tool) -> Option<ToolInfo> {
+        match tool {
+            Tool::YtDlp => self.yt_dlp.clone(),
+            Tool::Deno => self.deno.clone(),
+            Tool::Ffmpeg => self.ffmpeg.clone(),
+        }
+    }
+}
+
 pub struct MediaTools {
     pub yt_dlp: PathBuf,
+    /// `--version` của yt-dlp đang dùng: quyết định có truyền `--js-runtimes` không, và để biết
+    /// bản vừa lỗi đã được thay chưa.
+    pub yt_dlp_version: String,
     pub ffmpeg: Option<PathBuf>,
+    pub deno: Option<PathBuf>,
 }
 
 const YT_DLP: &[&str] = &["yt-dlp.exe", "yt-dlp"];
 const FFMPEG: &[&str] = &["ffmpeg.exe", "ffmpeg"];
 const FFPROBE: &[&str] = &["ffprobe.exe", "ffprobe"];
+const DENO: &[&str] = &["deno.exe", "deno"];
 /// Tiền tố thư mục gói WinGet (so không phân biệt hoa thường).
 const YT_DLP_PACKAGES: &[&str] = &["yt-dlp.yt-dlp"];
 const FFMPEG_PACKAGES: &[&str] = &["gyan.ffmpeg", "btbn.ffmpeg", "yt-dlp.ffmpeg"];
+const DENO_PACKAGES: &[&str] = &["denoland.deno"];
+/// yt-dlp đòi deno 2 trở lên (bản 1.x bị bỏ qua kèm cảnh báo).
+const DENO_MIN_MAJOR: u64 = 2;
+/// Chế độ chạy thử (`UTD_DATA_DIR`) + biến này = "1": chỉ dùng công cụ trong `<data>\bin`, bỏ qua bản
+/// có sẵn trên máy, để thử luồng tự tải lần đầu trên máy đã cài công cụ.
+const OWN_ONLY_ENV: &str = "UTD_TOOLS_OWN_ONLY";
 /// Giới hạn quét để không bao giờ chậm: số mục đọc mỗi thư mục, số bản đem chạy `--version`.
 const MAX_ENTRIES: usize = 256;
 const MAX_VERSION_CHECKS: usize = 6;
@@ -63,6 +89,7 @@ struct Candidate {
 /// Các chỗ tìm công cụ, theo thứ tự ưu tiên.
 struct Places {
     bin_dir: PathBuf,
+    /// PATH, rồi chỗ cài quen thuộc không nằm trong PATH của app (`~/.deno/bin`, Homebrew trên macOS).
     path_dirs: Vec<PathBuf>,
     /// Gốc của trình quản lý gói: WinGet, Scoop, Chocolatey.
     managers: Vec<(ToolSource, PathBuf)>,
@@ -81,6 +108,7 @@ pub fn detect() -> MediaToolsStatus {
     MediaToolsStatus {
         yt_dlp: pick_yt_dlp(&places).map(|(candidate, version)| info(candidate, version)),
         ffmpeg: pick_ffmpeg(&places).map(|(candidate, version)| info(candidate, version)),
+        deno: pick_deno(&places).map(|(candidate, version)| info(candidate, version)),
         bin_dir: places.bin_dir.display().to_string(),
         installing: None,
     }
@@ -89,12 +117,15 @@ pub fn detect() -> MediaToolsStatus {
 pub fn resolve() -> Result<MediaTools, String> {
     let _lookup = lookup_lock();
     let places = Places::current();
-    let (yt_dlp, _) = pick_yt_dlp(&places)
+    let (yt_dlp, yt_dlp_version) = pick_yt_dlp(&places)
         .ok_or_else(|| "Chưa có yt-dlp. Mở Cài đặt → Công cụ media để tải yt-dlp.".to_string())?;
     let ffmpeg = pick_ffmpeg(&places).map(|(candidate, _)| candidate.path);
+    let deno = pick_deno(&places).map(|(candidate, _)| candidate.path);
     Ok(MediaTools {
         yt_dlp: yt_dlp.path,
+        yt_dlp_version,
         ffmpeg,
+        deno,
     })
 }
 
@@ -170,6 +201,17 @@ fn pick_ffmpeg(places: &Places) -> Option<(Candidate, String)> {
     })
 }
 
+/// deno: bản của UTD thắng nếu chạy được (đứng đầu danh sách), không thì bản đầu tiên đủ mới
+/// (deno 2+). Bản không chạy được hoặc quá cũ coi như không có: UTD tự tải bản riêng.
+fn pick_deno(places: &Places) -> Option<(Candidate, String)> {
+    let candidates = candidates(DENO, DENO_PACKAGES, places);
+    candidates.iter().take(MAX_VERSION_CHECKS).find_map(|candidate| {
+        let line = version_of(&candidate.path, "--version")?;
+        let (major, minor, patch) = verify::semver(&line)?;
+        (major >= DENO_MIN_MAJOR).then(|| (candidate.clone(), format!("{major}.{minor}.{patch}")))
+    })
+}
+
 fn has_sibling(path: &Path, names: &[&str]) -> bool {
     path.parent()
         .is_some_and(|parent| names.iter().any(|name| parent.join(name).is_file()))
@@ -187,17 +229,48 @@ fn short_ffmpeg_version(line: &str) -> String {
 
 impl Places {
     fn current() -> Self {
+        if own_only() {
+            return Self {
+                bin_dir: bin_dir(),
+                path_dirs: Vec::new(),
+                managers: Vec::new(),
+            };
+        }
         let mut path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
             .map(|value| std::env::split_paths(&value).collect())
             .unwrap_or_default();
         // PATH của tiến trình có thể cũ (cài công cụ sau khi mở app): đọc thêm PATH đã lưu.
         path_dirs.extend(registry_path_dirs());
+        path_dirs.extend(usual_dirs());
         Self {
             bin_dir: bin_dir(),
             path_dirs,
             managers: manager_roots(),
         }
     }
+}
+
+fn own_only() -> bool {
+    crate::ipc::isolated_data_dir().is_some()
+        && std::env::var_os(OWN_ONLY_ENV).is_some_and(|value| value == "1")
+}
+
+/// Chỗ cài quen thuộc mà PATH của app có thể thiếu: bộ cài deno (`~/.deno/bin`); app macOS mở từ
+/// Finder chỉ có PATH tối thiểu nên thêm Homebrew/MacPorts.
+fn usual_dirs() -> Vec<PathBuf> {
+    let home = env_dir("USERPROFILE").or_else(|| env_dir("HOME"));
+    let mut dirs: Vec<PathBuf> = home
+        .map(|home| home.join(".deno").join("bin"))
+        .into_iter()
+        .collect();
+    if cfg!(target_os = "macos") {
+        dirs.extend(
+            ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
+                .into_iter()
+                .map(PathBuf::from),
+        );
+    }
+    dirs
 }
 
 fn env_dir(name: &str) -> Option<PathBuf> {

@@ -34,6 +34,8 @@ export type SonioxProps = HomeScreenProps &
     updateVersion?: string
     /** Mở thẳng mục Cập nhật trong Cài đặt. */
     onUpdates?: () => void
+    /** Thẻ trạng thái nhỏ trên thẻ ổ đĩa (vd app đang tự tải công cụ media). */
+    sideStatus?: React.ReactNode
   }
 
 /** Mục Cài đặt ở chân thanh bên; có bản mới thì kèm nhãn "Mới" và bấm vào mở thẳng mục Cập nhật. */
@@ -131,6 +133,7 @@ function StorageCard({ storage }: { storage: StorageSummary }) {
 function SonioxSidebar({
   total,
   storage,
+  sideStatus,
   updateVersion,
   onHome,
   onMedia,
@@ -139,6 +142,7 @@ function SonioxSidebar({
 }: {
   total: number
   storage?: StorageSummary
+  sideStatus?: React.ReactNode
   updateVersion?: string
   onHome: () => void
   onMedia: () => void
@@ -171,6 +175,7 @@ function SonioxSidebar({
         </div>
       </nav>
       <div className="mt-auto space-y-2">
+        {sideStatus}
         {storage ? <StorageCard storage={storage} /> : null}
         <SettingsNav
           updateVersion={updateVersion}
@@ -345,6 +350,7 @@ export function Soniox({
   onSettings,
   updateVersion,
   onUpdates,
+  sideStatus,
   ...handlers
 }: SonioxProps) {
   const { filter, setFilter, query, setQuery, clear } = useListControls()
@@ -357,6 +363,7 @@ export function Soniox({
       <SonioxSidebar
         total={items.length}
         storage={storage}
+        sideStatus={sideStatus}
         updateVersion={updateVersion}
         onHome={clear}
         onMedia={onMedia}

@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
+import { SettingsAbout } from "./settings-about"
 import { SettingsBrowser } from "./settings-browser"
 import { SettingsDownloadDir } from "./settings-download-dir"
 import { SettingsMediaTools } from "./settings-media-tools"
@@ -80,7 +81,7 @@ export function SettingsDialog(props: SettingsDialogProps) {
 
           <Section
             title="Công cụ media"
-            description="yt-dlp tải video, ffmpeg ghép hình và tiếng."
+            description="yt-dlp tải video, deno giúp YouTube, ffmpeg ghép hình và tiếng."
           >
             <SettingsMediaTools desktop={desktop} />
           </Section>
@@ -93,6 +94,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
           />
 
           <SettingsPrivacy />
+
+          <SettingsAbout version={version} />
         </div>
 
         <SettingsFooter

@@ -6,6 +6,8 @@ pub const TASK_EVENT: &str = "utd://task";
 pub const PROGRESS_EVENT: &str = "utd://progress";
 pub const ERROR_EVENT: &str = "utd://error";
 pub const TOOL_PROGRESS_EVENT: &str = "utd://tool-progress";
+/// Trạng thái tự tải/cập nhật công cụ media (media/auto.rs).
+pub const TOOLS_AUTO_EVENT: &str = "utd://tools-auto";
 pub const UPDATE_PROGRESS_EVENT: &str = "utd://update-progress";
 pub const UPDATE_AVAILABLE_EVENT: &str = "utd://update-available";
 /// Link trang video gửi từ trình duyệt: giao diện mở hộp Tải media với link này (media_pages.rs).
@@ -27,7 +29,7 @@ pub struct BridgeError {
     pub message: String,
 }
 
-/// Tiến độ tải/cài công cụ media (yt-dlp, ffmpeg).
+/// Tiến độ tải/cài công cụ media (yt-dlp, deno, ffmpeg).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolProgress {

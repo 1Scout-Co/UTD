@@ -246,6 +246,45 @@ pub async fn fetch_text(
     Ok(FetchedText { text, redirects })
 }
 
+/// Link "mới nhất" chuyển hướng tới file của một bản cụ thể: trả URL đích (đã qua luật host),
+/// không tải nội dung. Dùng khi file checksum nằm cạnh file thật (`<đích>.sha256`).
+pub async fn resolve_redirect(url: &str, policy: &FetchPolicy) -> Result<Url, FetchError> {
+    let mut current = parse_url(url, policy)?;
+    let client = Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(policy.connect_timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| FetchError::Network(error.without_url().to_string()))?;
+    for _ in 0..policy.max_redirects {
+        let request = client
+            .get(current.clone())
+            .header(ACCEPT_ENCODING, "identity")
+            .send();
+        let response = tokio::time::timeout(policy.connect_timeout + policy.idle_timeout, request)
+            .await
+            .map_err(|_| FetchError::Timeout)?
+            .map_err(classify)?;
+        let status = response.status();
+        if !status.is_redirection() {
+            return if status.as_u16() == 200 {
+                Ok(current)
+            } else {
+                Err(FetchError::Status(status.as_u16()))
+            };
+        }
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or(FetchError::InvalidUrl)?;
+        let next = current.join(location).map_err(|_| FetchError::InvalidUrl)?;
+        policy.check(&next)?;
+        current = next;
+    }
+    Err(FetchError::TooManyRedirects)
+}
+
 fn normalize_hash(expected: &str) -> Result<String, FetchError> {
     let expected = expected.trim().to_ascii_lowercase();
     if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
