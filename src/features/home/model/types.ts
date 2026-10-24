@@ -132,7 +132,8 @@ export interface AddMediaPayload {
   pageUrl?: string
 }
 
-export type MediaToolName = "yt-dlp" | "ffmpeg"
+/** deno: runtime JavaScript yt-dlp dùng để giải thử thách của YouTube. */
+export type MediaToolName = "yt-dlp" | "deno" | "ffmpeg"
 
 /** utd = bản UTD tự tải vào thư mục của nó; còn lại là bản có sẵn trên máy. */
 export type MediaToolSource = "utd" | "path" | "winget" | "scoop" | "choco"
@@ -146,8 +147,33 @@ export interface MediaToolInfo {
 export interface MediaToolsStatus {
   ytDlp: MediaToolInfo | null
   ffmpeg: MediaToolInfo | null
+  deno: MediaToolInfo | null
   binDir: string
   installing: MediaToolName | null
+}
+
+/** App tự tải công cụ còn thiếu (lần đầu) và tự cập nhật yt-dlp/deno của UTD. */
+export interface MediaToolsAuto {
+  /** Công tắc trong Cài đặt (mặc định bật). */
+  enabled: boolean
+  /** Đang dò công cụ lúc mở app. */
+  checking: boolean
+  /** Còn phải tải, theo thứ tự. */
+  pending: MediaToolName[]
+  /** Đang tải thật (null khi đang chờ thử lại). */
+  active: MediaToolName | null
+  /** Đang cập nhật nền (đã có bản dùng được). */
+  updating: MediaToolName | null
+  /** Công cụ mà lượt tải vừa rồi không tải được. */
+  failed: MediaToolName[]
+  /** Câu lỗi của công cụ đầu tiên trong `failed`. */
+  error: string | null
+  /** Giờ thử lại (ms). */
+  retryAt: number | null
+  /** Số lượt tải đã xong. */
+  rounds: number
+  /** Người dùng bấm Huỷ: thôi tự tải tới khi cần lại. */
+  paused: boolean
 }
 
 export type MediaToolStage =

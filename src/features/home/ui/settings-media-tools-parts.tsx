@@ -1,3 +1,5 @@
+import { useId } from "react"
+
 import {
   CheckCircle2,
   Download,
@@ -8,6 +10,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 
 import { formatBytes } from "../model/download-mapper"
 import type {
@@ -37,6 +40,13 @@ export const TOOLS: ToolMeta[] = [
     repo: "yt-dlp/yt-dlp",
     license: "Unlicense (bản .exe có phần GPLv3+)",
     size: "~17 MB",
+  },
+  {
+    name: "deno",
+    role: "giải thử thách YouTube",
+    repo: "denoland/deno",
+    license: "MIT",
+    size: "~43 MB",
   },
   {
     name: "ffmpeg",
@@ -209,5 +219,37 @@ export function ToolAction({
       <Icon />
       {info ? `Cập nhật ${meta.name}` : `Tải ${meta.name}`}
     </Button>
+  )
+}
+
+/** Công tắc tự tải công cụ còn thiếu và tự cập nhật yt-dlp/deno của UTD (mặc định bật). */
+export function AutoTools({
+  enabled,
+  disabled,
+  onChange,
+}: {
+  enabled: boolean
+  disabled: boolean
+  onChange: (enabled: boolean) => void
+}) {
+  const id = useId()
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-muted p-3.5">
+      <div className="min-w-0">
+        <p id={`${id}-label`} className="text-sm font-semibold">
+          Tự tải và cập nhật
+        </p>
+        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+          Thiếu thì tự tải; yt-dlp kiểm bản mới mỗi ngày.
+        </p>
+      </div>
+      <Switch
+        aria-labelledby={`${id}-label`}
+        aria-describedby={`${id}-hint`}
+        checked={enabled}
+        disabled={disabled}
+        onCheckedChange={(checked) => onChange(checked)}
+      />
+    </div>
   )
 }

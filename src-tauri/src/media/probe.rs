@@ -1,11 +1,10 @@
-use std::path::Path;
 use std::process::Stdio;
 
 use serde::Serialize;
 use serde_json::Value;
 use tokio::time::{timeout, Duration};
 
-use crate::media::{probe_cache, resolve, tokio_command, tools};
+use crate::media::{auto, js_runtime_args, probe_cache, resolve, tokio_command, tools};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,13 +57,30 @@ struct Choice {
     bitrate: Option<f64>,
 }
 
+/// Phân tích lỗi: câu cho người dùng, và `outdated` = lỗi kiểu bản yt-dlp mới có thể sửa được.
+pub struct ProbeFailure {
+    pub message: String,
+    pub outdated: bool,
+}
+
+impl From<String> for ProbeFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            outdated: false,
+        }
+    }
+}
+
+/// `ffmpeg_available`: có ffmpeg, hoặc app đang tự tải (lúc bấm Tải thì task chờ ffmpeg xong).
 pub async fn probe(
-    yt_dlp: &Path,
     tools: &tools::MediaTools,
     url: &str,
-) -> Result<MediaProbeResult, String> {
-    let mut command = tokio_command(yt_dlp);
+    ffmpeg_available: bool,
+) -> Result<MediaProbeResult, ProbeFailure> {
+    let mut command = tokio_command(&tools.yt_dlp);
     command
+        .args(js_runtime_args(tools))
         .args([
             "--encoding",
             "utf-8",
@@ -84,11 +100,15 @@ pub async fn probe(
         .map_err(|_| "Nguồn media phản hồi quá lâu.".to_string())?
         .map_err(|error| format!("Không chạy được yt-dlp: {error}"))?;
     if !output.status.success() {
-        return Err(classify_stderr(&String::from_utf8_lossy(&output.stderr)));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ProbeFailure {
+            message: classify_stderr(&stderr),
+            outdated: auto::outdated(&stderr),
+        });
     }
     let value: Value = serde_json::from_slice(&output.stdout)
         .map_err(|_| "yt-dlp trả về dữ liệu không đọc được.".to_string())?;
-    let result = build_result(url, &value, tools.ffmpeg.is_some())?;
+    let result = build_result(url, &value, ffmpeg_available)?;
     // Lượt tải ngay sau đó dùng lại các luồng này, khỏi chạy yt-dlp lần hai.
     probe_cache::remember(&value, url, resolve::now_secs());
     Ok(result)

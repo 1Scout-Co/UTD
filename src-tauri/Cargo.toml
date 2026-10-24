@@ -40,6 +40,10 @@ tauri-plugin-updater = { version = "2.14.0", default-features = false, features 
 png = "0.18.1"
 base64 = "0.22.1"
 
+[dev-dependencies]
+# Bài thử tải công cụ với server giả (src/media/install_tests.rs): tính SHA-256 file mẫu. Đã có trong Cargo.lock (engine dùng).
+sha2 = "0.11.1"
+
 [target."cfg(windows)".dependencies]
 winreg = "0.56.0"
 # Thao tác file như Explorer (src/files): mở, chọn trong thư mục, Thùng rác, icon thật.

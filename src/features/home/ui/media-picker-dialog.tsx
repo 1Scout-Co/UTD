@@ -24,6 +24,7 @@ import {
   SupportedSites,
   UrlField,
 } from "./media-picker-parts"
+import { ToolsAutoNote } from "./tools-auto"
 
 const DESKTOP_ONLY = "Mở app UTD để phân tích và tải media."
 
@@ -195,6 +196,7 @@ export function MediaPickerDialog({
             onPaste={paste}
           />
 
+          {loading ? <ToolsAutoNote desktop={desktop} /> : null}
           {loading ? <ProbeSkeleton /> : null}
           {!loading && !probe ? <SupportedSites /> : null}
 

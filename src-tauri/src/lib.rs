@@ -187,6 +187,8 @@ pub fn run() {
                 ipc_config,
                 directory.clone(),
             );
+            // Công cụ media tự tải lần đầu / tự cập nhật (cần journal để nhớ công tắc và lần kiểm).
+            app.manage(media::start_auto_tools(app.handle(), journal.clone()));
             app.manage(AppState {
                 engine,
                 journal,
@@ -219,6 +221,9 @@ pub fn run() {
             media::media_tools_status,
             media::install_media_tool,
             media::cancel_media_tool_install,
+            media::media_tools_auto,
+            media::set_media_tools_auto,
+            media::retry_media_tools,
             media::media_probe,
             media::add_media_download,
             media_pages::take_media_request,
