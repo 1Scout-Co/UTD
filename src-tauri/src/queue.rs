@@ -63,7 +63,7 @@ pub enum Place {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Launch {
     Started,
-    /// Task đang bận (đổi tên, chuyển thư mục…): để lại đầu hàng, thử lại sau.
+    /// Task đang bận (đổi tên, chuyển thư mục…): để lại đúng chỗ trong hàng, thử lại sau.
     Busy,
 }
 
@@ -193,27 +193,32 @@ impl DownloadQueue {
     }
 
     /// Chạy task đầu hàng tới khi đủ giới hạn. Không giữ khoá lúc gọi chạy: lượt tải xong rất nhanh
-    /// gọi `release` ngay.
+    /// gọi `release` ngay. Task bận (đang Di chuyển…, đổi tên) trả về đúng chỗ cũ trong hàng, lượt này bỏ
+    /// qua nó để task phía sau chạy (như task chưa sẵn sàng), rồi thử lại sau `BUSY_RETRY`.
     pub fn pump(&self) {
         let Some(runtime) = self.runtime.get() else {
             return;
         };
-        while let Some((task, entry)) = self.next_ready() {
+        let mut busy: Vec<String> = Vec::new();
+        while let Some((task, entry, index)) = self.next_ready(&busy) {
             if runtime.launch(&task, &entry) == Launch::Busy {
                 let mut state = self.lock();
                 state.active.retain(|item| item.id != entry.id);
-                state.waiting.push_front(entry);
+                busy.push(entry.id.clone());
+                let index = index.min(state.waiting.len());
+                state.waiting.insert(index, entry);
                 self.persist(&state);
-                drop(state);
-                runtime.retry_later();
-                return;
             }
+        }
+        if !busy.is_empty() {
+            runtime.retry_later();
         }
     }
 
-    /// Lấy task kế còn chạy được (vẫn `queued` trong journal, `Runtime::ready`) và giữ chỗ cho nó. Task
-    /// chưa sẵn sàng giữ nguyên chỗ trong hàng; task đã xoá/xong/đổi trạng thái ngoài hàng đợi thì bỏ.
-    fn next_ready(&self) -> Option<(DownloadTask, Entry)> {
+    /// Lấy task kế còn chạy được (vẫn `queued` trong journal, `Runtime::ready`, không nằm trong `skip`)
+    /// và giữ chỗ cho nó; trả kèm vị trí cũ trong hàng. Task chưa sẵn sàng giữ nguyên chỗ trong hàng;
+    /// task đã xoá/xong/đổi trạng thái ngoài hàng đợi thì bỏ.
+    fn next_ready(&self, skip: &[String]) -> Option<(DownloadTask, Entry, usize)> {
         let runtime = self.runtime.get()?;
         let mut state = self.lock();
         if state.frozen || state.active.len() >= state.limit {
@@ -222,12 +227,16 @@ impl DownloadQueue {
         let (mut index, mut dropped, mut picked) = (0, false, None);
         while index < state.waiting.len().min(MAX_SCAN) {
             let entry = state.waiting[index].clone();
+            if skip.contains(&entry.id) {
+                index += 1;
+                continue;
+            }
             match self.journal.load_task(&entry.id) {
                 Ok(Some(task)) if task.status == TaskStatus::Queued => {
                     if runtime.ready(&task) {
                         state.waiting.remove(index);
                         state.active.push(entry.clone());
-                        picked = Some((task, entry));
+                        picked = Some((task, entry, index));
                         break;
                     }
                     index += 1;

@@ -19,7 +19,9 @@ Nhánh `claude/batch-download-4d17fc`. Ngày 2026-10-24.
 - Tạm dừng task đang chờ ⇒ bỏ khỏi hàng, `paused` (phát `utd://task`). Task đang chạy ⇒ huỷ token như cũ.
 - Xoá khỏi danh sách: task đang chờ xoá được ngay (`forget` rồi xoá); giao diện bật lại mục này cho task `queued`.
 - Cài bản mới: `freeze()` trước khi dừng download (task kế không chen vào), cài lỗi thì `thaw()` + chạy lại.
-- Task đang bận (đổi tên/chuyển thư mục giữ chỗ trong `RunningTasks`) ⇒ để lại đầu hàng, thử lại sau 500 ms.
+- Task đang bận (đổi tên/chuyển thư mục giữ chỗ trong `RunningTasks`) ⇒ để lại đúng chỗ cũ trong hàng, lượt
+  đó chạy task phía sau (như task media chờ công cụ), thử lại sau 500 ms. (Bản đầu để lại đầu hàng và dừng
+  lượt chạy: chép file 8 GB sang ổ khác thì cả hàng đứng im vài phút — đã đổi khi ghép.)
 
 ### 2. API cho các phiên khác (nhất là việc 6 — tải cả kênh TikTok)
 - Chỉ cần gọi `add_media_download` cho từng video; hàng đợi tự giới hạn, KHÔNG cần tự điều tiết:

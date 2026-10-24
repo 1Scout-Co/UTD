@@ -248,17 +248,38 @@ fn removed_or_finished_tasks_are_skipped() {
 }
 
 #[test]
-fn a_busy_task_stays_first_and_is_retried() {
+fn a_busy_task_keeps_its_place_and_is_retried() {
     let fx = Fixture::new();
     let (queue, fake) = started(&fx);
     let ids = fx.tasks(2);
     fake.busy.lock().unwrap().insert(ids[0].clone());
     queue.submit(entries(&ids), Place::Back).unwrap();
     assert_eq!(fake.retries.load(Ordering::SeqCst), 1);
-    assert!(fake.launched().is_empty());
-    assert_eq!(queue.waiting(), ids);
+    assert_eq!(fake.launched(), [ids[1].clone()], "task bận không chặn task sau");
+    assert_eq!(queue.waiting(), [ids[0].clone()]);
     queue.pump();
-    assert_eq!(fake.launched(), ids);
+    assert_eq!(fake.launched(), [ids[1].clone(), ids[0].clone()]);
+}
+
+/// Task bận (đang Di chuyển…) không nhảy lên trước task media đang chờ công cụ, và suốt lúc bận
+/// không chặn task sẵn sàng phía sau (trước đây `push_front` rồi dừng hẳn lượt chạy).
+#[test]
+fn a_busy_task_neither_jumps_ahead_nor_blocks_ready_tasks() {
+    let fx = Fixture::new();
+    let (queue, fake) = started(&fx);
+    queue.set_limit(1).unwrap();
+    let ids = fx.tasks(4);
+    let (running, media, moving, next) = (&ids[0], &ids[1], &ids[2], &ids[3]);
+    fake.held.lock().unwrap().insert(media.clone());
+    queue.submit(entries(&ids), Place::Back).unwrap();
+    assert_eq!(fake.launched(), [running.clone()]);
+    fake.busy.lock().unwrap().insert(moving.clone());
+    queue.release(running);
+    assert_eq!(fake.launched(), [running.clone(), next.clone()], "còn chỗ ⇒ task sau chạy");
+    assert_eq!(queue.waiting(), [media.clone(), moving.clone()], "task bận ở đúng chỗ cũ");
+    fake.held.lock().unwrap().clear();
+    queue.release(next);
+    assert_eq!(fake.launched().last(), Some(media), "task media vẫn đứng trước task bận");
 }
 
 #[test]
