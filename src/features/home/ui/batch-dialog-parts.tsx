@@ -223,7 +223,7 @@ export function BatchTable({
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
     >
       <table className="w-full table-fixed text-sm">
-        <thead className="sticky top-0 z-10 bg-muted text-start text-xs text-muted-foreground">
+        <thead className="sticky top-0 z-10 bg-muted text-xs text-muted-foreground [&_th]:text-start">
           <tr className="h-9">
             <th className="w-10 ps-3">
               <Checkbox
