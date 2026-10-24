@@ -16,12 +16,25 @@ pub(crate) fn sample_count(stbl: &[Child<'_>]) -> Result<u32, Error> {
     cursor.u32()
 }
 
-pub(crate) fn read(stbl: &[Child<'_>]) -> Result<(Vec<Sample>, Vec<Run>), Error> {
-    if let Some(ctts) = find(stbl, b"ctts") {
-        check_ctts(ctts.body)?;
+/// sdtp: mẫu khai "không mẫu nào phụ thuộc" thì mov.c gắn cờ disposable và ffmpeg ghi lại sdtp;
+/// bản này không ghi sdtp nên chưa ghép file có mẫu như vậy.
+pub(crate) fn check_sdtp(stbl: &[Child<'_>]) -> Result<(), Error> {
+    let Some(sdtp) = find(stbl, b"sdtp") else {
+        return Ok(());
+    };
+    let flags = sdtp.body.get(4..).unwrap_or_default();
+    if flags.iter().any(|byte| (byte >> 2) & 0x03 == 2) {
+        return Err(unsupported("sdtp có mẫu disposable"));
     }
+    Ok(())
+}
+
+pub(crate) fn read(stbl: &[Child<'_>]) -> Result<(Vec<Sample>, Vec<Run>), Error> {
     let mut samples = read_sizes(stbl)?;
     read_stts(single(stbl, b"stts")?.body, &mut samples)?;
+    if let Some(ctts) = find(stbl, b"ctts") {
+        read_ctts(ctts.body, &mut samples)?;
+    }
     if let Some(stss) = find(stbl, b"stss") {
         read_stss(stss.body, &mut samples)?;
     }
@@ -44,6 +57,7 @@ fn sample(size: u32) -> Sample {
         size,
         duration: 0,
         sync: true,
+        cts: 0,
     }
 }
 
@@ -120,16 +134,26 @@ fn read_stss(body: &[u8], samples: &mut [Sample]) -> Result<(), Error> {
     Ok(())
 }
 
-/// ctts toàn 0 không đổi gì; khác 0 là có B-frame, bản đầu chưa ghép.
-fn check_ctts(body: &[u8]) -> Result<(), Error> {
+/// ctts: lệch cts từng mẫu. Lệch âm (version 1) thì mov.c dịch DTS cả track, chưa ghép.
+fn read_ctts(body: &[u8], samples: &mut [Sample]) -> Result<(), Error> {
     let mut cursor = Cursor::new(body);
     cursor.full()?;
     let count = entries(&mut cursor, 8)?;
+    let mut next = samples.iter_mut();
+    let mut covered = 0usize;
     for _ in 0..count {
-        cursor.u32()?;
-        if cursor.u32()? != 0 {
-            return Err(unsupported("có ctts (B-frame)"));
+        let run = cursor.u32()? as usize;
+        let offset = cursor.u32()?;
+        if (offset as i32) < 0 {
+            return Err(unsupported("ctts có lệch âm"));
         }
+        covered = covered.saturating_add(run);
+        for sample in next.by_ref().take(run) {
+            sample.cts = offset;
+        }
+    }
+    if covered != samples.len() {
+        return Err(broken("ctts khác số mẫu"));
     }
     Ok(())
 }

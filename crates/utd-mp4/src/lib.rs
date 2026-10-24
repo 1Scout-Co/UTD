@@ -1,7 +1,8 @@
 //! Ghép các luồng fMP4 (DASH) thành một file MP4 thường, moov ở đầu file, trong một lượt ghi.
 //! Chỉ chép byte mẫu, không giải mã; stsd, hdlr, dinf, vmhd/smhd giữ nguyên byte của init.
-//! Gặp cấu trúc chưa kiểm (mã hoá, B-frame, nhiều traf…) thì trả `Error::Unsupported` kèm lý do
-//! để bên gọi chuyển sang ffmpeg.
+//! B-frame (cts ≠ 0) ghi ctts và edit list tính y như ffmpeg (`timing`). Gặp cấu trúc chưa kiểm
+//! (mã hoá, cts âm, nhiều traf…) thì trả `Error::Unsupported` kèm lý do để bên gọi chuyển sang
+//! ffmpeg.
 
 mod av1;
 mod boxes;
@@ -10,6 +11,7 @@ mod init;
 mod read;
 mod stbl;
 mod table;
+mod timing;
 mod write;
 
 #[cfg(test)]
@@ -143,9 +145,7 @@ fn load<'a>(
                 input.kind
             )));
         }
-        if track.samples.is_empty() {
-            return Err(unsupported(format!("{name}: không có mẫu nào")));
-        }
+        check_track(&track).map_err(|reason| unsupported(format!("{name}: {reason}")))?;
         av1::strip_delimiters(&mut track, &input.path)?;
         loaded.push((track, input.path.as_path()));
     }
@@ -165,6 +165,24 @@ fn load<'a>(
         )));
     }
     Ok(loaded.into_iter().unzip())
+}
+
+/// Những gì fftools đổi khi chép luồng: bỏ gói hình trước keyframe đầu, sửa DTS không tăng
+/// (mẫu duration 0), bỏ ctts của tiếng.
+fn check_track(track: &Track) -> Result<(), &'static str> {
+    let Some(first) = track.samples.first() else {
+        return Err("không có mẫu nào");
+    };
+    if track.kind == Kind::Video && !first.sync {
+        return Err("mẫu hình đầu không phải keyframe");
+    }
+    if track.samples.iter().any(|sample| sample.duration == 0) {
+        return Err("có mẫu duration 0");
+    }
+    if track.kind == Kind::Audio && track.samples.iter().any(|sample| sample.cts != 0) {
+        return Err("tiếng có lệch cts");
+    }
+    Ok(())
 }
 
 /// Tự kiểm trước khi trả Ok: kích thước file, tổng mẫu = payload mdat, và đọc lại moov vừa ghi
@@ -188,7 +206,7 @@ fn verify(
             "tự kiểm: tổng kích thước mẫu khác payload mdat",
         ));
     }
-    let again = read::read_file(output)?;
+    let again = read::read_output(output)?;
     let runs = write::chunk_runs(tracks.len(), chunks, head.bytes.len() as u64);
     let same = again.len() == tracks.len()
         && again
