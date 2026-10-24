@@ -459,7 +459,10 @@ async fn ramps_past_four_when_each_connection_is_throttled() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stops_adding_connections_when_total_bandwidth_is_capped() {
-    let data = payload(12 * MIB);
+    // Bài này so tốc độ hai bậc gần bằng nhau (trần chung). Cửa sổ 50/300 ms của `options` quá ngắn trên
+    // máy CI 4 vCPU chạy song song cả bộ: lần đo đầu dính lúc mở kết nối, thấp hơn thật, nên bộ điều khiển
+    // tưởng thêm kết nối có lợi. Nới cửa sổ (thật: 500 ms / 3 s) và tải lâu hơn tương ứng.
+    let data = payload(24 * MIB);
     let server = ThrottledServer::start(
         data.clone(),
         Limits {
@@ -469,7 +472,12 @@ async fn stops_adding_connections_when_total_bandwidth_is_capped() {
     )
     .await;
     let directory = tempfile::tempdir().expect("tempdir");
-    let (_journal, engine) = engine(directory.path(), options(4, 16));
+    let options = EngineOptions {
+        sample_interval: Duration::from_millis(150),
+        balance_interval: Duration::from_millis(750),
+        ..options(4, 16)
+    };
+    let (_journal, engine) = engine(directory.path(), options);
     let (control, trace) = traced();
 
     let started = Instant::now();

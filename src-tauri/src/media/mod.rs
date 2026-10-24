@@ -430,8 +430,26 @@ pub(crate) fn tokio_command(program: &Path) -> tokio::process::Command {
 /// tiến trình ngoài còn sống (chưa `wait`).
 pub(crate) async fn kill_tree(child: &mut tokio::process::Child) {
     #[cfg(unix)]
-    if let Some(pid) = child.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) {
+    if let Some(raw) = child.id()
+        && let Ok(pid) = libc::pid_t::try_from(raw)
+    {
         // SAFETY: chỉ gửi tín hiệu tới nhóm của tiến trình con này (chưa được thu dọn nên pid chưa bị dùng lại).
+        unsafe { libc::killpg(pid, libc::SIGKILL) };
+        // Tiến trình ngoài đang fork đúng lúc đó (máy bận: cả trăm ms) thì tiến trình con vào nhóm sau lần
+        // trên, chạy tiếp và giữ ống stdout. Tiến trình ngoài chỉ chết khi fork đã xong, tức con đã ở trong
+        // nhóm: chờ nó chết mà không thu dọn (WNOWAIT ⇒ pgid chưa thể bị dùng lại) rồi gửi lần nữa.
+        let exited = tokio::task::spawn_blocking(move || loop {
+            // SAFETY: siginfo_t toàn số, toàn 0 hợp lệ; chỉ chờ tiến trình con của mình, để nguyên cho tokio.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let result = unsafe {
+                libc::waitid(libc::P_PID, raw, &mut info, libc::WEXITED | libc::WNOWAIT)
+            };
+            if result == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                break;
+            }
+        });
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), exited).await;
+        // SAFETY: như trên.
         unsafe { libc::killpg(pid, libc::SIGKILL) };
     }
     #[cfg(windows)]
@@ -587,7 +605,9 @@ mod tests {
             )
             .await;
             assert!(drained.is_ok(), "tiến trình con vẫn giữ ống stdout");
-            let _ = child.wait().await;
+            // `kill_tree` chỉ chờ, không thu dọn: `wait` của tokio vẫn lấy được trạng thái thật.
+            let status = child.wait().await.expect("tokio vẫn thu dọn được tiến trình ngoài");
+            assert!(!status.success());
         });
     }
 }

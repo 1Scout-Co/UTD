@@ -415,6 +415,12 @@ impl Auto {
                 if result.is_ok() {
                     state.pending.retain(|pending| *pending != tool);
                     state.failed.retain(|failed| *failed != tool);
+                    // Câu lỗi thuộc công cụ trong `failed`: hết công cụ hỏng thì bỏ ngay, cùng lúc người
+                    // chờ được thả ra (không đợi tới cuối lượt).
+                    if state.failed.is_empty() {
+                        state.error = None;
+                        state.retry_at = None;
+                    }
                 }
             });
             match result {
