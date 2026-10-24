@@ -284,12 +284,23 @@ fn usable_saved_dir(value: &str, data_dir: &Path) -> Option<PathBuf> {
         return None;
     }
     let folder = parse_download_dir(value).ok()?;
-    let root: PathBuf = folder
-        .components()
-        .take_while(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
-        .collect();
+    let root = volume_root(&folder);
     let usable = root.is_dir() && !folder.is_file() && !is_within(&folder, data_dir);
     usable.then_some(folder)
+}
+
+/// Gốc ổ chứa thư mục: `D:\` trên Windows; macOS gắn ổ ngoài ở `/Volumes/<tên>` (rút ra là mất).
+fn volume_root(folder: &Path) -> PathBuf {
+    if cfg!(target_os = "macos")
+        && let Ok(rest) = folder.strip_prefix("/Volumes")
+        && let Some(name) = rest.components().next()
+    {
+        return Path::new("/Volumes").join(name);
+    }
+    folder
+        .components()
+        .take_while(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+        .collect()
 }
 
 /// Ký tự điều khiển hoặc đảo chiều chữ (bidi) làm tên thư mục hiển thị sai.
@@ -335,7 +346,11 @@ fn parse_download_dir(raw: &str) -> Result<PathBuf, String> {
         return Err("Đường dẫn có ký tự không hợp lệ.".into());
     }
     if !path.is_absolute() {
-        return Err("Cần đường dẫn đầy đủ, ví dụ D:\\Tải về.".into());
+        return Err(if cfg!(windows) {
+            "Cần đường dẫn đầy đủ, ví dụ D:\\Tải về.".into()
+        } else {
+            "Cần đường dẫn đầy đủ, ví dụ /Users/ban/Downloads/UTD.".into()
+        });
     }
     if path
         .components()
@@ -423,7 +438,7 @@ fn probe_writable(folder: &Path) -> Result<(), String> {
     written.and(removed).map_err(|_| failed())
 }
 
-/// `path` nằm trong (hoặc chính là) `root`; Windows không phân biệt hoa thường.
+/// `path` nằm trong (hoặc chính là) `root`; Windows và ổ mặc định của macOS không phân biệt hoa thường.
 fn is_within(path: &Path, root: &Path) -> bool {
     let parts = |value: &Path| -> Vec<String> {
         value
@@ -431,7 +446,7 @@ fn is_within(path: &Path, root: &Path) -> bool {
             .filter(|component| !matches!(component, Component::CurDir))
             .map(|component| {
                 let text = component.as_os_str().to_string_lossy();
-                if cfg!(windows) {
+                if cfg!(any(windows, target_os = "macos")) {
                     text.to_lowercase()
                 } else {
                     text.into_owned()
@@ -688,5 +703,23 @@ mod tests {
         assert!(is_within(&data.join("bin"), &data));
         assert!(!is_within(&root.join("UTD-Data2"), &data));
         assert!(!is_within(&root, &data));
+        #[cfg(target_os = "macos")]
+        assert!(
+            is_within(&root.join("utd-data").join("bin"), &data),
+            "APFS mặc định không phân biệt hoa thường"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unplugged_mac_volume_falls_back_to_default() {
+        let data = scratch().join("UTD-Data");
+        let gone = format!("/Volumes/utd-khong-co-{}/Phim", uuid::Uuid::new_v4().simple());
+        assert_eq!(usable_saved_dir(&gone, &data), None, "ổ ngoài đã rút ⇒ về mặc định");
+        assert_eq!(volume_root(Path::new("/Users/ban/Downloads")), PathBuf::from("/"));
+        assert_eq!(
+            volume_root(Path::new("/Volumes/USB/Phim")),
+            PathBuf::from("/Volumes/USB")
+        );
     }
 }

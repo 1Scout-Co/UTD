@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod app_nap;
 mod browser_integration;
 mod commands;
 mod events;
@@ -155,6 +157,8 @@ pub fn run() {
                 },
             )?);
             let running = Arc::new(RunningTasks::default());
+            #[cfg(target_os = "macos")]
+            app_nap::watch(running.clone());
             let ipc_config = ipc::create_config();
             ipc::write_config(&directory, &ipc_config).map_err(std::io::Error::other)?;
             // Manifest native host cũ trỏ vào thư mục dữ liệu cũ: đăng ký lại ở chỗ mới.
@@ -168,12 +172,20 @@ pub fn run() {
                 let directory = directory.clone();
                 std::thread::spawn(move || refresh_native_host(&directory));
             }
-            #[cfg(windows)]
+            // App bị kéo sang chỗ khác sau khi bật tích hợp: script host phải trỏ theo.
+            #[cfg(target_os = "macos")]
+            if !isolated
+                && !cfg!(debug_assertions)
+                && let Err(error) = browser_integration::mac::refresh_host_script(&directory)
+            {
+                log::warn!("Native host refresh failed: {error}");
+            }
             ipc::spawn_server(
                 app.handle().clone(),
                 engine.clone(),
                 running.clone(),
                 ipc_config,
+                directory.clone(),
             );
             app.manage(AppState {
                 engine,

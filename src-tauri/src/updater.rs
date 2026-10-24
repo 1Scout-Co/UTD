@@ -123,6 +123,7 @@ pub fn set_update_check(app: AppHandle, enabled: bool) -> Result<bool, String> {
 
 /// Tải gói (kiểm chữ ký) → dừng download đang chạy → sao lưu journal → chạy bộ cài.
 /// Windows: plugin chạy bộ cài (`/P /UPDATE /R`) rồi thoát app; bộ cài mở lại UTD bản mới.
+/// macOS: plugin giải nén `UTD.app.tar.gz` (đã kiểm chữ ký) đè lên `UTD.app` đang chạy, rồi `restart`.
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> Result<(), String> {
     let updates = app
@@ -332,7 +333,11 @@ fn friendly(error: &UpdaterError) -> String {
             "Thông tin bản mới bị lỗi. Thử lại sau."
         }
         UpdaterError::TargetNotFound(_) | UpdaterError::TargetsNotFound(_) => {
-            "Bản mới chưa có gói cho Windows 64-bit."
+            if cfg!(target_os = "macos") {
+                "Bản mới chưa có gói cho macOS."
+            } else {
+                "Bản mới chưa có gói cho Windows 64-bit."
+            }
         }
         UpdaterError::Minisign(_)
         | UpdaterError::Base64(_)

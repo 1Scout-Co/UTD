@@ -36,6 +36,7 @@ jobs:
       - run: cargo test -p utd-engine
       - run: cargo test -p utd-mp4
       - run: cargo test -p app --lib
+      - run: cargo clippy -p utd-engine --all-targets -- -D warnings
       - run: cargo clippy -p utd-mp4 --all-targets -- -D warnings
       - run: cargo clippy -p app --all-targets -- -D warnings
       - run: pnpm lint
@@ -43,31 +44,38 @@ jobs:
       - run: pnpm exec playwright install chromium
       - run: pnpm exec playwright test
 
-  # Chạy khi đẩy tag vX.Y.Z (cách làm: docs/RELEASE.md). Mỗi việc một bước để dễ thêm ký mã.
-  # Tự cập nhật: bộ cài được ký bằng khoá updater (secret) và kèm latest.json cho app đọc.
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
-    runs-on: windows-latest
-    permissions:
-      contents: write
+  # Phần Rust chạy riêng trên macOS (Finder, Thùng rác, icon, Unix socket, cờ quarantine…).
+  # Giao diện web giống hệt Windows nên lint/build/Playwright chỉ chạy ở job trên.
+  test-macos:
+    runs-on: macos-latest
     env:
-      BUNDLE_DIR: target/release/bundle/nsis
-      RELEASE_DIR: release-files
+      # rust-toolchain.toml ghim MSVC cho Windows; macOS dùng stable của máy.
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v6.1.0
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-      - run: pnpm install --frozen-lockfile
+      - run: cargo test -p utd-engine
+      - run: cargo test -p utd-mp4
+      - run: cargo test -p app --lib
+      - run: cargo clippy -p utd-engine --all-targets -- -D warnings
+      - run: cargo clippy -p utd-mp4 --all-targets -- -D warnings
+      - run: cargo clippy -p app --all-targets -- -D warnings
+
+  # Chạy khi đẩy tag vX.Y.Z (cách làm: docs/RELEASE.md): kiểm một lần, dựng Windows và macOS song song,
+  # rồi job `release` gộp latest.json (tự cập nhật cả hai nền tảng) và tạo bản nháp.
+  release-check:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, test-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Check tag matches app version
         shell: bash
@@ -79,8 +87,8 @@ jobs:
             exit 1
           fi
 
-      # Khoá ký bản cập nhật (minisign, KHÁC ký mã Windows): chủ dự án tự thêm 2 secret (docs/RELEASE.md → Tự cập nhật).
-      # Kiểm trước khi dựng để báo lỗi sớm và rõ.
+      # Khoá ký bản cập nhật (minisign, KHÁC ký mã Windows/Apple): chủ dự án tự thêm 2 secret (docs/RELEASE.md → Tự cập nhật).
+      # Một khoá dùng cho cả Windows và macOS. Kiểm trước khi dựng để báo lỗi sớm và rõ.
       - name: Check updater signing key
         shell: bash
         env:
@@ -97,6 +105,27 @@ jobs:
             exit 1
           fi
           echo "Đã có khoá ký bản cập nhật"
+
+  build-windows:
+    needs: release-check
+    runs-on: windows-latest
+    env:
+      BUNDLE_DIR: target/release/bundle/nsis
+      OUT_DIR: release-windows
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - run: pnpm install --frozen-lockfile
 
       # Ký mã: TẮT mặc định. Bật = biến repo WINDOWS_SIGNING=true + secret WINDOWS_SIGN_COMMAND
       # (lệnh ký, %1 là file cần ký). Tauri gọi lệnh này cho UTD.exe, uninstall.exe và bộ cài (docs/RELEASE.md).
@@ -132,7 +161,7 @@ jobs:
           pnpm tauri build "${args[@]}"
 
       # Tên bộ cài đổi theo version nên tìm bằng mẫu, không ghi cứng.
-      - name: Collect release files
+      - name: Collect Windows files
         shell: bash
         run: |
           shopt -s nullglob
@@ -145,12 +174,113 @@ jobs:
             echo "::error::Không thấy ${installers[0]}.sig: bộ cài chưa được ký cho tự cập nhật"
             exit 1
           fi
-          mkdir -p "$RELEASE_DIR"
-          cp "${installers[0]}" "${installers[0]}.sig" "$RELEASE_DIR/"
-          # latest.json: app đọc ở releases/latest/download/latest.json (chỉ sau khi bấm Publish).
-          # Ghi chú hiện trong app lấy từ docs/releases/<tag>.md nếu có.
+          mkdir -p "$OUT_DIR"
+          cp "${installers[0]}" "${installers[0]}.sig" "$OUT_DIR/"
+          ls -l "$OUT_DIR"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-windows
+          path: ${{ env.OUT_DIR }}/
+          if-no-files-found: error
+
+  # Một bản "universal" chạy cả Mac chip Apple (M1…) lẫn Mac Intel. Chưa có tài khoản Apple Developer
+  # nên chỉ ký ad-hoc (tauri.macos.conf.json), không notarize: lần đầu người dùng mở theo docs/RELEASE.md.
+  build-macos:
+    needs: release-check
+    runs-on: macos-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      BUNDLE_DIR: target/universal-apple-darwin/release/bundle
+      OUT_DIR: release-macos
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build macOS app and DMG
+        env:
+          # Cùng khoá với Windows: tạo UTD.app.tar.gz + .sig cho tự cập nhật.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          pnpm tauri build --target universal-apple-darwin --bundles app,dmg \
+            --config "$GITHUB_WORKSPACE/src-tauri/tauri.updater.conf.json"
+
+      # Gói cập nhật Tauri đặt tên UTD.app.tar.gz (không có số phiên bản): đổi tên khi đăng cho khỏi lẫn.
+      - name: Collect macOS files
+        run: |
+          shopt -s nullglob
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          dmgs=("$BUNDLE_DIR"/dmg/*.dmg)
+          archives=("$BUNDLE_DIR"/macos/*.app.tar.gz)
+          if [ ${#dmgs[@]} -ne 1 ] || [ ${#archives[@]} -ne 1 ]; then
+            echo "::error::Cần đúng 1 file .dmg và 1 file .app.tar.gz, thấy ${#dmgs[@]} và ${#archives[@]}"
+            exit 1
+          fi
+          if [ ! -f "${archives[0]}.sig" ]; then
+            echo "::error::Không thấy ${archives[0]}.sig: gói macOS chưa được ký cho tự cập nhật"
+            exit 1
+          fi
+          codesign --verify --deep --strict "$BUNDLE_DIR/macos/UTD.app"
+          mkdir -p "$OUT_DIR"
+          cp "${dmgs[0]}" "$OUT_DIR/"
+          cp "${archives[0]}" "$OUT_DIR/UTD_${version}_universal.app.tar.gz"
+          cp "${archives[0]}.sig" "$OUT_DIR/UTD_${version}_universal.app.tar.gz.sig"
+          ls -l "$OUT_DIR"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-macos
+          path: ${{ env.OUT_DIR }}/
+          if-no-files-found: error
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_DIR: release-files
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: build-*
+          path: ${{ env.RELEASE_DIR }}
+          merge-multiple: true
+
+      # latest.json: app đọc ở releases/latest/download/latest.json (chỉ sau khi bấm Publish).
+      # Một bản universal phục vụ cả Mac chip Apple (darwin-aarch64) và Mac Intel (darwin-x86_64).
+      # Ghi chú hiện trong app lấy từ docs/releases/<tag>.md nếu có.
+      - name: Write latest.json
+        run: |
+          shopt -s nullglob
+          installers=("$RELEASE_DIR"/*-setup.exe)
+          archives=("$RELEASE_DIR"/*.app.tar.gz)
+          if [ ${#installers[@]} -ne 1 ] || [ ${#archives[@]} -ne 1 ]; then
+            echo "::error::Cần đúng 1 bộ cài Windows và 1 gói macOS, thấy ${#installers[@]} và ${#archives[@]}"
+            exit 1
+          fi
           node scripts/release/latest-json.mjs \
-            --installer "$RELEASE_DIR/$(basename "${installers[0]}")" \
+            --asset "windows-x86_64=${installers[0]}" \
+            --asset "darwin-aarch64=${archives[0]}" \
+            --asset "darwin-x86_64=${archives[0]}" \
             --tag "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --notes-file "docs/releases/$GITHUB_REF_NAME.md" \
@@ -159,7 +289,6 @@ jobs:
 
       # Tổng SHA-256 của mọi file sẽ đăng (định dạng `sha256sum -c` đọc được).
       - name: Write SHA256SUMS.txt
-        shell: bash
         working-directory: ${{ env.RELEASE_DIR }}
         run: |
           node -e '
@@ -179,7 +308,6 @@ jobs:
 
       # Bản nháp: chủ dự án đọc lại rồi tự bấm Publish trên GitHub. Chạy lại job chỉ ghi đè file của bản còn nháp.
       - name: Create draft GitHub release
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

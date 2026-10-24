@@ -56,6 +56,12 @@ impl RunningTasks {
             tokens.remove(task_id);
         }
     }
+
+    /// Không có download nào đang chạy (macOS dùng để nhả App Nap: app_nap.rs).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn is_empty(&self) -> bool {
+        self.tokens.lock().map(|tokens| tokens.is_empty()).unwrap_or(true)
+    }
 }
 
 #[cfg(test)]
@@ -70,5 +76,8 @@ mod tests {
         assert!(!running.insert("t", CancellationToken::new()));
         assert!(running.cancel("t"));
         assert!(first.is_cancelled(), "Tạm dừng phải huỷ đúng lượt tải đang chạy");
+        assert!(!running.is_empty());
+        running.remove("t");
+        assert!(running.is_empty());
     }
 }

@@ -359,12 +359,23 @@ fn registry_path_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-#[cfg(not(windows))]
+/// macOS không có PATH lưu trong registry, mà app mở từ Finder/Dock chỉ có PATH tối thiểu
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`): thêm chỗ Homebrew (Apple Silicon, Intel) và MacPorts cài công cụ.
+#[cfg(target_os = "macos")]
+fn registry_path_dirs() -> Vec<PathBuf> {
+    ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn registry_path_dirs() -> Vec<PathBuf> {
     Vec::new()
 }
 
 /// Mở `%TÊN%` trong PATH kiểu REG_EXPAND_SZ; biến không có thì giữ nguyên.
+#[cfg(any(windows, test))]
 fn expand_env(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut rest = text;

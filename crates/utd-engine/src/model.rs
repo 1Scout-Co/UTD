@@ -700,7 +700,11 @@ mod tests {
         DownloadTask::new(
             "https://example.com/ubuntu.iso",
             "ubuntu-24.04.iso",
-            "C:\\Users\\Admin\\Downloads",
+            if cfg!(windows) {
+                "C:\\Users\\Admin\\Downloads"
+            } else {
+                "/Users/admin/Downloads"
+            },
             8,
         )
         .expect("valid task")

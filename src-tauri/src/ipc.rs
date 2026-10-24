@@ -87,6 +87,8 @@ pub fn isolated_data_dir() -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
+/// Windows `%LOCALAPPDATA%\UTD-Data`, macOS `~/Library/Application Support/UTD-Data`. Không theo
+/// `identifier` của Tauri: native host do trình duyệt chạy phải tự tìm ra đúng chỗ này.
 pub fn data_dir() -> Result<PathBuf, String> {
     if let Some(directory) = isolated_data_dir() {
         return Ok(directory);
@@ -95,7 +97,14 @@ pub fn data_dir() -> Result<PathBuf, String> {
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         return Ok(PathBuf::from(local).join("UTD-Data"));
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+        return Ok(PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("UTD-Data"));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
     if let Some(home) = std::env::var_os("HOME") {
         return Ok(PathBuf::from(home).join(".local").join("share").join("UTD-Data"));
     }
@@ -118,11 +127,25 @@ pub fn write_config(directory: &Path, config: &IpcConfig) -> Result<(), String> 
     let path = directory.join("ipc.json");
     let payload = serde_json::to_vec_pretty(config).map_err(|error| error.to_string())?;
     let temporary = directory.join("ipc.json.tmp");
-    std::fs::write(&temporary, payload).map_err(|error| error.to_string())?;
+    write_private(&temporary, &payload).map_err(|error| error.to_string())?;
     if path.exists() {
         std::fs::remove_file(&path).map_err(|error| error.to_string())?;
     }
     std::fs::rename(&temporary, &path).map_err(|error| error.to_string())
+}
+
+/// Token chỉ chủ máy đọc được: Unix tạo file quyền 0600 ngay từ đầu (Windows dựa vào ACL của
+/// `%LOCALAPPDATA%`).
+fn write_private(path: &Path, payload: &[u8]) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(path);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    std::io::Write::write_all(&mut options.open(path)?, payload)
 }
 
 pub fn read_config() -> Result<(IpcConfig, PathBuf), String> {
@@ -154,16 +177,72 @@ pub fn pipe_path(pipe: &str) -> String {
     format!(r"\\.\pipe\{pipe}")
 }
 
-#[cfg(windows)]
+/// macOS: Unix domain socket trong thư mục dữ liệu (quyền 0600), vẫn kèm token của `ipc.json`.
+/// Tên ngắn cố định: `sun_path` chỉ chứa 104 byte.
+#[cfg(unix)]
+pub fn socket_path(directory: &Path) -> PathBuf {
+    directory.join("ipc.sock")
+}
+
 pub fn spawn_server(
     app: tauri::AppHandle,
     engine: Arc<utd_engine::DownloadEngine>,
     running: Arc<crate::state::RunningTasks>,
     config: IpcConfig,
+    directory: PathBuf,
 ) {
     tauri::async_runtime::spawn(async move {
-        accept_loop(app, engine, running, config).await;
+        accept_loop(app, engine, running, config, directory).await;
     });
+}
+
+#[cfg(unix)]
+async fn accept_loop(
+    app: tauri::AppHandle,
+    engine: Arc<utd_engine::DownloadEngine>,
+    running: Arc<crate::state::RunningTasks>,
+    config: IpcConfig,
+    directory: PathBuf,
+) {
+    let listener = match bind_private(&socket_path(&directory)) {
+        Ok(listener) => listener,
+        Err(error) => {
+            log::error!("IPC socket bind failed: {error}");
+            return;
+        }
+    };
+    loop {
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => stream,
+            Err(error) => {
+                log::warn!("IPC socket accept failed: {error}");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                continue;
+            }
+        };
+        let app = app.clone();
+        let engine = engine.clone();
+        let running = running.clone();
+        let token = config.token.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = handle_connection(stream, app, engine, running, &token).await {
+                log::warn!("IPC request rejected: {error}");
+            }
+        });
+    }
+}
+
+/// Socket sót lại (app bị tắt ngang) thì gỡ rồi tạo lại; chỉnh quyền 0600 trước khi nhận kết nối.
+#[cfg(unix)]
+fn bind_private(path: &Path) -> std::io::Result<tokio::net::UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    let listener = tokio::net::UnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
 }
 
 #[cfg(windows)]
@@ -172,6 +251,7 @@ async fn accept_loop(
     engine: Arc<utd_engine::DownloadEngine>,
     running: Arc<crate::state::RunningTasks>,
     config: IpcConfig,
+    _directory: PathBuf,
 ) {
     use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
 
@@ -204,14 +284,17 @@ async fn accept_loop(
     }
 }
 
-#[cfg(windows)]
-async fn handle_connection(
-    mut server: tokio::net::windows::named_pipe::NamedPipeServer,
+/// Một yêu cầu một dòng JSON, trả một dòng JSON (named pipe trên Windows, Unix socket trên macOS).
+async fn handle_connection<S>(
+    mut server: S,
     app: tauri::AppHandle,
     engine: Arc<utd_engine::DownloadEngine>,
     running: Arc<crate::state::RunningTasks>,
     token: &str,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     let mut line = String::new();
@@ -327,5 +410,63 @@ mod tests {
             note,
             serde_json::json!({ "ok": true, "taskId": null, "message": "Đã mở" })
         );
+    }
+
+    #[test]
+    fn config_round_trips_through_the_data_dir() {
+        let directory = std::env::temp_dir().join(format!("utd-ipc-{}", Uuid::new_v4()));
+        let config = create_config();
+        assert!(valid_config(&config));
+        write_config(&directory, &config).unwrap();
+        write_config(&directory, &config).unwrap();
+        let saved: IpcConfig =
+            serde_json::from_slice(&std::fs::read(directory.join("ipc.json")).unwrap()).unwrap();
+        assert_eq!(saved.token, config.token);
+        assert!(!directory.join("ipc.json.tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(directory.join("ipc.json")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "token chỉ chủ máy đọc được");
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// Socket sót lại thì thay; quyền 0600; native host nối được và nói một dòng mỗi chiều.
+    #[cfg(unix)]
+    #[test]
+    fn unix_socket_is_private_and_replaces_a_stale_one() {
+        use std::io::{BufRead, Write};
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let directory = PathBuf::from("/tmp").join(format!("utd-sock-{}", &Uuid::new_v4().simple().to_string()[..8]));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = socket_path(&directory);
+        std::fs::write(&path, b"cu").unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let listener = bind_private(&path).unwrap();
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+            let client = std::thread::spawn({
+                let path = path.clone();
+                move || {
+                    let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
+                    stream.write_all(b"xin chao\n").unwrap();
+                    let mut line = String::new();
+                    std::io::BufReader::new(stream).read_line(&mut line).unwrap();
+                    line
+                }
+            });
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = tokio::io::BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "xin chao\n");
+            reader.get_mut().write_all(b"da nhan\n").await.unwrap();
+            assert_eq!(client.join().unwrap(), "da nhan\n");
+        });
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

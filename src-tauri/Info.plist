@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Tauri gộp file này vào Info.plist của UTD.app: câu giải thích trong hộp xin quyền thư mục của macOS. -->
+<plist version="1.0">
+<dict>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>UTD lưu file tải về vào đây. UTD saves your downloads here.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>UTD lưu file tải về vào thư mục bạn chọn. UTD saves downloads to the folder you chose.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>UTD lưu file tải về vào thư mục bạn chọn. UTD saves downloads to the folder you chose.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>UTD lưu file tải về vào ổ ngoài bạn chọn. UTD saves downloads to the drive you chose.</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>UTD lưu file tải về vào ổ mạng bạn chọn. UTD saves downloads to the network drive you chose.</string>
+</dict>
+</plist>

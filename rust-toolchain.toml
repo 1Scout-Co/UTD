@@ -1,3 +1,4 @@
-# Windows-first: MSVC handles Unicode project paths; macOS port will override this.
+# Windows: MSVC xử lý được đường dẫn dự án có dấu tiếng Việt (máy dev mặc định là GNU nên phải ghim).
+# macOS bỏ qua file này bằng biến RUSTUP_TOOLCHAIN=stable (CI job macOS đặt sẵn; dev: docs/RELEASE.md).
 [toolchain]
 channel = "stable-x86_64-pc-windows-msvc"

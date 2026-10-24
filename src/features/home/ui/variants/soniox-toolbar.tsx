@@ -10,6 +10,9 @@ import { cn } from "cn"
 import type { DownloadFilter } from "../../model/types"
 import { TABS } from "./soniox-table-parts"
 
+/** Phím tắt hiện như hệ điều hành quen: ⌘ trên Mac, Ctrl trên Windows (bắt phím thì nhận cả hai). */
+const MOD_KEY = /Mac/.test(navigator.userAgent) ? "⌘" : "Ctrl"
+
 function SearchField({
   query,
   onQueryChange,
@@ -60,7 +63,7 @@ function SearchField({
         </Button>
       ) : (
         <KbdGroup className="absolute top-1/2 right-2 -translate-y-1/2">
-          <Kbd className="bg-card text-xs shadow-soft">Ctrl</Kbd>
+          <Kbd className="bg-card text-xs shadow-soft">{MOD_KEY}</Kbd>
           <Kbd className="bg-card text-xs shadow-soft">K</Kbd>
         </KbdGroup>
       )}

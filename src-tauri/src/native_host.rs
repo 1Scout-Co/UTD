@@ -41,33 +41,24 @@ pub fn invoked() -> bool {
 }
 
 pub fn run() -> i32 {
-    #[cfg(windows)]
-    {
-        match forward() {
-            Ok(response) => {
-                let ok = response.ok;
-                write_response(&response);
-                if ok { 0 } else { 1 }
-            }
-            Err(message) => {
-                log_line(&format!("error: {message}"));
-                write_response(&HostResponse {
-                    ok: false,
-                    task_id: None,
-                    message: Some(message),
-                });
-                1
-            }
+    match forward() {
+        Ok(response) => {
+            let ok = response.ok;
+            write_response(&response);
+            if ok { 0 } else { 1 }
         }
-    }
-    #[cfg(not(windows))]
-    {
-        eprintln!("UTD native host is only available on Windows in v1.");
-        1
+        Err(message) => {
+            log_line(&format!("error: {message}"));
+            write_response(&HostResponse {
+                ok: false,
+                task_id: None,
+                message: Some(message),
+            });
+            1
+        }
     }
 }
 
-#[cfg(windows)]
 fn forward() -> Result<HostResponse, String> {
     let request = read_request()?;
     if request.version != 1 || request.kind != "download" {
@@ -91,12 +82,7 @@ fn forward() -> Result<HostResponse, String> {
         .map(str::trim)
         .filter(|page| page.len() <= 8192 && (page.starts_with("http://") || page.starts_with("https://")));
 
-    let (config, _) = crate::ipc::read_config()?;
-    let mut stream = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(crate::ipc::pipe_path(&config.pipe))
-        .map_err(|_| "UTD chưa chạy. Mở UTD rồi thử lại.".to_string())?;
+    let (config, path) = crate::ipc::read_config()?;
     let payload = serde_json::json!({
         "token": config.token,
         "url": url,
@@ -104,6 +90,44 @@ fn forward() -> Result<HostResponse, String> {
         "pageUrl": page_url,
     });
     let payload = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
+    let response = exchange(connect(&config, &path)?, &payload)?;
+    if response.ok {
+        log_line("forwarded");
+        Ok(response)
+    } else {
+        Err(response
+            .message
+            .unwrap_or_else(|| "UTD từ chối yêu cầu.".into()))
+    }
+}
+
+const NOT_RUNNING: &str = "UTD chưa chạy. Mở UTD rồi thử lại.";
+
+/// Windows: named pipe ghi trong `ipc.json`.
+#[cfg(windows)]
+fn connect(config: &crate::ipc::IpcConfig, _: &std::path::Path) -> Result<std::fs::File, String> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(crate::ipc::pipe_path(&config.pipe))
+        .map_err(|_| NOT_RUNNING.to_string())
+}
+
+/// macOS: Unix socket nằm cạnh `ipc.json` (`config_path`).
+#[cfg(unix)]
+fn connect(
+    _: &crate::ipc::IpcConfig,
+    config_path: &std::path::Path,
+) -> Result<std::os::unix::net::UnixStream, String> {
+    let directory = config_path.parent().ok_or_else(|| NOT_RUNNING.to_string())?;
+    let stream = std::os::unix::net::UnixStream::connect(crate::ipc::socket_path(directory))
+        .map_err(|_| NOT_RUNNING.to_string())?;
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(15)));
+    Ok(stream)
+}
+
+/// Gửi một dòng JSON, đọc một dòng trả lời.
+fn exchange<S: Read + Write>(mut stream: S, payload: &str) -> Result<HostResponse, String> {
     stream
         .write_all(format!("{payload}\n").as_bytes())
         .map_err(|_| "Không gửi được yêu cầu sang UTD.".to_string())?;
@@ -128,21 +152,13 @@ fn forward() -> Result<HostResponse, String> {
     }
     let response: Response =
         serde_json::from_str(line.trim()).map_err(|_| "UTD trả về dữ liệu lạ.".to_string())?;
-    if response.ok {
-        log_line("forwarded");
-        Ok(HostResponse {
-            ok: true,
-            task_id: response.task_id,
-            message: response.message,
-        })
-    } else {
-        Err(response
-            .message
-            .unwrap_or_else(|| "UTD từ chối yêu cầu.".into()))
-    }
+    Ok(HostResponse {
+        ok: response.ok,
+        task_id: response.task_id,
+        message: response.message,
+    })
 }
 
-#[cfg(windows)]
 fn read_request() -> Result<HostRequest, String> {
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
@@ -184,5 +200,50 @@ fn log_line(message: &str) {
         .open(path)
     {
         let _ = writeln!(file, "{message}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Đầu kia giả: trả sẵn một dòng, giữ lại những gì host gửi.
+    struct Peer {
+        reply: std::io::Cursor<Vec<u8>>,
+        sent: Vec<u8>,
+    }
+
+    impl Read for Peer {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.reply.read(buffer)
+        }
+    }
+
+    impl Write for Peer {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.sent.extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn peer(reply: &str) -> Peer {
+        Peer {
+            reply: std::io::Cursor::new(reply.as_bytes().to_vec()),
+            sent: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn exchange_sends_one_line_and_reads_one_line() {
+        let mut app = peer("{\"ok\":true,\"taskId\":\"t1\",\"message\":null}\n");
+        let response = exchange(&mut app, "{\"url\":\"https://x\"}").unwrap();
+        assert!(response.ok);
+        assert_eq!(response.task_id.as_deref(), Some("t1"));
+        assert_eq!(app.sent, b"{\"url\":\"https://x\"}\n");
+        assert_eq!(exchange(&mut peer(""), "{}").unwrap_err(), "UTD không phản hồi.");
+        assert_eq!(exchange(&mut peer("rac\n"), "{}").unwrap_err(), "UTD trả về dữ liệu lạ.");
     }
 }
