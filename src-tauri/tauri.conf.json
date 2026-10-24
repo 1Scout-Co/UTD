@@ -65,7 +65,18 @@
         "installerHooks": "./windows/hooks.nsh",
         "languages": [
           "English",
-          "Vietnamese"
+          "Vietnamese",
+          "SimpChinese",
+          "TradChinese",
+          "Japanese",
+          "Korean",
+          "Spanish",
+          "PortugueseBR",
+          "French",
+          "German",
+          "Russian",
+          "Turkish",
+          "Arabic"
         ],
         "displayLanguageSelector": true
       }

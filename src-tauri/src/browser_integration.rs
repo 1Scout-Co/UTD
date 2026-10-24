@@ -57,6 +57,27 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
     ),
 ];
 
+/// `_locales/<mã>/messages.json` của tiện ích (chrome.i18n) cho cả Chromium và Firefox. Thêm ngôn ngữ ở
+/// src/shared/i18n/languages.ts thì thêm mã vào đây (scripts/i18n-check.mjs kiểm đủ file).
+macro_rules! extension_locales {
+    ($($code:literal),* $(,)?) => {
+        &[$(
+            (
+                concat!("chromium/_locales/", $code, "/messages.json"),
+                include_bytes!(concat!("../../extensions/chromium/_locales/", $code, "/messages.json")),
+            ),
+            (
+                concat!("firefox/_locales/", $code, "/messages.json"),
+                include_bytes!(concat!("../../extensions/firefox/_locales/", $code, "/messages.json")),
+            ),
+        )*]
+    };
+}
+
+const EXTENSION_LOCALES: &[(&str, &[u8])] = extension_locales![
+    "vi", "en", "zh_CN", "zh_TW", "ja", "ko", "th", "id", "hi", "es", "pt_BR", "fr", "de", "ru", "tr", "ar",
+];
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserIntegrationStatus {
@@ -185,7 +206,7 @@ fn refresh_extensions() -> Result<PathBuf, String> {
 
 fn write_extensions(directory: &Path) -> Result<(), String> {
     std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
-    for (relative, bytes) in EXTENSION_FILES {
+    for (relative, bytes) in EXTENSION_FILES.iter().chain(EXTENSION_LOCALES) {
         let path = directory.join(relative);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -229,4 +250,28 @@ fn write_registry(root: &winreg::RegKey, key: &str, manifest: &Path) -> Result<(
     subkey
         .set_value("", &manifest.to_string_lossy().to_string())
         .map_err(|error| format!("Không ghi được đăng ký tích hợp: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EXTENSION_LOCALES;
+
+    fn message_keys(bytes: &[u8]) -> Vec<String> {
+        let value: serde_json::Value = serde_json::from_slice(bytes).expect("messages.json là JSON");
+        let mut keys: Vec<String> = value.as_object().expect("đối tượng JSON").keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// Thiếu khoá thì chrome.i18n trả chuỗi rỗng: menu chuột phải hay nút trong popup mất chữ.
+    #[test]
+    fn every_extension_locale_has_the_english_messages() {
+        let english = EXTENSION_LOCALES
+            .iter()
+            .find(|(path, _)| *path == "chromium/_locales/en/messages.json")
+            .expect("có tiếng Anh (default_locale)");
+        for (path, bytes) in EXTENSION_LOCALES {
+            assert_eq!(message_keys(bytes), message_keys(english.1), "{path}");
+        }
+    }
 }

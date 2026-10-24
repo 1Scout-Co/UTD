@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD — менеджер загрузок" },
+  "extDescription": { "message": "Передаёт ссылки в UTD для быстрой загрузки с проверкой безопасности." },
+  "actionTitle": { "message": "Скачать через UTD" },
+  "menuDownload": { "message": "Скачать через UTD" },
+  "menuMedia": { "message": "Скачать видео/аудио через UTD" },
+  "sendPage": { "message": "Скачать эту страницу через UTD" },
+  "hint": { "message": "Щёлкните правой кнопкой по ссылке или видео, чтобы быстро скачать." },
+  "sending": { "message": "Отправка…" },
+  "sent": { "message": "Отправлено в UTD." },
+  "openedForQuality": { "message": "UTD открыт для выбора качества." },
+  "notHttp": { "message": "Эта страница не HTTP/HTTPS." },
+  "sendFailed": { "message": "Не удалось отправить запрос в UTD." },
+  "noResponse": { "message": "UTD не отвечает." },
+  "notRunning": { "message": "UTD не запущен. Откройте UTD и повторите попытку." },
+  "notConnected": { "message": "Не удалось подключиться к UTD. Убедитесь, что UTD запущен и интеграция с браузером включена." }
+}

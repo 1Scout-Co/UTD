@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD – ตัวจัดการดาวน์โหลด" },
+  "extDescription": { "message": "ส่งลิงก์ไปยัง UTD เพื่อดาวน์โหลดเร็ว พร้อมตรวจความปลอดภัย" },
+  "actionTitle": { "message": "ดาวน์โหลดด้วย UTD" },
+  "menuDownload": { "message": "ดาวน์โหลดด้วย UTD" },
+  "menuMedia": { "message": "ดาวน์โหลดวิดีโอ/เสียงด้วย UTD" },
+  "sendPage": { "message": "ดาวน์โหลดหน้านี้ด้วย UTD" },
+  "hint": { "message": "คลิกขวาที่ลิงก์หรือวิดีโอเพื่อดาวน์โหลดเร็ว" },
+  "sending": { "message": "กำลังส่ง…" },
+  "sent": { "message": "ส่งไปยัง UTD แล้ว" },
+  "openedForQuality": { "message": "เปิด UTD เพื่อเลือกคุณภาพแล้ว" },
+  "notHttp": { "message": "หน้านี้ไม่ใช่ HTTP/HTTPS" },
+  "sendFailed": { "message": "ส่งคำขอไปยัง UTD ไม่ได้" },
+  "noResponse": { "message": "UTD ไม่ตอบสนอง" },
+  "notRunning": { "message": "UTD ยังไม่ทำงาน เปิด UTD แล้วลองอีกครั้ง" },
+  "notConnected": { "message": "เชื่อมต่อ UTD ไม่ได้ ตรวจสอบว่า UTD ทำงานอยู่และเปิดการเชื่อมต่อเบราว์เซอร์แล้ว" }
+}

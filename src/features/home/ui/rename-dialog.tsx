@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { t } from "@/shared/i18n/i18n"
 
 import type { DownloadItem } from "../model/types"
 
@@ -35,9 +36,9 @@ function useRenameForm({ item, onClose, onSubmit }: RenameProps) {
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     const next = name.trim()
-    if (!next) return setError("Nhập tên file.")
+    if (!next) return setError(t("rename.needName"))
     if (INVALID.test(next))
-      return setError('Tên không được có \\ / : * ? " < > |')
+      return setError(t("rename.badChars", { chars: '\\ / : * ? " < > |' }))
     if (next === item.name) return onClose()
     setBusy(true)
     setError(null)
@@ -61,7 +62,8 @@ function RenameForm(props: RenameProps) {
   return (
     <form className="space-y-4" onSubmit={(event) => void submit(event)}>
       <Input
-        aria-label="Tên file mới"
+        aria-label={t("rename.newName")}
+        dir="auto"
         value={name}
         autoFocus
         spellCheck={false}
@@ -86,11 +88,11 @@ function RenameForm(props: RenameProps) {
       ) : null}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>
-          Huỷ
+          {t("app.cancel")}
         </Button>
         <Button data-primary type="submit" disabled={busy}>
           {busy ? <Loader2 className="animate-spin" /> : <PenLine />}
-          Đổi tên
+          {t("rename.submit")}
         </Button>
       </div>
     </form>
@@ -114,8 +116,8 @@ export function RenameDialog({
     >
       <DialogContent data-variant="soniox" className="sm:max-w-[480px]">
         <DialogHeader>
-          <DialogTitle>Đổi tên file</DialogTitle>
-          <DialogDescription>File trên đĩa đổi tên theo.</DialogDescription>
+          <DialogTitle>{t("rename.title")}</DialogTitle>
+          <DialogDescription>{t("rename.description")}</DialogDescription>
         </DialogHeader>
         {item ? (
           <RenameForm

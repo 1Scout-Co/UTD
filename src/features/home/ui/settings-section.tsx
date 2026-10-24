@@ -2,6 +2,7 @@ import type { ReactNode, Ref } from "react"
 
 import { ChevronRight } from "lucide-react"
 
+import { t, tx } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
 /** Một mục trong Cài đặt: tiêu đề + tối đa một dòng mô tả, rồi đúng một cụm hành động. */
@@ -40,15 +41,18 @@ export function SettingsSection({
 export function SettingsPrivacy() {
   return (
     <SettingsSection
-      title="An toàn & riêng tư"
-      description="Không telemetry, không cloud. File đáng ngờ bị cách ly."
+      title={t("privacy.title")}
+      description={t("privacy.description")}
     >
-      <MoreInfo label="Chi tiết">
+      <MoreInfo label={t("app.details")}>
         <p>
-          Dữ liệu task nằm trong journal SQLite trên máy. File thực thi/script
-          hoặc giả mạo định dạng bị Download Guard cách ly vào{" "}
-          <code className="break-all">%LOCALAPPDATA%\UTD-Data\quarantine</code>.
-          File an toàn được gắn Mark-of-the-Web. SHA-256 chỉ dùng khi bạn nhập.
+          {tx("privacy.body", {
+            path: (
+              <code className="break-all">
+                %LOCALAPPDATA%\UTD-Data\quarantine
+              </code>
+            ),
+          })}
         </p>
       </MoreInfo>
     </SettingsSection>
@@ -68,7 +72,7 @@ export function MoreInfo({
   return (
     <details className={cn("group", className)}>
       <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md text-sm font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90 rtl:-scale-x-100 rtl:group-open:-rotate-90" />
         {label}
       </summary>
       <div className="mt-2 space-y-3 rounded-xl bg-muted p-3.5 text-sm leading-relaxed text-muted-foreground">

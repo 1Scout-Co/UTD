@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { t } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
 import type { DownloadKind, ScreenState } from "../model/types"
@@ -66,7 +67,7 @@ export function Meter({
   tone,
   className,
   height = 6,
-  label = "Tiến độ tải",
+  label = t("table.progress"),
 }: {
   value: number
   tone?: string
@@ -113,7 +114,7 @@ export function Toggle({
       role="switch"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className="flex w-full items-center justify-between gap-4 text-left"
+      className="flex w-full items-center justify-between gap-4 text-start"
     >
       <span className="text-sm">{label}</span>
       <span
@@ -158,7 +159,7 @@ function LoadingState({ className, soft }: StateProps) {
       )}
     >
       <div className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-        Đang tải danh sách…
+        {t("state.loading")}
       </div>
       {Array.from({ length: 5 }, (_, index) => (
         <div
@@ -190,19 +191,18 @@ function ErrorState({ onRetry, className, soft }: StateProps) {
       <div className="grid size-11 place-items-center rounded-xl bg-destructive/10 text-destructive">
         <AlertCircle className="size-5" />
       </div>
-      <h2 className="text-lg font-semibold">Không tải được danh sách</h2>
+      <h2 className="text-lg font-semibold">{t("state.errorTitle")}</h2>
       <p className="max-w-sm text-sm leading-6 text-muted-foreground">
-        Cơ sở dữ liệu tạm thời không phản hồi. Các file đang tải vẫn được giữ
-        trong journal.
+        {t("state.errorBody")}
       </p>
       <div className="mt-1 flex gap-2">
         <Button data-primary onClick={onRetry}>
           <RefreshCw />
-          Thử lại
+          {t("app.retry")}
         </Button>
         <Button variant="outline">
           <FolderOpen />
-          Mở log
+          {t("state.openLog")}
         </Button>
       </div>
     </div>
@@ -222,19 +222,18 @@ function EmptyState({ onAdd, onSettings, className, soft }: StateProps) {
       <div className="grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
         <Download className="size-6" />
       </div>
-      <h2 className="text-lg font-semibold">Chưa có download nào</h2>
+      <h2 className="text-lg font-semibold">{t("state.emptyTitle")}</h2>
       <p className="max-w-sm text-sm leading-6 text-muted-foreground">
-        Dán một URL, hoặc chuột phải vào link/video trong trình duyệt để chuyển
-        sang UTD.
+        {t("state.emptyBody")}
       </p>
       <div className="mt-1 flex gap-2">
         <Button data-primary onClick={onAdd}>
           <Plus />
-          Thêm URL
+          {t("toolbar.add")}
         </Button>
         <Button variant="outline" onClick={onSettings}>
           <ShieldAlert />
-          Cài extension
+          {t("browser.install")}
         </Button>
       </div>
     </div>

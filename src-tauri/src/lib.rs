@@ -3,6 +3,7 @@ mod commands;
 mod events;
 mod files;
 mod ipc;
+mod language;
 mod legacy;
 mod media;
 mod media_pages;
@@ -214,6 +215,8 @@ pub fn run() {
             updater::install_update,
             updater::get_update_check,
             updater::set_update_check,
+            language::get_ui_language,
+            language::set_ui_language,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

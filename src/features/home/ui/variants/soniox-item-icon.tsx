@@ -64,7 +64,7 @@ export function ItemIcon({
             src={icon}
             alt=""
             draggable={false}
-            className="absolute -right-1 -bottom-1 size-4 rounded-sm bg-card ring-2 ring-card"
+            className="absolute -end-1 -bottom-1 size-4 rounded-sm bg-card ring-2 ring-card"
           />
         ) : null}
       </div>

@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { t } from "@/shared/i18n/i18n"
 
 import {
   mediaProbe,
@@ -24,8 +25,6 @@ import {
   SupportedSites,
   UrlField,
 } from "./media-picker-parts"
-
-const DESKTOP_ONLY = "Mở app UTD để phân tích và tải media."
 
 /**
  * Link trang video từ trình duyệt (chuột phải / popup): `onUrl` cần ổn định (useCallback). Link tới
@@ -86,7 +85,7 @@ export function MediaPickerDialog({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(autoAnalyze)
   const [localError, setLocalError] = useState<string | null>(
-    initialUrl && !desktop ? DESKTOP_ONLY : null,
+    initialUrl && !desktop ? t("media.desktopOnly") : null,
   )
   const autoStarted = useRef(false)
 
@@ -145,11 +144,11 @@ export function MediaPickerDialog({
 
   const analyze = (value = url) => {
     if (!desktop) {
-      setLocalError(DESKTOP_ONLY)
+      setLocalError(t("media.desktopOnly"))
       return
     }
     if (!/^https?:\/\//i.test(value.trim())) {
-      setLocalError("Nhập URL HTTP/HTTPS của video hoặc luồng media.")
+      setLocalError(t("media.needUrl"))
       return
     }
     setLoading(true)
@@ -162,7 +161,7 @@ export function MediaPickerDialog({
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (!probe || !selected) {
-      setLocalError("Phân tích URL trước để chọn định dạng.")
+      setLocalError(t("media.analyzeFirst"))
       return
     }
     setLocalError(null)
@@ -179,9 +178,9 @@ export function MediaPickerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-variant="soniox" className="sm:max-w-[600px]">
         <DialogHeader>
-          <DialogTitle>Tải media</DialogTitle>
+          <DialogTitle>{t("media.title")}</DialogTitle>
           <DialogDescription className="sr-only">
-            Dán link video để chọn chất lượng và tải về.
+            {t("media.description")}
           </DialogDescription>
         </DialogHeader>
 
@@ -209,8 +208,7 @@ export function MediaPickerDialog({
               {!probe.ffmpegAvailable ? (
                 <div className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   <AlertCircle className="mt-0.5 size-4 shrink-0" />
-                  Chưa có ffmpeg nên có thể không ghép được hình và tiếng. Tải ở
-                  Cài đặt → Công cụ media.
+                  {t("media.noFfmpeg")}
                 </div>
               ) : null}
             </>
@@ -232,7 +230,7 @@ export function MediaPickerDialog({
               onClick={close}
               disabled={busy}
             >
-              Huỷ
+              {t("app.cancel")}
             </Button>
             <Button
               data-primary
@@ -240,7 +238,7 @@ export function MediaPickerDialog({
               disabled={busy || loading || !probe || !selected}
             >
               <Download />
-              {busy ? "Đang thêm…" : "Tải về"}
+              {busy ? t("app.adding") : t("media.download")}
             </Button>
           </div>
         </form>

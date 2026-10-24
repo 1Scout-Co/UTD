@@ -5,6 +5,8 @@ import { Plus, Search, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
+import { formatNumber } from "@/shared/i18n/format"
+import { t } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
 import type { DownloadFilter } from "../../model/types"
@@ -32,8 +34,9 @@ function SearchField({
   }, [])
 
   return (
-    <div className="relative w-60 2xl:w-72">
-      <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+    // Cửa sổ hẹp (<1280px) ô tìm gọn lại, bỏ gợi ý Ctrl K: nhãn lọc tiếng Pháp/Indonesia… dài hơn tiếng Việt.
+    <div className="relative w-44 xl:w-60 2xl:w-72">
+      <Search className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         ref={searchRef}
         value={query}
@@ -43,23 +46,23 @@ function SearchField({
           if (query) onQueryChange("")
           else event.currentTarget.blur()
         }}
-        aria-label="Tìm download"
-        placeholder="Tìm file, mô tả…"
-        className="h-9 rounded-lg border-transparent bg-muted pr-20 pl-9 text-sm focus-visible:bg-card"
+        aria-label={t("toolbar.search")}
+        placeholder={t("toolbar.searchPlaceholder")}
+        className="h-9 rounded-lg border-transparent bg-muted ps-9 pe-3 text-sm focus-visible:bg-card xl:pe-20"
       />
       {query ? (
         <Button
           variant="ghost"
           size="icon-xs"
-          aria-label="Xoá tìm kiếm"
-          title="Xoá tìm kiếm"
+          aria-label={t("toolbar.clearSearch")}
+          title={t("toolbar.clearSearch")}
           onClick={() => onQueryChange("")}
-          className="absolute top-1/2 right-1.5 -translate-y-1/2 text-muted-foreground"
+          className="absolute end-1.5 top-1/2 -translate-y-1/2 text-muted-foreground"
         >
           <X />
         </Button>
       ) : (
-        <KbdGroup className="absolute top-1/2 right-2 -translate-y-1/2">
+        <KbdGroup className="absolute end-2 top-1/2 hidden -translate-y-1/2 xl:flex">
           <Kbd className="bg-card text-xs shadow-soft">Ctrl</Kbd>
           <Kbd className="bg-card text-xs shadow-soft">K</Kbd>
         </KbdGroup>
@@ -81,17 +84,17 @@ function FilterBar({
   return (
     <div
       role="group"
-      aria-label="Lọc download"
+      aria-label={t("toolbar.filter")}
       className="inline-flex h-9 items-center gap-0.5 rounded-lg bg-muted p-0.5"
     >
       {TABS.map((tab) => {
-        const active = filter === tab.id
+        const active = filter === tab
         return (
           <Button
-            key={tab.id}
+            key={tab}
             variant="ghost"
             aria-pressed={active}
-            onClick={() => onFilterChange(tab.id)}
+            onClick={() => onFilterChange(tab)}
             className={cn(
               "h-full gap-1.5 rounded-md px-2.5 text-sm",
               active
@@ -99,7 +102,7 @@ function FilterBar({
                 : "text-muted-foreground hover:bg-card/60"
             )}
           >
-            {tab.label}
+            {t(`filter.${tab}`)}
             <span
               className={cn(
                 "min-w-5 rounded-full px-1.5 text-xs tabular-nums",
@@ -108,7 +111,7 @@ function FilterBar({
                   : "bg-card/70 text-muted-foreground"
               )}
             >
-              {counts[tab.id]}
+              {formatNumber(counts[tab], 0)}
             </span>
           </Button>
         )
@@ -140,7 +143,7 @@ export function SonioxToolbar({
         counts={counts}
         onFilterChange={onFilterChange}
       />
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ms-auto flex items-center gap-2">
         <SearchField query={query} onQueryChange={onQueryChange} />
         <Button
           data-primary
@@ -148,7 +151,7 @@ export function SonioxToolbar({
           onClick={onAdd}
         >
           <Plus />
-          Thêm URL
+          {t("toolbar.add")}
         </Button>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react"
 import { Info, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { t } from "@/shared/i18n/i18n"
 
 import {
   cancelMediaToolInstall,
@@ -138,8 +139,8 @@ function useMediaTools(desktop: boolean) {
       const after = infoOf(next, tool)?.version ?? ""
       setNotice(
         after && after === before
-          ? `${tool} đã là bản mới nhất (${after}).`
-          : `Đã cài ${tool} ${after} vào thư mục của UTD.`
+          ? t("tools.upToDate", { tool, version: after })
+          : t("tools.installed", { tool, version: after })
       )
     } catch (reason) {
       if (cancelled.current) setNotice(messageOf(reason))
@@ -182,7 +183,7 @@ export function SettingsMediaTools({ desktop }: { desktop: boolean }) {
                 <p className="text-sm font-semibold">
                   {meta.name}{" "}
                   <span className="font-normal text-muted-foreground">
-                    · {meta.role}
+                    · {t(meta.role)}
                   </span>
                 </p>
                 <ToolState info={info} desktop={desktop} check={check} />
@@ -241,7 +242,7 @@ function MediaToolsMessages({
       {onRetry ? (
         <Button type="button" variant="outline" onClick={onRetry}>
           <RefreshCw />
-          Thử lại
+          {t("app.retry")}
         </Button>
       ) : null}
     </>
@@ -259,7 +260,7 @@ function MediaToolsFooter({
     return (
       <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
         <Info className="size-3.5 shrink-0" />
-        Tải công cụ chỉ có trong app UTD.
+        {t("tools.desktopOnly")}
       </p>
     )
   }
@@ -269,7 +270,7 @@ function MediaToolsFooter({
       className="flex items-center gap-1.5 text-xs text-muted-foreground"
       title={binDir}
     >
-      <span className="shrink-0">Thư mục công cụ của UTD:</span>
+      <span className="shrink-0">{t("tools.folder")}</span>
       <code className="truncate font-mono">{binDir}</code>
     </p>
   )

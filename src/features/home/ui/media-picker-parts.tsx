@@ -10,9 +10,10 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { formatBitrate, formatBytes } from "@/shared/i18n/format"
+import { t } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
-import { formatBytes, formatNumber } from "../model/download-mapper"
 import type { EngineMediaFormat, MediaProbe } from "../model/types"
 import { MEDIA_SOURCES, mediaSourceOf, SourceLogo } from "./source-logos"
 
@@ -37,10 +38,45 @@ function hostOf(value: string): string {
 
 function formatMeta(format: EngineMediaFormat): string {
   const size = format.sizeBytes ? formatBytes(format.sizeBytes) : "—"
-  const bitrate = format.bitrateKbps
-    ? `${formatNumber(format.bitrateKbps, 0)} kbps`
-    : "—"
+  const bitrate = format.bitrateKbps ? formatBitrate(format.bitrateKbps) : "—"
   return `${size} · ${bitrate}`
+}
+
+/** Nhãn của lựa chọn do Rust (media/probe.rs) đặt theo `id` ổn định: dịch theo id; id lạ thì giữ chữ gốc. */
+function formatText(format: EngineMediaFormat, formats: EngineMediaFormat[]) {
+  const { id } = format
+  if (id === "best") {
+    const heights = formats
+      .map((item) => Number(item.id))
+      .filter(Number.isInteger)
+    const top = heights.length > 0 ? String(Math.max(...heights)) : null
+    return {
+      label: t("format.best"),
+      detail: top
+        ? t("format.videoAudioMax", { height: top })
+        : t("format.videoAudio"),
+      badge: t("format.recommended"),
+    }
+  }
+  if (/^\d+$/.test(id)) {
+    const badge = format.badge ? t("format.popular") : null
+    return { label: format.label, detail: t("format.videoAudio"), badge }
+  }
+  if (id === "audio-m4a") {
+    return {
+      label: t("format.m4a"),
+      detail: t("format.m4aDetail"),
+      badge: null,
+    }
+  }
+  if (id === "audio-mp3") {
+    return {
+      label: t("format.mp3"),
+      detail: t("format.mp3Detail"),
+      badge: null,
+    }
+  }
+  return { label: format.label, detail: format.detail, badge: format.badge }
 }
 
 /** Ô dán link lớn: trống thì nút "Dán" (dán rồi phân tích luôn), có link thì nút "Phân tích". */
@@ -60,16 +96,16 @@ export function UrlField({
   onPaste: () => void
 }) {
   return (
-    <div className="flex h-12 items-center gap-2 rounded-xl bg-muted pr-1.5 pl-3.5 transition-shadow focus-within:bg-card focus-within:shadow-soft focus-within:ring-2 focus-within:ring-ring/40">
+    <div className="flex h-12 items-center gap-2 rounded-xl bg-muted ps-3.5 pe-1.5 transition-shadow focus-within:bg-card focus-within:shadow-soft focus-within:ring-2 focus-within:ring-ring/40">
       <Link2 className="size-4 shrink-0 text-muted-foreground" />
       <Input
-        aria-label="URL media"
+        aria-label={t("media.urlLabel")}
         value={url}
         autoFocus
         autoComplete="off"
         spellCheck={false}
         disabled={disabled}
-        placeholder="Dán link video hoặc luồng media…"
+        placeholder={t("media.urlPlaceholder")}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
           if (event.key !== "Enter" || !url.trim()) return
@@ -86,7 +122,7 @@ export function UrlField({
           onClick={onAnalyze}
         >
           {loading ? <Loader2 className="animate-spin" /> : <Sparkles />}
-          Phân tích
+          {t("media.analyze")}
         </Button>
       ) : (
         <Button
@@ -96,7 +132,7 @@ export function UrlField({
           onClick={onPaste}
         >
           <ClipboardPaste />
-          Dán
+          {t("app.paste")}
         </Button>
       )}
     </div>
@@ -107,7 +143,9 @@ export function UrlField({
 export function SupportedSites() {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="mr-1 text-xs text-muted-foreground">Hỗ trợ</span>
+      <span className="me-1 text-xs text-muted-foreground">
+        {t("media.supported")}
+      </span>
       {MEDIA_SOURCES.map((source) => (
         <span
           key={source.name}
@@ -121,8 +159,8 @@ export function SupportedSites() {
           />
         </span>
       ))}
-      <span className="ml-1 text-xs text-muted-foreground">
-        · HLS/DASH · link trực tiếp
+      <span className="ms-1 text-xs text-muted-foreground">
+        {t("media.alsoDirect")}
       </span>
     </div>
   )
@@ -132,7 +170,7 @@ export function SupportedSites() {
 export function ProbeSkeleton() {
   return (
     <div role="status" className="space-y-2">
-      <span className="sr-only">Đang phân tích…</span>
+      <span className="sr-only">{t("media.analyzing")}</span>
       <div className="flex gap-3 rounded-xl bg-muted p-2.5">
         <div className="aspect-video w-32 shrink-0 animate-pulse rounded-lg bg-card" />
         <div className="flex-1 space-y-2 self-center">
@@ -168,7 +206,8 @@ export function ProbeCard({ probe }: { probe: MediaProbe }) {
       </div>
       <div className="min-w-0 flex-1 self-center">
         <div
-          className="line-clamp-2 text-sm font-semibold break-words"
+          dir="auto"
+          className="line-clamp-2 [text-align:match-parent] text-sm font-semibold break-words"
           title={probe.title}
         >
           {probe.title}
@@ -210,6 +249,7 @@ export function FormatList({
     <div className="-mx-1 max-h-64 space-y-1.5 overflow-y-auto px-1 py-0.5">
       {formats.map((format) => {
         const active = selectedId === format.id
+        const text = formatText(format, formats)
         return (
           <button
             key={format.id}
@@ -217,7 +257,7 @@ export function FormatList({
             onClick={() => onSelect(format.id)}
             aria-pressed={active}
             className={cn(
-              "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
+              "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-start transition-colors",
               active
                 ? "bg-card shadow-soft ring-2 ring-primary"
                 : "bg-muted/60 hover:bg-muted"
@@ -235,18 +275,18 @@ export function FormatList({
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2 text-sm font-semibold">
-                {format.label}
-                {format.badge ? (
+                {text.label}
+                {text.badge ? (
                   <span className="rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground">
-                    {format.badge}
+                    {text.badge}
                   </span>
                 ) : null}
               </span>
               <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                {format.detail}
+                {text.detail}
               </span>
             </span>
-            <span className="shrink-0 text-right text-xs text-muted-foreground tabular-nums">
+            <span className="shrink-0 text-end text-xs text-muted-foreground tabular-nums">
               {formatMeta(format)}
             </span>
           </button>

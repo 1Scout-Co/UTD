@@ -24,3 +24,10 @@ it in %LOCALAPPDATA%\UTD-Data\bin. Nothing is downloaded otherwise.
   FFmpeg-Builds repository.
 
 UTD runs these tools as separate processes and does not link to them.
+
+Flag images
+-----------
+The 16 language flags in src/shared/i18n/flags are copied unchanged from
+country-flag-icons 1.6.20 (https://gitlab.com/catamphetamine/country-flag-icons),
+MIT License, Copyright (c) 2020 @catamphetamine. The license text is in
+src/shared/i18n/flags/LICENSE.

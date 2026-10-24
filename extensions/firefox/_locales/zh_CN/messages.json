@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD 下载管理器" },
+  "extDescription": { "message": "将链接发送到 UTD，快速下载并进行安全检查。" },
+  "actionTitle": { "message": "用 UTD 下载" },
+  "menuDownload": { "message": "用 UTD 下载" },
+  "menuMedia": { "message": "用 UTD 下载视频/音频" },
+  "sendPage": { "message": "用 UTD 下载此页面" },
+  "hint": { "message": "右键单击链接或视频即可快速下载。" },
+  "sending": { "message": "正在发送…" },
+  "sent": { "message": "已发送到 UTD。" },
+  "openedForQuality": { "message": "已打开 UTD 以选择画质。" },
+  "notHttp": { "message": "此页面不是 HTTP/HTTPS。" },
+  "sendFailed": { "message": "无法将请求发送到 UTD。" },
+  "noResponse": { "message": "UTD 无响应。" },
+  "notRunning": { "message": "UTD 未运行。请打开 UTD 后重试。" },
+  "notConnected": { "message": "无法连接 UTD。请确认 UTD 正在运行并已启用浏览器集成。" }
+}

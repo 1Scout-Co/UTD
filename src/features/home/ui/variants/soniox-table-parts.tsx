@@ -2,6 +2,8 @@ import { useMemo, useState } from "react"
 
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react"
 
+import { compareText } from "@/shared/i18n/format"
+import { t } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
 import type {
@@ -13,55 +15,45 @@ import type {
 export type SortKey = "name" | "size" | "status" | "speed" | "eta" | "date"
 export type SortDir = "asc" | "desc"
 
-export const TABS: Array<{ id: DownloadFilter; label: string }> = [
-  { id: "all", label: "Tất cả" },
-  { id: "active", label: "Chưa xong" },
-  { id: "completed", label: "Hoàn tất" },
-  { id: "error", label: "Có lỗi" },
-]
+// Nhãn: t(`filter.${id}`).
+export const TABS: DownloadFilter[] = ["all", "active", "completed", "error"]
 
+// Nhãn: t(`status.${status}`).
 export const STATUS_META: Record<
   DownloadStatus,
-  { label: string; dot: string; pill: string; order: number }
+  { dot: string; pill: string; order: number }
 > = {
   downloading: {
-    label: "Đang tải",
     dot: "bg-chart-1",
     pill: "bg-accent text-accent-foreground",
     order: 0,
   },
   paused: {
-    label: "Tạm dừng",
     dot: "bg-slate-400",
     pill: "bg-slate-100 text-slate-600",
     order: 1,
   },
   queued: {
-    label: "Đang chờ",
     dot: "bg-slate-300",
     pill: "bg-slate-50 text-slate-500",
     order: 2,
   },
   verifying: {
-    label: "Xác minh",
     dot: "bg-sky-500",
     pill: "bg-sky-50 text-sky-700",
     order: 3,
   },
   completed: {
-    label: "Hoàn tất",
     dot: "bg-emerald-500",
     pill: "bg-emerald-50 text-emerald-700",
     order: 4,
   },
   failed: {
-    label: "Lỗi",
     dot: "bg-red-500",
     pill: "bg-red-50 text-red-700",
     order: 5,
   },
   quarantined: {
-    label: "Đã giữ",
     dot: "bg-amber-500",
     pill: "bg-amber-50 text-amber-700",
     order: 6,
@@ -85,8 +77,8 @@ export function matchesFilter(item: DownloadItem, filter: DownloadFilter) {
 export function countByFilter(items: DownloadItem[]) {
   return Object.fromEntries(
     TABS.map((tab) => [
-      tab.id,
-      items.filter((item) => matchesFilter(item, tab.id)).length,
+      tab,
+      items.filter((item) => matchesFilter(item, tab)).length,
     ])
   ) as Record<DownloadFilter, number>
 }
@@ -133,7 +125,7 @@ export function useDownloadRows(
       const vb = sortValue(b, sortKey)
       const result =
         typeof va === "string" && typeof vb === "string"
-          ? va.localeCompare(vb, "vi")
+          ? compareText(va, vb)
           : Number(va) - Number(vb)
       return sortDir === "asc" ? result : -result
     })
@@ -162,7 +154,10 @@ export function PlainHeader({
   className?: string
 }) {
   return (
-    <th scope="col" className={cn("h-10 px-3 text-left", HEAD_TEXT, className)}>
+    <th
+      scope="col"
+      className={cn("h-10 px-3 text-start", HEAD_TEXT, className)}
+    >
       {label}
     </th>
   )
@@ -174,7 +169,7 @@ export function SortHeader({
   current,
   dir,
   onSort,
-  align = "left",
+  align = "start",
   className,
 }: {
   label: string
@@ -182,7 +177,7 @@ export function SortHeader({
   current: SortKey
   dir: SortDir
   onSort: (key: SortKey) => void
-  align?: "left" | "right"
+  align?: "start" | "end"
   className?: string
 }) {
   const active = current === sortKey
@@ -194,7 +189,7 @@ export function SortHeader({
       className={cn(
         "h-10 px-3",
         HEAD_TEXT,
-        align === "right" ? "text-right" : "text-left",
+        align === "end" ? "text-end" : "text-start",
         className
       )}
     >
@@ -205,7 +200,7 @@ export function SortHeader({
           "inline-flex items-center gap-1 rounded-sm align-middle transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
           HEAD_TEXT,
           active && "text-foreground",
-          align === "right" && "flex-row-reverse"
+          align === "end" && "flex-row-reverse"
         )}
       >
         {label}
@@ -225,7 +220,7 @@ export function StatusPill({ status }: { status: DownloadStatus }) {
       )}
     >
       <span className={cn("size-1.5 rounded-full", meta.dot)} />
-      {meta.label}
+      {t(`status.${status}`)}
     </span>
   )
 }

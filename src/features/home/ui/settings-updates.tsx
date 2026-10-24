@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 
+import { t } from "@/shared/i18n/i18n"
+
 import {
   appVersion,
   checkForUpdate,
@@ -112,7 +114,7 @@ function useUpdateState(active: boolean) {
   useAdoptedInstall(busy?.kind === "install" && !busy.own, () => {
     setBusy(null)
     setProgress(null)
-    setError("Cập nhật chưa xong. Bấm Cập nhật để thử lại.")
+    setError(t("updates.failedRetry", { button: t("updates.install") }))
   })
 
   return {
@@ -141,7 +143,7 @@ function useUpdates(active: boolean) {
     try {
       const found = await checkForUpdate()
       updates.setAvailable(found)
-      if (!found) setNotice("Bạn đang dùng bản mới nhất.")
+      if (!found) setNotice(t("updates.latest"))
     } catch (reason) {
       setError(messageOf(reason))
     } finally {
@@ -211,13 +213,13 @@ export function SettingsUpdates({
   const ready = updates.state?.ready === true
   const installing = updates.busy?.kind === "install"
   const locked = !desktop || !ready || updates.busy !== null
-  const current = version ?? (desktop ? "…" : "bản xem trước")
+  const current = version ?? (desktop ? "…" : t("updates.preview"))
 
   return (
     <SettingsSection
       ref={sectionRef}
-      title="Cập nhật"
-      description="Chỉ hỏi GitHub có bản mới không, không gửi dữ liệu."
+      title={t("updates.title")}
+      description={t("updates.description")}
     >
       <div className="space-y-2.5" data-testid="settings-updates">
         <VersionRow

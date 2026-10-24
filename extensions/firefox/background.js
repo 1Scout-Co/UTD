@@ -3,28 +3,46 @@ const MENU_LINK = "utd-download"
 const MENU_MEDIA = "utd-download-media"
 const api = globalThis.browser ?? globalThis.chrome
 
-async function sendToUtd(payload) {
-  try {
-    const response = await api.runtime.sendNativeMessage(HOST, payload)
-    if (!response || response.ok !== true) {
-      throw new Error(response?.message || "UTD không phản hồi.")
-    }
-    await api.action.setBadgeText({ text: "" })
-    // UTD có thể gửi kèm câu báo, vd. link video thì "Đã mở UTD để chọn chất lượng".
-    const note = typeof response.message === "string" ? response.message : null
-    await api.storage.local.set({ lastResult: "ok", lastNote: note, lastAt: Date.now() })
-    return { ok: true, taskId: response.taskId, message: note }
-  } catch (error) {
-    const message =
-      error?.message ||
-      "Không kết nối được UTD. Kiểm tra UTD đang chạy và đã bật tích hợp trình duyệt."
-    await api.action.setBadgeText({ text: "!" })
-    if (api.action.setBadgeBackgroundColor) {
-      await api.action.setBadgeBackgroundColor({ color: "#d93025" })
-    }
-    await api.storage.local.set({ lastResult: message, lastAt: Date.now() })
-    return { ok: false, message }
+// Chữ theo ngôn ngữ của trình duyệt (_locales/<mã>/messages.json, mặc định en).
+const t = (key) => api.i18n.getMessage(key) || key
+
+// Native host chưa gửi mã lỗi, chỉ gửi câu tiếng Việt cố định (src-tauri/src/native_host.rs, ipc.rs,
+// media_pages.rs): đổi các câu đó sang chữ của tiện ích; câu khác hiện nguyên văn.
+const HOST_TEXT = {
+  "UTD chưa chạy. Mở UTD rồi thử lại.": "notRunning",
+  "UTD chưa chạy hoặc chưa sẵn sàng nhận link. Mở UTD rồi thử lại.": "notRunning",
+  "UTD không phản hồi.": "noResponse",
+  "Không gửi được yêu cầu sang UTD.": "sendFailed",
+  "Chỉ hỗ trợ URL HTTP/HTTPS.": "notHttp",
+  "Đã mở UTD để chọn chất lượng": "openedForQuality",
+}
+const fromHost = (text) => (HOST_TEXT[text] ? t(HOST_TEXT[text]) : text)
+
+async function reportFailure(message) {
+  await api.action.setBadgeText({ text: "!" })
+  if (api.action.setBadgeBackgroundColor) {
+    await api.action.setBadgeBackgroundColor({ color: "#d93025" })
   }
+  await api.storage.local.set({ lastResult: message, lastAt: Date.now() })
+  return { ok: false, message }
+}
+
+async function sendToUtd(payload) {
+  let response
+  try {
+    response = await api.runtime.sendNativeMessage(HOST, payload)
+  } catch {
+    // Chưa đăng ký native host hoặc trình duyệt chặn: lỗi của trình duyệt khó hiểu, báo câu chung.
+    return reportFailure(t("notConnected"))
+  }
+  if (!response || response.ok !== true) {
+    return reportFailure(response?.message ? fromHost(response.message) : t("noResponse"))
+  }
+  await api.action.setBadgeText({ text: "" })
+  // UTD có thể gửi kèm câu báo, vd. link video thì "Đã mở UTD để chọn chất lượng".
+  const note = typeof response.message === "string" ? fromHost(response.message) : null
+  await api.storage.local.set({ lastResult: "ok", lastNote: note, lastAt: Date.now() })
+  return { ok: true, taskId: response.taskId, message: note }
 }
 
 async function installMenus() {
@@ -36,12 +54,12 @@ async function installMenus() {
   for (const item of [
     {
       id: MENU_LINK,
-      title: "Tải bằng UTD",
+      title: t("menuDownload"),
       contexts: ["link", "video", "audio", "image", "page"],
     },
     {
       id: MENU_MEDIA,
-      title: "Tải video/âm thanh bằng UTD",
+      title: t("menuMedia"),
       contexts: ["video", "audio"],
     },
   ]) {
@@ -85,7 +103,7 @@ api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "utd.send-page") {
     const url = message.url
     if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
-      sendResponse({ ok: false, message: "Trang này không phải HTTP/HTTPS." })
+      sendResponse({ ok: false, message: t("notHttp") })
       return false
     }
     sendToUtd({

@@ -12,7 +12,9 @@ import {
 import { Button } from "@/components/ui/button"
 import { cn } from "cn"
 
-import { formatNumber } from "../../model/download-mapper"
+import { formatNumber, formatSpeed } from "@/shared/i18n/format"
+import { t } from "@/shared/i18n/i18n"
+
 import type {
   DownloadFilter,
   DownloadItem,
@@ -50,14 +52,18 @@ function SettingsNav({
   return (
     <NavItem
       icon={Settings2}
-      label="Cài đặt"
-      title={update ? `Có bản ${updateVersion}` : undefined}
+      label={t("nav.settings")}
+      title={
+        update
+          ? t("nav.updateAvailable", { version: updateVersion ?? "" })
+          : undefined
+      }
       onClick={update ? onUpdates : onSettings}
       trailing={
         update ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-primary px-2 text-xs font-medium text-primary-foreground">
             <span className="size-1.5 rounded-full bg-primary-foreground" />
-            Mới
+            {t("nav.new")}
           </span>
         ) : undefined
       }
@@ -67,7 +73,8 @@ function SettingsNav({
 
 function SonioxLogo() {
   return (
-    <div className="flex items-baseline gap-1.5 px-2.5">
+    // Tên sản phẩm luôn đọc trái→phải, kể cả giao diện tiếng Ả Rập.
+    <div dir="ltr" className="flex w-fit items-baseline gap-1.5 px-2.5">
       <span className="text-xl font-extrabold tracking-tighter text-foreground">
         utd
       </span>
@@ -104,7 +111,7 @@ function NavItem({
         className={cn("size-4", active && "text-primary")}
         strokeWidth={1.8}
       />
-      <span className="flex-1 text-left">{label}</span>
+      <span className="flex-1 text-start">{label}</span>
       {trailing}
     </Button>
   )
@@ -114,11 +121,15 @@ function StorageCard({ storage }: { storage: StorageSummary }) {
   return (
     <div className="rounded-xl bg-card p-3 shadow-soft ring-1 ring-foreground/5">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">{storage.label}</span>
-        <span className="font-semibold">{storage.free} trống</span>
+        <span className="text-muted-foreground">
+          {t("nav.drive", { drive: storage.label })}
+        </span>
+        <span className="font-semibold">
+          {t("nav.free", { size: storage.free })}
+        </span>
       </div>
       <Meter
-        label="Dung lượng ổ đĩa"
+        label={t("nav.diskUsage")}
         value={storage.usedPercent}
         height={4}
         tone="var(--chart-1)"
@@ -148,10 +159,10 @@ function SonioxSidebar({
   return (
     <aside className="flex w-52 shrink-0 flex-col px-3 py-5">
       <SonioxLogo />
-      <nav aria-label="Chính" className="mt-8 space-y-1">
+      <nav aria-label={t("nav.main")} className="mt-8 space-y-1">
         <NavItem
           icon={Download}
-          label="Tải xuống"
+          label={t("nav.downloads")}
           active
           onClick={onHome}
           trailing={
@@ -160,13 +171,13 @@ function SonioxSidebar({
             </span>
           }
         />
-        <NavItem icon={Film} label="Media" onClick={onMedia} />
+        <NavItem icon={Film} label={t("nav.media")} onClick={onMedia} />
         {/* Download Guard chưa có màn riêng: hiện để biết sắp có, không phải nút bấm. */}
         <div className="flex h-9 items-center gap-2.5 px-2.5 text-sm font-medium text-muted-foreground">
           <ShieldCheck className="size-4" strokeWidth={1.8} />
-          <span className="flex-1">An toàn</span>
+          <span className="flex-1">{t("nav.safety")}</span>
           <span className="rounded-full bg-card px-1.5 text-xs ring-1 ring-foreground/5">
-            Sắp có
+            {t("nav.soon")}
           </span>
         </div>
       </nav>
@@ -192,20 +203,20 @@ function liveStats(items: DownloadItem[]) {
   return [
     {
       icon: Gauge,
-      label: "Tốc độ",
-      value: downloading.length ? `${formatNumber(speed)} MB/s` : "—",
+      label: t("stats.speed"),
+      value: downloading.length ? formatSpeed(speed) : "—",
       tone: "text-primary",
     },
     {
       icon: Download,
-      label: "Đang tải",
-      value: String(downloading.length),
+      label: t("stats.downloading"),
+      value: formatNumber(downloading.length, 0),
       tone: "text-primary",
     },
     {
       icon: Clock3,
-      label: "Đang chờ",
-      value: String(queued),
+      label: t("stats.queued"),
+      value: formatNumber(queued, 0),
       tone: "text-muted-foreground",
     },
   ]
@@ -218,7 +229,7 @@ function HeaderStats({ items }: { items: DownloadItem[] }) {
       {liveStats(items).map((stat) => (
         <div
           key={stat.label}
-          className="flex items-center gap-2.5 rounded-xl bg-muted py-1.5 pr-3.5 pl-1.5"
+          className="flex items-center gap-2.5 rounded-xl bg-muted py-1.5 ps-1.5 pe-3.5"
         >
           <span
             className={cn(
@@ -318,7 +329,9 @@ function DownloadsView({
 function PageHeader({ items }: { items?: DownloadItem[] }) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-4">
-      <h1 className="text-2xl font-bold tracking-tight">Tải xuống</h1>
+      <h1 className="text-2xl font-bold tracking-tight">
+        {t("nav.downloads")}
+      </h1>
       {items ? <HeaderStats items={items} /> : null}
     </header>
   )
@@ -363,7 +376,7 @@ export function Soniox({
         onSettings={onSettings}
         onUpdates={onUpdates}
       />
-      <main className="m-3 ml-0 flex min-w-0 flex-1 flex-col rounded-2xl bg-card p-6 shadow-panel ring-1 ring-foreground/5">
+      <main className="m-3 ms-0 flex min-w-0 flex-1 flex-col rounded-2xl bg-card p-6 shadow-panel ring-1 ring-foreground/5">
         <PageHeader items={state === "data" ? items : undefined} />
         {state === "data" ? (
           <DownloadsView

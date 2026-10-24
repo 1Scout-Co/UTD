@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD İndirme Yöneticisi" },
+  "extDescription": { "message": "Bağlantıları hızlı ve güvenlik kontrollü indirme için UTD'ye gönderir." },
+  "actionTitle": { "message": "UTD ile indir" },
+  "menuDownload": { "message": "UTD ile indir" },
+  "menuMedia": { "message": "UTD ile video/ses indir" },
+  "sendPage": { "message": "Bu sayfayı UTD ile indir" },
+  "hint": { "message": "Hızlıca indirmek için bir bağlantıya veya videoya sağ tıklayın." },
+  "sending": { "message": "Gönderiliyor…" },
+  "sent": { "message": "UTD'ye gönderildi." },
+  "openedForQuality": { "message": "Kalite seçimi için UTD açıldı." },
+  "notHttp": { "message": "Bu sayfa HTTP/HTTPS değil." },
+  "sendFailed": { "message": "İstek UTD'ye gönderilemedi." },
+  "noResponse": { "message": "UTD yanıt vermiyor." },
+  "notRunning": { "message": "UTD çalışmıyor. UTD'yi açıp yeniden deneyin." },
+  "notConnected": { "message": "UTD'ye bağlanılamadı. UTD'nin çalıştığından ve tarayıcı tümleştirmesinin açık olduğundan emin olun." }
+}

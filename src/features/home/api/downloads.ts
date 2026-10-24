@@ -2,6 +2,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 
+import { t } from "@/shared/i18n/i18n"
+
 import type {
   AddDownloadPayload,
   AddMediaPayload,
@@ -113,7 +115,7 @@ export async function pickFolder(defaultPath?: string): Promise<string | null> {
   const picked = await openDialog({
     directory: true,
     multiple: false,
-    title: "Chọn thư mục tải",
+    title: t("app.pickFolder"),
     defaultPath: defaultPath || undefined,
   })
   return typeof picked === "string" ? picked : null

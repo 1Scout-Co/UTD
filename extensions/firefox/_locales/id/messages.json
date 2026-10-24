@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD – Pengelola Unduhan" },
+  "extDescription": { "message": "Kirim tautan ke UTD untuk unduhan cepat dengan pemeriksaan keamanan." },
+  "actionTitle": { "message": "Unduh dengan UTD" },
+  "menuDownload": { "message": "Unduh dengan UTD" },
+  "menuMedia": { "message": "Unduh video/audio dengan UTD" },
+  "sendPage": { "message": "Unduh halaman ini dengan UTD" },
+  "hint": { "message": "Klik kanan tautan atau video untuk mengunduh dengan cepat." },
+  "sending": { "message": "Mengirim…" },
+  "sent": { "message": "Terkirim ke UTD." },
+  "openedForQuality": { "message": "UTD dibuka untuk memilih kualitas." },
+  "notHttp": { "message": "Halaman ini bukan HTTP/HTTPS." },
+  "sendFailed": { "message": "Gagal mengirim permintaan ke UTD." },
+  "noResponse": { "message": "UTD tidak merespons." },
+  "notRunning": { "message": "UTD belum berjalan. Buka UTD lalu coba lagi." },
+  "notConnected": { "message": "Tidak dapat terhubung ke UTD. Pastikan UTD berjalan dan integrasi browser aktif." }
+}

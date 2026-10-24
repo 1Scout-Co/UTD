@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD – Gerenciador de downloads" },
+  "extDescription": { "message": "Envie links ao UTD para downloads rápidos e com verificação de segurança." },
+  "actionTitle": { "message": "Baixar com o UTD" },
+  "menuDownload": { "message": "Baixar com o UTD" },
+  "menuMedia": { "message": "Baixar vídeo/áudio com o UTD" },
+  "sendPage": { "message": "Baixar esta página com o UTD" },
+  "hint": { "message": "Clique com o botão direito em um link ou vídeo para baixá-lo rápido." },
+  "sending": { "message": "Enviando…" },
+  "sent": { "message": "Enviado ao UTD." },
+  "openedForQuality": { "message": "O UTD foi aberto para escolher a qualidade." },
+  "notHttp": { "message": "Esta página não é HTTP/HTTPS." },
+  "sendFailed": { "message": "Não foi possível enviar a solicitação ao UTD." },
+  "noResponse": { "message": "O UTD não está respondendo." },
+  "notRunning": { "message": "O UTD não está em execução. Abra o UTD e tente novamente." },
+  "notConnected": { "message": "Não foi possível conectar ao UTD. Verifique se o UTD está aberto e se a integração com o navegador está ativada." }
+}

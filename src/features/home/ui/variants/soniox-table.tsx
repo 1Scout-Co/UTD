@@ -8,6 +8,8 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
+import { formatPercent } from "@/shared/i18n/format"
+import { t } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
 import type { DownloadFilter, DownloadItem } from "../../model/types"
@@ -44,45 +46,53 @@ function TableHead({
   // Cột phụ ẩn bớt khi bảng hẹp (container query) để 1080px vẫn đọc được, không cuộn ngang.
   return (
     <thead className="sticky top-0 z-10">
-      <tr className="*:bg-muted *:first:rounded-l-lg *:last:rounded-r-lg">
-        <SortHeader label="Tên" sortKey="name" className="pl-4" {...sort} />
-        <PlainHeader label="Mô tả" className="hidden @7xl:table-cell" />
+      <tr className="*:bg-muted *:first:rounded-s-lg *:last:rounded-e-lg">
         <SortHeader
-          label="Kích thước"
+          label={t("table.name")}
+          sortKey="name"
+          className="ps-4"
+          {...sort}
+        />
+        <PlainHeader
+          label={t("table.description")}
+          className="hidden @7xl:table-cell"
+        />
+        <SortHeader
+          label={t("table.size")}
           sortKey="size"
-          align="right"
+          align="end"
           className="w-28"
           {...sort}
         />
         <SortHeader
-          label="Trạng thái"
+          label={t("table.status")}
           sortKey="status"
-          className="w-28"
+          className="w-32 px-2"
           {...sort}
         />
-        <PlainHeader label="Tiến độ" className="w-36" />
+        <PlainHeader label={t("table.progress")} className="w-36" />
         <SortHeader
-          label="Tốc độ"
+          label={t("table.speed")}
           sortKey="speed"
-          align="right"
+          align="end"
           className="w-24"
           {...sort}
         />
         <SortHeader
-          label="Còn lại"
+          label={t("table.eta")}
           sortKey="eta"
-          align="right"
+          align="end"
           className="hidden w-24 @5xl:table-cell"
           {...sort}
         />
         <SortHeader
-          label="Ngày tải"
+          label={t("table.date")}
           sortKey="date"
           className="hidden w-28 @4xl:table-cell"
           {...sort}
         />
         <th scope="col" className="w-12">
-          <span className="sr-only">Tuỳ chọn</span>
+          <span className="sr-only">{t("table.options")}</span>
         </th>
       </tr>
     </thead>
@@ -97,17 +107,29 @@ const ROW_BG = cn(
   "group-hover/row:after:bg-secondary group-data-selected/row:after:bg-accent group-data-selected/row:after:ring-1 group-data-selected/row:after:ring-primary/15"
 )
 
+// Tên file, mô tả là chữ của người dùng/máy chủ (thường Latin): dir="auto" giữ đúng thứ tự chữ và cắt "…"
+// ở cuối tên cả khi giao diện tiếng Ả Rập; match-parent vẫn căn lề theo hướng của bảng.
+const USER_TEXT = "[text-align:match-parent]"
+
 function NameCell({ item, icon }: { item: DownloadItem; icon?: string }) {
   return (
-    <td className={cn("py-2.5 pr-3 pl-4", ROW_BG)}>
+    <td className={cn("py-2.5 ps-4 pe-3", ROW_BG)}>
       <div className="flex min-w-0 items-center gap-3">
         <ItemIcon item={item} icon={icon} />
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold" title={item.name}>
+          <div
+            dir="auto"
+            className={cn("truncate text-sm font-semibold", USER_TEXT)}
+            title={item.name}
+          >
             {item.name}
           </div>
           <div
-            className="mt-0.5 truncate text-xs text-muted-foreground"
+            dir="auto"
+            className={cn(
+              "mt-0.5 truncate text-xs text-muted-foreground",
+              USER_TEXT
+            )}
             title={item.description}
           >
             {item.subtitle}
@@ -123,14 +145,14 @@ function ProgressCell({ item }: { item: DownloadItem }) {
     <td className="px-3 py-2.5">
       <div className="flex items-center gap-2.5">
         <Meter
-          label={`Tiến độ ${item.name}`}
+          label={t("table.progressOf", { name: item.name })}
           value={item.progress}
           tone={progressTone(item)}
           height={4}
           className="flex-1"
         />
-        <span className="w-9 text-right text-xs text-muted-foreground">
-          {item.progress}%
+        <span className="w-10 shrink-0 text-end text-xs whitespace-nowrap text-muted-foreground">
+          {formatPercent(item.progress)}
         </span>
       </div>
     </td>
@@ -140,13 +162,18 @@ function ProgressCell({ item }: { item: DownloadItem }) {
 /** Tốc độ; bảng hẹp (ẩn cột Còn lại) thì ghi thêm thời gian còn lại ngay dưới. */
 function SpeedCell({ item }: { item: DownloadItem }) {
   return (
-    <td className="px-3 py-2.5 text-right">
-      <div className={cn(!item.speed && "text-muted-foreground")}>
+    <td className="px-3 py-2.5 text-end">
+      <div
+        className={cn(
+          "whitespace-nowrap",
+          !item.speed && "text-muted-foreground"
+        )}
+      >
         {item.speed ?? "—"}
       </div>
       {item.eta ? (
-        <div className="text-xs text-muted-foreground @5xl:hidden">
-          còn {item.eta}
+        <div className="text-xs whitespace-nowrap text-muted-foreground @5xl:hidden">
+          {t("table.etaLeft", { eta: item.eta })}
         </div>
       ) : null}
     </td>
@@ -169,7 +196,8 @@ function SonioxRow({
   groups: RowCommand[][]
   onSelect: (id: string) => void
 }) {
-  const eta = item.eta ?? (item.status === "queued" ? "Chờ" : undefined)
+  const eta =
+    item.eta ?? (item.status === "queued" ? t("table.waiting") : undefined)
   const open = groups[0]?.find((command) => command.key === "open")
   return (
     <tr
@@ -182,19 +210,20 @@ function SonioxRow({
       <NameCell item={item} icon={icon} />
       <td className="hidden px-3 py-2.5 @7xl:table-cell">
         <div
-          className="truncate text-muted-foreground"
+          dir="auto"
+          className={cn("truncate text-muted-foreground", USER_TEXT)}
           title={item.description}
         >
           {item.description}
         </div>
       </td>
-      <td className="px-3 py-2.5 text-right font-medium">{item.size}</td>
-      <td className="px-3 py-2.5">
+      <td className="px-3 py-2.5 text-end font-medium">{item.size}</td>
+      <td className="px-2 py-2.5">
         <StatusPill status={item.status} />
       </td>
       <ProgressCell item={item} />
       <SpeedCell item={item} />
-      <td className="hidden px-3 py-2.5 text-right text-muted-foreground @5xl:table-cell">
+      <td className="hidden px-3 py-2.5 text-end text-muted-foreground @5xl:table-cell">
         {eta ?? "—"}
       </td>
       <td className="hidden px-3 py-2.5 @4xl:table-cell">
@@ -202,7 +231,7 @@ function SonioxRow({
         <div className="text-xs text-muted-foreground">{item.time}</div>
       </td>
       {/* data-toolbar: cột hành động dày đặc, nút ⋯ để hình trơn kèm title (AI_RULES / ui-check). */}
-      <td data-toolbar className="py-2.5 pr-3 pl-1 text-right">
+      <td data-toolbar className="py-2.5 ps-1 pe-3 text-end">
         <SonioxRowActions item={item} groups={groups} />
       </td>
     </tr>
@@ -215,12 +244,12 @@ function EmptyResults({ onClear }: { onClear: () => void }) {
       <div className="grid size-10 place-items-center rounded-xl bg-accent text-accent-foreground">
         <Search className="size-4" />
       </div>
-      <div className="mt-3 text-sm font-semibold">Không có kết quả</div>
+      <div className="mt-3 text-sm font-semibold">{t("table.noResults")}</div>
       <div className="mt-1 text-xs text-muted-foreground">
-        Thử từ khoá khác hoặc bỏ bộ lọc đang chọn.
+        {t("table.noResultsHint")}
       </div>
       <Button variant="outline" className="mt-4 text-sm" onClick={onClear}>
-        Xoá bộ lọc
+        {t("table.clearFilters")}
       </Button>
     </div>
   )
@@ -322,12 +351,14 @@ function TableFooter({
         </span>
       ) : (
         <span>
-          {count} mục{query ? ` cho “${query}”` : ""}
+          {query
+            ? t("table.countFor", { count, query })
+            : t("table.count", { count })}
         </span>
       )}
       <span className="inline-flex shrink-0 items-center gap-1.5">
         <span className="size-1.5 rounded-full bg-emerald-500" />
-        Engine cục bộ
+        {t("table.engine")}
       </span>
     </footer>
   )
@@ -362,7 +393,7 @@ export function SonioxTable({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="@container min-h-0 flex-1 overflow-auto">
-        <table className="w-full table-fixed border-separate border-spacing-0 text-left">
+        <table className="w-full table-fixed border-separate border-spacing-0 text-start">
           <TableHead sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
           <RowsBody
             rows={rows}

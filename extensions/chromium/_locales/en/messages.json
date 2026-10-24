@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD Download Manager" },
+  "extDescription": { "message": "Send links to UTD for fast, safety-checked downloads." },
+  "actionTitle": { "message": "Download with UTD" },
+  "menuDownload": { "message": "Download with UTD" },
+  "menuMedia": { "message": "Download video/audio with UTD" },
+  "sendPage": { "message": "Download this page with UTD" },
+  "hint": { "message": "Right-click a link or video to download it quickly." },
+  "sending": { "message": "Sending…" },
+  "sent": { "message": "Sent to UTD." },
+  "openedForQuality": { "message": "Opened UTD to pick the quality." },
+  "notHttp": { "message": "This page isn't HTTP/HTTPS." },
+  "sendFailed": { "message": "Couldn't send the request to UTD." },
+  "noResponse": { "message": "UTD isn't responding." },
+  "notRunning": { "message": "UTD isn't running. Open UTD and try again." },
+  "notConnected": { "message": "Can't reach UTD. Make sure UTD is running and browser integration is on." }
+}

@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD डाउनलोड मैनेजर" },
+  "extDescription": { "message": "तेज़ और सुरक्षा-जाँचे गए डाउनलोड के लिए लिंक UTD को भेजें।" },
+  "actionTitle": { "message": "UTD से डाउनलोड करें" },
+  "menuDownload": { "message": "UTD से डाउनलोड करें" },
+  "menuMedia": { "message": "UTD से वीडियो/ऑडियो डाउनलोड करें" },
+  "sendPage": { "message": "यह पेज UTD से डाउनलोड करें" },
+  "hint": { "message": "तेज़ी से डाउनलोड करने के लिए किसी लिंक या वीडियो पर राइट-क्लिक करें।" },
+  "sending": { "message": "भेजा जा रहा है…" },
+  "sent": { "message": "UTD को भेजा गया।" },
+  "openedForQuality": { "message": "गुणवत्ता चुनने के लिए UTD खोला गया।" },
+  "notHttp": { "message": "यह पेज HTTP/HTTPS नहीं है।" },
+  "sendFailed": { "message": "अनुरोध UTD को नहीं भेजा जा सका।" },
+  "noResponse": { "message": "UTD जवाब नहीं दे रहा है।" },
+  "notRunning": { "message": "UTD नहीं चल रहा है। UTD खोलें और फिर से कोशिश करें।" },
+  "notConnected": { "message": "UTD से कनेक्ट नहीं हो सका। जाँचें कि UTD चल रहा है और ब्राउज़र एकीकरण चालू है।" }
+}

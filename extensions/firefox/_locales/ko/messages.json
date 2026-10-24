@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD 다운로드 관리자" },
+  "extDescription": { "message": "링크를 UTD로 보내 안전 검사와 함께 빠르게 다운로드합니다." },
+  "actionTitle": { "message": "UTD로 다운로드" },
+  "menuDownload": { "message": "UTD로 다운로드" },
+  "menuMedia": { "message": "UTD로 동영상/오디오 다운로드" },
+  "sendPage": { "message": "이 페이지를 UTD로 다운로드" },
+  "hint": { "message": "링크나 동영상을 마우스 오른쪽 버튼으로 클릭해 빠르게 다운로드하세요." },
+  "sending": { "message": "보내는 중…" },
+  "sent": { "message": "UTD로 보냈습니다." },
+  "openedForQuality": { "message": "화질을 선택하도록 UTD를 열었습니다." },
+  "notHttp": { "message": "이 페이지는 HTTP/HTTPS가 아닙니다." },
+  "sendFailed": { "message": "UTD로 요청을 보내지 못했습니다." },
+  "noResponse": { "message": "UTD가 응답하지 않습니다." },
+  "notRunning": { "message": "UTD가 실행 중이 아닙니다. UTD를 연 후 다시 시도하세요." },
+  "notConnected": { "message": "UTD에 연결할 수 없습니다. UTD가 실행 중이고 브라우저 연동이 켜져 있는지 확인하세요." }
+}

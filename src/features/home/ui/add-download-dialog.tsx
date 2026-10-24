@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { t } from "@/shared/i18n/i18n"
 
 import { fileNameFromUrl } from "../model/download-mapper"
 import { isMediaPage } from "../model/media-pages"
@@ -47,9 +48,9 @@ function UrlPreview({
           <Film className="size-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">Đây là link video</div>
+          <div className="text-sm font-semibold">{t("add.videoLink")}</div>
           <div className="mt-0.5 truncate text-xs">
-            {host} · chọn chất lượng ở bước sau
+            {t("add.videoLinkHint", { host })}
           </div>
         </div>
       </div>
@@ -61,9 +62,7 @@ function UrlPreview({
         <div className="grid size-10 place-items-center rounded-lg bg-card shadow-soft">
           <Link2 className="size-4" />
         </div>
-        <div className="text-sm">
-          Dán URL để xem trước tên file và máy chủ.
-        </div>
+        <div className="text-sm">{t("add.previewHint")}</div>
       </div>
     )
   }
@@ -74,10 +73,10 @@ function UrlPreview({
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold">
-          {name || "Tên file do máy chủ đề xuất"}
+          {name || t("add.serverName")}
         </div>
         <div className="mt-0.5 truncate text-xs text-muted-foreground">
-          {host || "URL chưa hợp lệ"}
+          {host || t("add.invalidUrl")}
         </div>
       </div>
     </div>
@@ -140,7 +139,7 @@ export function AddDownloadDialog({
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (!url.trim()) {
-      setLocalError("Nhập URL cần tải.")
+      setLocalError(t("add.needUrl"))
       return
     }
     if (mediaPage) {
@@ -152,7 +151,7 @@ export function AddDownloadDialog({
     }
     const hash = sha256.trim()
     if (hash && !/^[a-fA-F0-9]{64}$/.test(hash)) {
-      setLocalError("SHA-256 phải có đúng 64 ký tự hex.")
+      setLocalError(t("add.badHash"))
       return
     }
     setLocalError(null)
@@ -168,10 +167,8 @@ export function AddDownloadDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-variant="soniox" className="sm:max-w-[600px]">
         <DialogHeader>
-          <DialogTitle>Thêm download</DialogTitle>
-          <DialogDescription>
-            Dán URL, UTD kiểm tra máy chủ trước khi bắt đầu.
-          </DialogDescription>
+          <DialogTitle>{t("add.title")}</DialogTitle>
+          <DialogDescription>{t("add.description")}</DialogDescription>
         </DialogHeader>
 
         <form className="space-y-4" onSubmit={submit}>
@@ -183,10 +180,10 @@ export function AddDownloadDialog({
           />
 
           <div className="space-y-2">
-            <FieldLabel>URL</FieldLabel>
+            <FieldLabel>{t("add.url")}</FieldLabel>
             <div className="flex gap-2">
               <Input
-                aria-label="URL cần tải"
+                aria-label={t("add.urlLabel")}
                 value={url}
                 onChange={(event) => updateUrl(event.target.value)}
                 placeholder="https://example.com/file.iso"
@@ -206,7 +203,7 @@ export function AddDownloadDialog({
                 }}
               >
                 <Link2 />
-                Dán
+                {t("app.paste")}
               </Button>
             </div>
           </div>
@@ -215,32 +212,32 @@ export function AddDownloadDialog({
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <FieldLabel>Tên file</FieldLabel>
+                  <FieldLabel>{t("add.fileName")}</FieldLabel>
                   <Input
-                    aria-label="Tên file"
+                    aria-label={t("add.fileName")}
                     value={fileName}
                     onChange={(event) => {
                       setNameTouched(true)
                       setFileName(event.target.value)
                     }}
-                    placeholder={suggestedName || "Tự lấy từ URL"}
+                    placeholder={suggestedName || t("add.fileNameAuto")}
                     disabled={busy}
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <FieldLabel>Lưu tại</FieldLabel>
+                  <FieldLabel>{t("add.saveTo")}</FieldLabel>
                   <button
                     type="button"
                     disabled={!desktop || busy}
                     title={
-                      desktop ? effectiveDir : "Chọn thư mục chỉ có trong app UTD"
+                      desktop ? effectiveDir : t("add.pickDesktopOnly")
                     }
                     onClick={() => {
                       if (!desktop) return
                       void openDialog({
                         directory: true,
                         multiple: false,
-                        title: "Chọn thư mục tải",
+                        title: t("app.pickFolder"),
                         defaultPath: effectiveDir || undefined,
                       })
                         .then((picked) => {
@@ -254,7 +251,7 @@ export function AddDownloadDialog({
                           ),
                         )
                     }}
-                    className="flex h-9 w-full items-center gap-2 rounded-lg border border-input px-3 text-left text-sm text-muted-foreground transition-colors hover:border-foreground/25 disabled:cursor-not-allowed disabled:opacity-70"
+                    className="flex h-9 w-full items-center gap-2 rounded-lg border border-input px-3 text-start text-sm text-muted-foreground transition-colors hover:border-foreground/25 disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     <FolderOpen className="size-4 shrink-0" />
                     <span className="truncate">{effectiveDir || "Downloads\\UTD"}</span>
@@ -263,12 +260,12 @@ export function AddDownloadDialog({
               </div>
 
               <div className="space-y-1.5">
-                <FieldLabel>SHA-256 (tuỳ chọn)</FieldLabel>
+                <FieldLabel>{t("add.hash")}</FieldLabel>
                 <Input
-                  aria-label="SHA-256 mong đợi"
+                  aria-label={t("add.hashLabel")}
                   value={sha256}
                   onChange={(event) => setSha256(event.target.value)}
-                  placeholder="64 ký tự hex để xác minh sau khi tải"
+                  placeholder={t("add.hashPlaceholder")}
                   disabled={busy}
                   spellCheck={false}
                   autoComplete="off"
@@ -295,7 +292,7 @@ export function AddDownloadDialog({
               onClick={close}
               disabled={busy}
             >
-              Huỷ
+              {t("app.cancel")}
             </Button>
             <Button
               data-primary
@@ -303,7 +300,11 @@ export function AddDownloadDialog({
               disabled={busy || !url.trim()}
             >
               {mediaPage ? <Film /> : <Download />}
-              {mediaPage ? "Tải video" : busy ? "Đang thêm…" : "Bắt đầu"}
+              {mediaPage
+                ? t("add.downloadVideo")
+                : busy
+                  ? t("app.adding")
+                  : t("add.start")}
             </Button>
           </div>
         </form>

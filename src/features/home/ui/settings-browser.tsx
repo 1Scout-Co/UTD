@@ -3,6 +3,7 @@ import { useEffect, useState } from "react"
 import { CheckCircle2, Info, Loader2, Puzzle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { t, tx } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
 import {
@@ -48,7 +49,7 @@ function useBrowserIntegration(open: boolean, desktop: boolean) {
     try {
       setStatus(await installBrowserIntegration())
       await openExtensionFolder()
-      setNotice("Đã cài. Thư mục tiện ích đang mở, nạp nó vào trình duyệt.")
+      setNotice(t("browser.installed"))
     } catch (reason) {
       setError(messageOf(reason))
     } finally {
@@ -75,25 +76,31 @@ function StatusBadge({ status }: { status: BrowserIntegrationStatus | null }) {
       ) : (
         <span className="size-1.5 rounded-full bg-current" />
       )}
-      {status === null ? "Đang kiểm tra…" : installed ? "Đã cài" : "Chưa cài"}
+      {status === null
+        ? t("app.checking")
+        : installed
+          ? t("browser.statusInstalled")
+          : t("browser.statusMissing")}
     </span>
   )
 }
 
 function Guide({ status }: { status: BrowserIntegrationStatus | null }) {
   return (
-    <MoreInfo label="Xem hướng dẫn" className="mt-3">
-      <ol className="list-decimal space-y-1 pl-4">
+    <MoreInfo label={t("browser.guide")} className="mt-3">
+      <ol className="list-decimal space-y-1 ps-4">
+        <li>{t("browser.step1", { button: t("browser.install") })}</li>
         <li>
-          Bấm “Cài extension”: UTD đăng ký native host và mở thư mục tiện ích.
+          {tx("browser.step2", {
+            page: <code>chrome://extensions</code>,
+            folder: <code>chromium</code>,
+          })}
         </li>
         <li>
-          Chrome/Edge: mở <code>chrome://extensions</code>, bật Developer mode,
-          chọn “Load unpacked” rồi trỏ vào thư mục <code>chromium</code>.
-        </li>
-        <li>
-          Firefox: <code>about:debugging</code> → This Firefox → “Load Temporary
-          Add-on”, chọn <code>firefox/manifest.json</code>.
+          {tx("browser.step3", {
+            page: <code>about:debugging</code>,
+            file: <code>firefox/manifest.json</code>,
+          })}
         </li>
       </ol>
       {status ? (
@@ -106,7 +113,7 @@ function Guide({ status }: { status: BrowserIntegrationStatus | null }) {
           <dd className="truncate font-mono text-xs">
             {status.firefoxExtensionId}
           </dd>
-          <dt>Thư mục</dt>
+          <dt>{t("browser.folder")}</dt>
           <dd
             className="truncate font-mono text-xs"
             title={status.extensionDir}
@@ -115,10 +122,7 @@ function Guide({ status }: { status: BrowserIntegrationStatus | null }) {
           </dd>
         </dl>
       ) : null}
-      <p>
-        Tiện ích chưa có trên Chrome Web Store nên nạp thủ công. UTD không gửi
-        cookie hay header đăng nhập từ trình duyệt.
-      </p>
+      <p>{t("browser.manualNote")}</p>
     </MoreInfo>
   )
 }
@@ -138,8 +142,8 @@ export function SettingsBrowser({
 
   return (
     <SettingsSection
-      title="Tích hợp trình duyệt"
-      description="Chuột phải vào link hoặc video để tải bằng UTD."
+      title={t("browser.title")}
+      description={t("browser.description")}
       aside={desktop ? <StatusBadge status={status} /> : undefined}
     >
       <div className="flex flex-wrap items-center gap-3">
@@ -149,13 +153,11 @@ export function SettingsBrowser({
           onClick={() => void install()}
         >
           {busy ? <Loader2 className="animate-spin" /> : <Puzzle />}
-          {status?.installed ? "Cài lại" : "Cài extension"}
+          {status?.installed ? t("browser.reinstall") : t("browser.install")}
         </Button>
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-muted-foreground">
           {desktop ? null : <Info className="size-3.5 shrink-0" />}
-          {desktop
-            ? "Rồi chọn “Load unpacked” trong trang tiện ích."
-            : "Bản xem trước trên trình duyệt không cài được. Mở app UTD để cài."}
+          {desktop ? t("browser.thenLoad") : t("browser.previewOnly")}
         </span>
       </div>
       <p role="status" className="mt-2 text-sm text-emerald-700 empty:hidden">

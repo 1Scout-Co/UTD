@@ -1,3 +1,12 @@
+import { errorText, t } from "@/shared/i18n/i18n"
+import {
+  formatBytes,
+  formatDate,
+  formatMinutes,
+  formatSpeed,
+  formatTime,
+} from "@/shared/i18n/format"
+
 import type {
   DownloadItem,
   DownloadKind,
@@ -6,16 +15,6 @@ import type {
   EngineTask,
   EngineTaskStatus,
 } from "./types"
-
-const KIND_LABEL: Record<DownloadKind, string> = {
-  game: "Game",
-  model: "Model AI",
-  iso: "Disk image",
-  video: "Video",
-  archive: "Tệp nén",
-  document: "Tài liệu",
-  app: "Ứng dụng",
-}
 
 const KIND_TONE: Record<DownloadKind, string> = {
   game: "#ff9a76",
@@ -58,40 +57,6 @@ const EXTENSION_KIND: Record<string, DownloadKind> = {
   pkg: "app",
   deb: "app",
   appimage: "app",
-}
-
-const UNITS = ["B", "KB", "MB", "GB", "TB", "PB"]
-
-const sizeFormatter = new Intl.NumberFormat("vi-VN", {
-  maximumFractionDigits: 1,
-})
-
-const dateFormatter = new Intl.DateTimeFormat("vi-VN", {
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-})
-
-const timeFormatter = new Intl.DateTimeFormat("vi-VN", {
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-})
-
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B"
-  const exponent = Math.min(
-    UNITS.length - 1,
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-  )
-  const value = bytes / 1024 ** exponent
-  return `${sizeFormatter.format(value)} ${UNITS[exponent]}`
-}
-
-export function formatNumber(value: number, digits = 1): string {
-  return new Intl.NumberFormat("vi-VN", {
-    maximumFractionDigits: digits,
-  }).format(value)
 }
 
 export function fileNameFromUrl(value: string): string {
@@ -138,20 +103,15 @@ export function mapEngineTask(
   return {
     id: task.id,
     name: task.fileName,
-    subtitle: `${host} · ${KIND_LABEL[kind]}`,
+    subtitle: `${host} · ${t(`kind.${kind}`)}`,
     description: describe(task, progress),
     kind,
     size: totalBytes !== null ? formatBytes(totalBytes) : "—",
     sizeBytes: totalBytes ?? downloadedBytes,
     progress: Math.round(percent),
-    speed: active && speedMb >= 0.1 ? `${formatNumber(speedMb)} MB/s` : undefined,
+    speed: active && speedMb >= 0.1 ? formatSpeed(speedMb) : undefined,
     speedValue: speedMb > 0 ? speedMb : undefined,
-    eta:
-      etaMinutes === undefined
-        ? undefined
-        : etaMinutes < 60
-          ? `${etaMinutes} phút`
-          : `${Math.floor(etaMinutes / 60)} giờ ${etaMinutes % 60} phút`,
+    eta: etaMinutes === undefined ? undefined : formatMinutes(etaMinutes),
     etaMinutes,
     status: mapStatus(task.status),
     connections: active ? (progress?.connections ?? task.connections) : undefined,
@@ -161,8 +121,8 @@ export function mapEngineTask(
     note: task.error?.message,
     errorCode: task.error?.code,
     tone: KIND_TONE[kind],
-    date: dateFormatter.format(created),
-    time: timeFormatter.format(created),
+    date: formatDate(created.getTime()),
+    time: formatTime(created.getTime()),
     sortTime: created.getTime(),
   }
 }
@@ -179,36 +139,40 @@ function mapStatus(status: EngineTaskStatus): DownloadStatus {
 
 // Media "verifying" = ffmpeg đang ghép hình + tiếng hoặc chuyển định dạng âm thanh sau khi tải xong.
 function verifyingLabel(task: EngineTask): string {
-  if (task.kind !== "media") return "Đang xác minh SHA-256"
+  if (task.kind !== "media") return t("desc.verifyingHash")
   return /\.(mp3|m4a)$/i.test(task.fileName)
-    ? "Đang chuyển định dạng âm thanh"
-    : "Đang ghép hình và tiếng"
+    ? t("desc.convertingAudio")
+    : t("desc.merging")
 }
 
 function describe(task: EngineTask, progress?: EngineProgress): string {
   if (task.status === "failed" || task.status === "quarantined") {
-    return task.error?.message ?? "Đã dừng do lỗi"
+    return task.error
+      ? errorText(task.error.code, task.error.message)
+      : t("desc.stopped")
   }
   if (task.status === "completed") {
-    return task.hashState === "verified"
-      ? "Đã xác minh SHA-256"
-      : "Hoàn tất"
+    return task.hashState === "verified" ? t("desc.verified") : t("desc.done")
   }
   if (task.status === "verifying") return verifyingLabel(task)
-  if (task.status === "paused") return "Tạm dừng · tiếp tục bất cứ lúc nào"
-  if (task.status === "queued") return "Đang chờ lượt"
-  if (task.status === "resolving") return "Đang kiểm tra máy chủ"
+  if (task.status === "paused") return t("desc.paused")
+  if (task.status === "queued") return t("desc.queued")
+  if (task.status === "resolving") return t("desc.resolving")
   const parts = progress?.segmentsTotal ?? 0
   const connections = progress?.connections ?? task.connections
   return parts > 1
-    ? `${progress?.segmentsDone ?? 0}/${parts} phần · ${connections} kết nối`
-    : "Đang tải một luồng"
+    ? t("desc.parts", {
+        done: progress?.segmentsDone ?? 0,
+        total: parts,
+        count: connections,
+      })
+    : t("desc.single")
 }
 
 function hostOf(value: string): string {
   try {
     return new URL(value).hostname.replace(/^www\./, "")
   } catch {
-    return "máy cục bộ"
+    return t("desc.localHost")
   }
 }

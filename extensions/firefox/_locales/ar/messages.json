@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD – مدير التنزيلات" },
+  "extDescription": { "message": "أرسل الروابط إلى UTD لتنزيل سريع مع فحص الأمان." },
+  "actionTitle": { "message": "تنزيل باستخدام UTD" },
+  "menuDownload": { "message": "تنزيل باستخدام UTD" },
+  "menuMedia": { "message": "تنزيل الفيديو/الصوت باستخدام UTD" },
+  "sendPage": { "message": "تنزيل هذه الصفحة باستخدام UTD" },
+  "hint": { "message": "انقر بزر الماوس الأيمن على رابط أو فيديو لتنزيله بسرعة." },
+  "sending": { "message": "جارٍ الإرسال…" },
+  "sent": { "message": "تم الإرسال إلى UTD." },
+  "openedForQuality": { "message": "تم فتح UTD لاختيار الجودة." },
+  "notHttp": { "message": "هذه الصفحة ليست HTTP/HTTPS." },
+  "sendFailed": { "message": "تعذّر إرسال الطلب إلى UTD." },
+  "noResponse": { "message": "لا يستجيب UTD." },
+  "notRunning": { "message": "لا يعمل UTD حاليًا. افتح UTD ثم أعد المحاولة." },
+  "notConnected": { "message": "تعذّر الاتصال بـ UTD. تأكد أن UTD قيد التشغيل وأن التكامل مع المتصفح مفعّل." }
+}

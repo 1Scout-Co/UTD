@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD – Trình quản lý tải xuống" },
+  "extDescription": { "message": "Gửi link sang UTD để tải nhanh, có kiểm tra an toàn." },
+  "actionTitle": { "message": "Tải bằng UTD" },
+  "menuDownload": { "message": "Tải bằng UTD" },
+  "menuMedia": { "message": "Tải video/âm thanh bằng UTD" },
+  "sendPage": { "message": "Tải trang này bằng UTD" },
+  "hint": { "message": "Chuột phải vào link hoặc video để tải nhanh." },
+  "sending": { "message": "Đang gửi…" },
+  "sent": { "message": "Đã gửi sang UTD." },
+  "openedForQuality": { "message": "Đã mở UTD để chọn chất lượng." },
+  "notHttp": { "message": "Trang này không phải HTTP/HTTPS." },
+  "sendFailed": { "message": "Không gửi được yêu cầu sang UTD." },
+  "noResponse": { "message": "UTD không phản hồi." },
+  "notRunning": { "message": "UTD chưa chạy. Mở UTD rồi thử lại." },
+  "notConnected": { "message": "Không kết nối được UTD. Kiểm tra UTD đang chạy và đã bật tích hợp trình duyệt." }
+}

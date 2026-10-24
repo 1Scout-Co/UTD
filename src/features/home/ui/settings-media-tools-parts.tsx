@@ -8,8 +8,9 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { formatBytes } from "@/shared/i18n/format"
+import { t, tx, type MessageKey } from "@/shared/i18n/i18n"
 
-import { formatBytes } from "../model/download-mapper"
 import type {
   MediaToolInfo,
   MediaToolName,
@@ -23,9 +24,9 @@ import { percentOf, StageProgress } from "./stage-progress"
 
 export interface ToolMeta {
   name: MediaToolName
-  role: string
+  role: MessageKey
   repo: string
-  license: string
+  license: MessageKey
   size: string
 }
 
@@ -33,34 +34,26 @@ export interface ToolMeta {
 export const TOOLS: ToolMeta[] = [
   {
     name: "yt-dlp",
-    role: "tải video từ trang web",
+    role: "tools.ytdlpRole",
     repo: "yt-dlp/yt-dlp",
-    license: "Unlicense (bản .exe có phần GPLv3+)",
+    license: "tools.ytdlpLicense",
     size: "~17 MB",
   },
   {
     name: "ffmpeg",
-    role: "ghép, đổi định dạng",
+    role: "tools.ffmpegRole",
     repo: "yt-dlp/FFmpeg-Builds",
-    license: "GPLv3, tải riêng, không kèm bộ cài",
+    license: "tools.ffmpegLicense",
     size: "~191 MB",
   },
 ]
 
-const SOURCE_LABEL: Record<MediaToolSource, string> = {
-  utd: "Bản của UTD",
+// Bản của UTD: t("tools.sourceUtd"); còn lại là tên riêng.
+const SOURCE_LABEL: Record<Exclude<MediaToolSource, "utd">, string> = {
   path: "PATH",
   winget: "WinGet",
   scoop: "Scoop",
   choco: "Chocolatey",
-}
-
-const STAGE_LABEL: Record<MediaToolStage, string> = {
-  checksum: "Lấy mã SHA-256…",
-  download: "Đang tải…",
-  extract: "Đang giải nén…",
-  check: "Đang chạy thử…",
-  install: "Đang cài…",
 }
 
 /** loading: đang hỏi app; failed: hỏi lỗi (chưa biết có công cụ hay không). */
@@ -76,23 +69,27 @@ export function ToolState({
   check: ToolCheck
 }) {
   if (!desktop) {
-    return <p className="text-xs text-muted-foreground">Chưa kiểm tra</p>
+    return (
+      <p className="text-xs text-muted-foreground">{t("tools.notChecked")}</p>
+    )
   }
   if (check === "loading") {
     return (
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Loader2 className="size-3.5 animate-spin" />
-        Đang kiểm tra…
+        {t("app.checking")}
       </p>
     )
   }
   if (check === "failed") {
-    return <p className="text-xs text-muted-foreground">Chưa kiểm tra được</p>
+    return (
+      <p className="text-xs text-muted-foreground">{t("tools.checkFailed")}</p>
+    )
   }
   if (!info) {
-    return <p className="text-xs text-amber-700">Chưa có trên máy</p>
+    return <p className="text-xs text-amber-700">{t("tools.missing")}</p>
   }
-  const local = info.source !== "utd"
+  const source = info.source === "utd" ? null : SOURCE_LABEL[info.source]
   return (
     <p
       className="flex min-w-0 items-center gap-1.5 text-xs text-emerald-700"
@@ -101,9 +98,7 @@ export function ToolState({
       <CheckCircle2 className="size-3.5 shrink-0" />
       <span className="truncate">
         {info.version} ·{" "}
-        {local
-          ? `Đang dùng bản có sẵn trên máy (${SOURCE_LABEL[info.source]})`
-          : SOURCE_LABEL.utd}
+        {source ? t("tools.usingLocal", { source }) : t("tools.sourceUtd")}
       </span>
     </p>
   )
@@ -119,16 +114,19 @@ export function ConsentNote({
   const lead = !info
     ? null
     : info.source === "utd"
-      ? "Bản đang dùng được giữ lại làm dự phòng."
-      : "Cập nhật tải bản riêng vào thư mục của UTD; bản có sẵn trên máy giữ nguyên."
+      ? t("tools.keepBackup")
+      : t("tools.separateCopy")
   return (
     <p className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
       <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
       <span>
         {lead ? `${lead} ` : null}
-        Nguồn: GitHub <code>{meta.repo}</code> · Giấy phép: {meta.license} ·{" "}
-        <span className="whitespace-nowrap">{meta.size}</span> · Kiểm{" "}
-        <span className="whitespace-nowrap">SHA-256</span> trước khi dùng.
+        {tx("tools.consent", {
+          repo: <code>{meta.repo}</code>,
+          license: t(meta.license),
+          size: <span className="whitespace-nowrap">{meta.size}</span>,
+          sha: <span className="whitespace-nowrap">SHA-256</span>,
+        })}
       </span>
     </p>
   )
@@ -161,10 +159,10 @@ export function InstallProgress({
     <div className="space-y-1">
       <StageProgress
         percent={percentAt(stage, done, total)}
-        label={`Tiến độ tải ${tool}`}
+        label={t("tools.progress", { tool })}
       />
       <p className="text-xs text-muted-foreground tabular-nums">
-        {STAGE_LABEL[stage]}
+        {t(`tools.stage.${stage}`)}
         {sized && total !== null
           ? ` ${formatBytes(done)} / ${formatBytes(total)}`
           : ""}
@@ -192,7 +190,7 @@ export function ToolAction({
     return (
       <Button type="button" variant="ghost" onClick={onCancel}>
         <X />
-        Huỷ
+        {t("app.cancel")}
       </Button>
     )
   }
@@ -207,7 +205,9 @@ export function ToolAction({
       onClick={onInstall}
     >
       <Icon />
-      {info ? `Cập nhật ${meta.name}` : `Tải ${meta.name}`}
+      {info
+        ? t("tools.update", { tool: meta.name })
+        : t("tools.download", { tool: meta.name })}
     </Button>
   )
 }

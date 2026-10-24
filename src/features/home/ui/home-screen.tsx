@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 
 import type { UnlistenFn } from "@tauri-apps/api/event"
 
@@ -15,8 +15,11 @@ import {
   resumeDownload,
   subscribeEngine,
 } from "../api/downloads"
-import { formatBytes, mapEngineTask } from "../model/download-mapper"
-import { downloads as demoDownloads, stats as demoStats } from "../model/mock-data"
+import { formatBytes } from "@/shared/i18n/format"
+import { t } from "@/shared/i18n/i18n"
+
+import { mapEngineTask } from "../model/download-mapper"
+import { demoDownloads, demoStorage } from "../model/mock-data"
 import type {
   AddDownloadPayload,
   AddMediaPayload,
@@ -124,12 +127,10 @@ export function HomeScreen() {
     }
   }, [desktop, refreshStorage])
 
-  const liveItems = useMemo(
-    () =>
-      tasks.map((task) => mapEngineTask(task, progress[task.id])),
-    [tasks, progress],
-  )
-  const items = desktop ? liveItems : demoDownloads
+  // Tính lại mỗi lần vẽ (tiến độ đổi liên tục): đổi ngôn ngữ thì App vẽ lại cả cây nên chữ, số, ngày đổi theo.
+  const items = desktop
+    ? tasks.map((task) => mapEngineTask(task, progress[task.id]))
+    : demoDownloads()
   const diagnoseItem = diagnoseId
     ? (items.find((item) => item.id === diagnoseId) ?? null)
     : null
@@ -145,9 +146,9 @@ export function HomeScreen() {
         }
       : undefined
     : {
-        label: "Ổ D:",
-        free: demoStats.storageFree,
-        usedPercent: demoStats.storageUsed,
+        label: demoStorage.label,
+        free: formatBytes(demoStorage.freeBytes),
+        usedPercent: demoStorage.usedPercent,
       }
 
   const openMediaWith = useCallback((url: string) => {
@@ -244,9 +245,7 @@ export function HomeScreen() {
   const remove = (taskId: string) => {
     if (!desktop) return
     if (
-      !window.confirm(
-        "Bỏ mục này khỏi danh sách? File đã tải vẫn được giữ trên đĩa.",
-      )
+      !window.confirm(t("home.confirmRemove"))
     ) {
       return
     }

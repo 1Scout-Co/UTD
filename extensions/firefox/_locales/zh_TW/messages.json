@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD 下載管理員" },
+  "extDescription": { "message": "將連結傳送到 UTD，快速下載並進行安全檢查。" },
+  "actionTitle": { "message": "用 UTD 下載" },
+  "menuDownload": { "message": "用 UTD 下載" },
+  "menuMedia": { "message": "用 UTD 下載影片/音訊" },
+  "sendPage": { "message": "用 UTD 下載此頁面" },
+  "hint": { "message": "在連結或影片上按右鍵即可快速下載。" },
+  "sending": { "message": "正在傳送…" },
+  "sent": { "message": "已傳送到 UTD。" },
+  "openedForQuality": { "message": "已開啟 UTD 以選擇畫質。" },
+  "notHttp": { "message": "此頁面不是 HTTP/HTTPS。" },
+  "sendFailed": { "message": "無法將要求傳送到 UTD。" },
+  "noResponse": { "message": "UTD 沒有回應。" },
+  "notRunning": { "message": "UTD 未執行。請開啟 UTD 後再試。" },
+  "notConnected": { "message": "無法連線到 UTD。請確認 UTD 正在執行，且已啟用瀏覽器整合。" }
+}

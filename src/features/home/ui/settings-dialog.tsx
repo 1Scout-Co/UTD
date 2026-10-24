@@ -8,9 +8,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { t } from "@/shared/i18n/i18n"
 
 import { SettingsBrowser } from "./settings-browser"
 import { SettingsDownloadDir } from "./settings-download-dir"
+import { SettingsLanguage } from "./settings-language"
 import { SettingsMediaTools } from "./settings-media-tools"
 import { SettingsSection as Section, SettingsPrivacy } from "./settings-section"
 import { SettingsUpdates, useAppVersion } from "./settings-updates"
@@ -30,7 +32,7 @@ function SettingsFooter({
         {version ? `UTD ${version}` : "UTD"} · Apache-2.0
       </span>
       <Button variant="outline" type="button" onClick={onClose}>
-        Đóng
+        {t("app.close")}
       </Button>
     </div>
   )
@@ -57,17 +59,17 @@ export function SettingsDialog(props: SettingsDialogProps) {
         className="gap-0 sm:max-w-[640px]"
       >
         <DialogHeader>
-          <DialogTitle>Cài đặt</DialogTitle>
-          <DialogDescription>
-            Thư mục tải, tiện ích trình duyệt, công cụ media và cập nhật.
-          </DialogDescription>
+          <DialogTitle>{t("nav.settings")}</DialogTitle>
+          <DialogDescription>{t("settings.description")}</DialogDescription>
         </DialogHeader>
 
         {/* Thân cuộn riêng, chân cố định: mở hộp thoại không bị nhảy xuống cuối vì focus nút Đóng. */}
         <div className="-mx-6 mt-4 max-h-[62vh] divide-y divide-border/60 overflow-y-auto border-t border-border/60 px-6 pt-4">
+          <SettingsLanguage />
+
           <Section
-            title="Tải xuống"
-            description="Download mới sẽ lưu vào thư mục này."
+            title={t("nav.downloads")}
+            description={t("dir.description")}
           >
             <SettingsDownloadDir
               desktop={desktop}
@@ -79,8 +81,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
           <SettingsBrowser open={open} desktop={desktop} />
 
           <Section
-            title="Công cụ media"
-            description="yt-dlp tải video, ffmpeg ghép hình và tiếng."
+            title={t("tools.title")}
+            description={t("tools.description")}
           >
             <SettingsMediaTools desktop={desktop} />
           </Section>

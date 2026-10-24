@@ -12,7 +12,9 @@ const extraHTTPHeaders = process.env.SMOKE_EXTRA_HTTP_HEADERS ? (JSON.parse(proc
 export default defineConfig({
   testDir: 'e2e',
   reporter: 'list',
-  use: { baseURL, extraHTTPHeaders },
+  // vi-VN: app chọn ngôn ngữ theo hệ điều hành (trình duyệt) lần đầu; bài thử mặc định chạy tiếng Việt,
+  // bài nào cần ngôn ngữ khác thì test.use({ locale }).
+  use: { baseURL, extraHTTPHeaders, locale: 'vi-VN' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: process.env.BASE_URL
     ? undefined

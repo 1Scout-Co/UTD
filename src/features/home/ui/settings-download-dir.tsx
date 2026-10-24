@@ -3,6 +3,7 @@ import { useState } from "react"
 import { FolderOpen, Info, Loader2, RotateCcw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { t } from "@/shared/i18n/i18n"
 
 import {
   pickFolder,
@@ -59,7 +60,7 @@ function FolderPath({ dir }: { dir: string }) {
       title={dir}
     >
       <FolderOpen className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-      <span className="sr-only">Thư mục hiện tại:</span>
+      <span className="sr-only">{t("dir.current")}</span>
       <span className="truncate">{dir || "Downloads\\UTD"}</span>
     </div>
   )
@@ -90,7 +91,7 @@ export function SettingsDownloadDir({
           onClick={() => void change()}
         >
           {busy === "pick" ? spinner : <FolderOpen />}
-          Đổi thư mục
+          {t("dir.change")}
         </Button>
         <Button
           type="button"
@@ -99,17 +100,17 @@ export function SettingsDownloadDir({
           onClick={() => void reset()}
         >
           {busy === "reset" ? spinner : <RotateCcw />}
-          Dùng mặc định
+          {t("dir.reset")}
         </Button>
       </div>
       {!desktop ? (
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <Info className="size-3.5 shrink-0" />
-          Đổi thư mục chỉ có trong app UTD.
+          {t("dir.desktopOnly")}
         </p>
       ) : null}
       <p role="status" className="text-sm text-emerald-700 empty:hidden">
-        {saved ? "Đã lưu. Download mới sẽ vào thư mục này." : ""}
+        {saved ? t("dir.saved") : ""}
       </p>
       {error ? (
         <p

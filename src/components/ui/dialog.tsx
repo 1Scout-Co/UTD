@@ -5,6 +5,7 @@ import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
+import { t } from "@/shared/i18n/i18n"
 import { XIcon } from "lucide-react"
 
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
@@ -65,14 +66,14 @@ function DialogContent({
             render={
               <Button
                 variant="ghost"
-                className="absolute top-4 right-4"
+                className="absolute end-4 top-4"
                 size="icon-sm"
               />
             }
           >
             <XIcon
             />
-            <span className="sr-only">Đóng hộp thoại</span>
+            <span className="sr-only">{t("app.closeDialog")}</span>
           </DialogPrimitive.Close>
         )}
       </DialogPrimitive.Popup>
@@ -84,7 +85,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-1 pr-8", className)}
+      className={cn("flex flex-col gap-1 pe-8", className)}
       {...props}
     />
   )

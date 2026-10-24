@@ -2,6 +2,8 @@ import { useEffect, useState } from "react"
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 
+import { t } from "@/shared/i18n/i18n"
+
 import { isDesktopApp } from "../../api/downloads"
 import {
   deleteDownloadFile,
@@ -56,7 +58,7 @@ async function pickAndMove(id: string): Promise<EngineTask | null> {
   const dir = await openDialog({
     directory: true,
     multiple: false,
-    title: "Chuyển file tới thư mục",
+    title: t("file.moveTitle"),
   })
   return typeof dir === "string" ? moveDownload(id, dir) : null
 }
@@ -76,7 +78,7 @@ export function useFileActions({
       const task = await pickAndMove(id)
       if (!task) return
       onTaskUpdate?.(task)
-      return "Đã chuyển file."
+      return t("file.moved")
     })
 
   return {
@@ -91,13 +93,13 @@ export function useFileActions({
     copyLink: (id: string) =>
       guard(async () => {
         await navigator.clipboard.writeText(linkOf?.(id) ?? "")
-        return "Đã chép link."
+        return t("file.linkCopied")
       }),
     trash: (id: string) =>
       guard(async () => {
         await deleteDownloadFile(id)
         onTaskRemoved?.(id)
-        return "Đã chuyển file vào Thùng rác."
+        return t("file.trashed")
       }),
     /** Hộp Đổi tên gọi; lỗi ném lại để hộp hiện ngay dưới ô nhập. */
     rename: async (id: string, name: string) => {

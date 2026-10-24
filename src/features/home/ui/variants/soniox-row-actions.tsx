@@ -29,6 +29,7 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { t } from "@/shared/i18n/i18n"
 
 import type { DownloadItem, HomeScreenProps } from "../../model/types"
 
@@ -64,21 +65,21 @@ function fileCommands(item: DownloadItem, ctx: RowContext): RowCommand[] {
     // File bị cách ly không mở được; "Mở thư mục" thì vẫn được.
     {
       key: "open",
-      label: "Mở file",
+      label: t("menu.open"),
       icon: ExternalLink,
       disabled: !ctx.desktop || status !== "completed",
       run: () => ctx.onOpen(id),
     },
     {
       key: "reveal",
-      label: "Mở thư mục",
+      label: t("menu.reveal"),
       icon: FolderOpen,
       disabled: !ctx.desktop,
       run: () => ctx.onReveal(id),
     },
     {
       key: "rename",
-      label: "Đổi tên…",
+      label: t("menu.rename"),
       icon: PenLine,
       shortcut: "F2",
       disabled: !ctx.desktop || status === "quarantined",
@@ -86,14 +87,14 @@ function fileCommands(item: DownloadItem, ctx: RowContext): RowCommand[] {
     },
     {
       key: "move",
-      label: "Di chuyển…",
+      label: t("menu.move"),
       icon: FolderInput,
       disabled: !ctx.desktop || busy || status === "quarantined",
       run: () => ctx.onMove(id),
     },
     {
       key: "copy",
-      label: "Sao chép link",
+      label: t("menu.copyLink"),
       icon: Link,
       disabled: !ctx.hasLink(id),
       run: () => ctx.onCopyLink(id),
@@ -108,14 +109,14 @@ function taskCommands(item: DownloadItem, ctx: RowContext): RowCommand[] {
   const toggle: RowCommand = pausable
     ? {
         key: "pause",
-        label: "Tạm dừng",
+        label: t("menu.pause"),
         icon: Pause,
         disabled: !ctx.desktop,
         run: () => ctx.onPause(id),
       }
     : {
         key: "resume",
-        label: "Tiếp tục",
+        label: t("menu.resume"),
         icon: Play,
         disabled: !ctx.desktop || status !== "paused",
         run: () => ctx.onResume(id),
@@ -124,14 +125,14 @@ function taskCommands(item: DownloadItem, ctx: RowContext): RowCommand[] {
     toggle,
     {
       key: "retry",
-      label: "Thử lại",
+      label: t("menu.retry"),
       icon: RotateCcw,
       disabled: !ctx.desktop || status !== "failed",
       run: () => ctx.onResume(id),
     },
     {
       key: "diagnose",
-      label: "Chẩn đoán",
+      label: t("menu.diagnose"),
       icon: Stethoscope,
       disabled: status !== "failed" && status !== "quarantined",
       run: () => ctx.onDiagnose(id),
@@ -146,14 +147,14 @@ function removeCommands(item: DownloadItem, ctx: RowContext): RowCommand[] {
   return [
     {
       key: "remove",
-      label: "Xoá khỏi danh sách",
+      label: t("menu.remove"),
       icon: ListX,
       disabled: !ctx.desktop || busy,
       run: () => ctx.onRemove(id),
     },
     {
       key: "trash",
-      label: "Xoá file (vào Thùng rác)",
+      label: t("menu.trash"),
       icon: Trash2,
       destructive: true,
       disabled:
@@ -230,8 +231,8 @@ export function SonioxRowActions({
       variant="ghost"
       size="icon-sm"
       className="rounded-md text-muted-foreground hover:bg-card hover:text-foreground"
-      aria-label={`Tuỳ chọn cho ${item.name}`}
-      title="Tuỳ chọn"
+      aria-label={t("menu.optionsFor", { name: item.name })}
+      title={t("table.options")}
     />
   )
 

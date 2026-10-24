@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "UTD Download Manager",
+  "name": "__MSG_extName__",
+  "default_locale": "en",
   "version": "0.1.0",
-  "description": "Gửi link sang UTD để tải nhanh, có kiểm tra an toàn.",
+  "description": "__MSG_extDescription__",
   "permissions": ["contextMenus", "nativeMessaging", "storage", "activeTab"],
   "background": {
     "scripts": ["background.js"]
   },
   "action": {
-    "default_title": "Tải bằng UTD",
+    "default_title": "__MSG_actionTitle__",
     "default_popup": "popup.html",
     "default_icon": {
       "32": "icons/32.png",

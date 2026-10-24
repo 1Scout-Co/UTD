@@ -19,50 +19,40 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { t } from "@/shared/i18n/i18n"
 
 import { diagnose, type DoctorCategory } from "../model/doctor"
 import type { DownloadItem } from "../model/types"
 
+// Nhãn nhóm: t(`doctor.cat.${category}`).
 const CATEGORY_STYLE: Record<
   DoctorCategory,
-  { icon: typeof WifiOff; box: string; text: string }
+  { icon: typeof WifiOff; box: string }
 > = {
   network: {
     icon: WifiOff,
     box: "bg-amber-500/10 text-amber-700",
-    text: "Mạng",
   },
   access: {
     icon: AlertTriangle,
     box: "bg-sky-500/10 text-sky-700",
-    text: "Quyền truy cập",
   },
   security: {
     icon: ShieldAlert,
     box: "bg-destructive/10 text-destructive",
-    text: "An toàn",
   },
   tool: {
     icon: Wrench,
     box: "bg-violet-500/10 text-violet-700",
-    text: "Công cụ",
   },
   disk: {
     icon: AlertTriangle,
     box: "bg-orange-500/10 text-orange-700",
-    text: "Ổ đĩa",
   },
   unknown: {
     icon: Stethoscope,
     box: "bg-primary/10 text-primary",
-    text: "Chưa rõ",
   },
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  failed: "Có lỗi",
-  quarantined: "Đã cách ly",
-  paused: "Tạm dừng",
 }
 
 export function DoctorDialog({
@@ -97,10 +87,8 @@ export function DoctorDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-variant="soniox" className="sm:max-w-[560px]">
         <DialogHeader>
-          <DialogTitle>Chẩn đoán download</DialogTitle>
-          <DialogDescription>
-            Dựa trên lỗi engine ghi trong journal cục bộ.
-          </DialogDescription>
+          <DialogTitle>{t("doctor.title")}</DialogTitle>
+          <DialogDescription>{t("doctor.description")}</DialogDescription>
         </DialogHeader>
 
         <div className="flex items-start gap-3 rounded-xl bg-muted p-3">
@@ -108,13 +96,13 @@ export function DoctorDialog({
             <Icon className="size-4" />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold" title={item.name}>
+            <div dir="auto" className="truncate text-sm font-semibold [text-align:match-parent]" title={item.name}>
               {item.name}
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>{STATUS_LABEL[item.status] ?? item.status}</span>
+              <span>{t(`status.${item.status}`)}</span>
               <span>·</span>
-              <span>{style.text}</span>
+              <span>{t(`doctor.cat.${report.category}`)}</span>
             </div>
           </div>
           <span className="shrink-0 rounded-full bg-card px-2 py-0.5 font-mono text-xs text-muted-foreground shadow-soft">
@@ -130,10 +118,8 @@ export function DoctorDialog({
         </div>
 
         <div className="rounded-xl bg-muted p-3.5">
-          <div className="text-sm font-medium">
-            Cách xử lý
-          </div>
-          <ol className="mt-2 space-y-1.5 pl-4 text-sm text-muted-foreground">
+          <div className="text-sm font-medium">{t("doctor.steps")}</div>
+          <ol className="mt-2 space-y-1.5 ps-4 text-sm text-muted-foreground">
             {report.steps.map((step) => (
               <li key={step} className="list-decimal">
                 {step}
@@ -149,7 +135,7 @@ export function DoctorDialog({
             onClick={() => void copyCode()}
           >
             {copied ? <Check /> : <Copy />}
-            {copied ? "Đã chép mã" : `Chép mã lỗi`}
+            {copied ? t("doctor.copied") : t("doctor.copyCode")}
           </Button>
           <div className="flex gap-2">
             <Button
@@ -157,7 +143,7 @@ export function DoctorDialog({
               variant="ghost"
               onClick={() => onOpenChange(false)}
             >
-              Đóng
+              {t("app.close")}
             </Button>
             {report.retryable ? (
               <Button
@@ -168,7 +154,7 @@ export function DoctorDialog({
                 }}
               >
                 <RefreshCw />
-                Tiếp tục
+                {t("menu.resume")}
               </Button>
             ) : null}
           </div>

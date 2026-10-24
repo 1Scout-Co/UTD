@@ -1,0 +1,17 @@
+{
+  "extName": { "message": "UTD ダウンロードマネージャー" },
+  "extDescription": { "message": "リンクをUTDに送信して、安全チェック付きで高速ダウンロードします。" },
+  "actionTitle": { "message": "UTDでダウンロード" },
+  "menuDownload": { "message": "UTDでダウンロード" },
+  "menuMedia": { "message": "UTDで動画/音声をダウンロード" },
+  "sendPage": { "message": "このページをUTDでダウンロード" },
+  "hint": { "message": "リンクや動画を右クリックして、すばやくダウンロードします。" },
+  "sending": { "message": "送信中…" },
+  "sent": { "message": "UTDに送信しました。" },
+  "openedForQuality": { "message": "画質を選択するためにUTDを開きました。" },
+  "notHttp": { "message": "このページはHTTP/HTTPSではありません。" },
+  "sendFailed": { "message": "UTDに要求を送信できませんでした。" },
+  "noResponse": { "message": "UTDが応答しません。" },
+  "notRunning": { "message": "UTDが起動していません。UTDを開いてから再試行してください。" },
+  "notConnected": { "message": "UTDに接続できません。UTDが起動していて、ブラウザー連携が有効になっているか確認してください。" }
+}

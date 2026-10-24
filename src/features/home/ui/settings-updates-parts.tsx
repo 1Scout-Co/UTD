@@ -4,12 +4,20 @@ import { Download, Info, Loader2, RefreshCw, ShieldCheck } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { formatBytes, formatDate } from "@/shared/i18n/format"
+import { t, tx } from "@/shared/i18n/i18n"
 
-import { formatBytes } from "../model/download-mapper"
 import type { UpdateInfo, UpdateProgress } from "../model/types"
 import { percentOf, StageProgress } from "./stage-progress"
 
 // Các mảnh hiển thị của mục "Cập nhật" trong Cài đặt (logic nằm ở settings-updates.tsx).
+
+/** Ngày phát hành Rust gửi dạng dd/mm/yyyy → định dạng theo ngôn ngữ; dạng lạ thì giữ nguyên. */
+function releaseDate(value: string): string {
+  const [day, month, year] = value.split("/").map(Number)
+  const date = new Date(year, month - 1, day)
+  return Number.isNaN(date.getTime()) ? value : formatDate(date.getTime())
+}
 
 function InstallProgress({ progress }: { progress: UpdateProgress | null }) {
   const stage = progress?.stage ?? "download"
@@ -20,11 +28,11 @@ function InstallProgress({ progress }: { progress: UpdateProgress | null }) {
   const value = stage === "install" ? 100 : percentOf(done, total)
   return (
     <div className="space-y-1">
-      <StageProgress percent={value} label="Tiến độ cập nhật" />
+      <StageProgress percent={value} label={t("updates.progress")} />
       <p className="text-xs text-muted-foreground tabular-nums">
         {stage === "install"
-          ? "Đang cài. UTD sẽ tự đóng rồi mở lại…"
-          : `Đang tải…${sized ? ` ${formatBytes(done)} / ${formatBytes(total)}` : ""}`}
+          ? t("updates.installing")
+          : `${t("app.downloading")}${sized ? ` ${formatBytes(done)} / ${formatBytes(total)}` : ""}`}
       </p>
     </div>
   )
@@ -48,11 +56,11 @@ export function UpdateCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-semibold">
-            Có bản {update.version}
+            {t("nav.updateAvailable", { version: update.version })}
             {update.date ? (
               <span className="font-normal text-muted-foreground">
                 {" "}
-                · {update.date}
+                · {releaseDate(update.date)}
               </span>
             ) : null}
           </p>
@@ -70,7 +78,7 @@ export function UpdateCard({
             onClick={onInstall}
           >
             <Download />
-            Cập nhật
+            {t("updates.install")}
           </Button>
         )}
       </div>
@@ -79,8 +87,7 @@ export function UpdateCard({
       ) : (
         <p className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
           <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
-          Kiểm chữ ký trước khi cài. Download đang chạy sẽ tạm dừng và tự chạy
-          tiếp khi UTD mở lại.
+          {t("updates.signatureNote")}
         </p>
       )}
     </div>
@@ -101,10 +108,10 @@ export function AutoCheck({
     <div className="flex items-center justify-between gap-3 rounded-xl bg-muted p-3.5">
       <div className="min-w-0">
         <p id={`${id}-label`} className="text-sm font-semibold">
-          Tự kiểm tra cập nhật
+          {t("updates.auto")}
         </p>
         <p id={`${id}-hint`} className="text-xs text-muted-foreground">
-          Mỗi lần mở app, chỉ đọc số phiên bản mới nhất.
+          {t("updates.autoHint")}
         </p>
       </div>
       <Switch
@@ -141,8 +148,9 @@ export function VersionRow({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="text-sm">
-        Bản đang dùng{" "}
-        <span className="font-medium tabular-nums">{current}</span>
+        {tx("updates.current", {
+          version: <span className="font-medium tabular-nums">{current}</span>,
+        })}
       </p>
       <Button
         type="button"
@@ -151,7 +159,7 @@ export function VersionRow({
         onClick={onCheck}
       >
         {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-        Kiểm tra
+        {t("updates.check")}
       </Button>
     </div>
   )
@@ -171,10 +179,8 @@ export function UpdateMessages({
 }) {
   return (
     <>
-      {!desktop ? <Hint text="Cập nhật chỉ có trong app UTD." /> : null}
-      {notReady ? (
-        <Hint text="Bản này chưa bật tự cập nhật. Tải bản mới ở trang Releases của UTD trên GitHub." />
-      ) : null}
+      {!desktop ? <Hint text={t("updates.desktopOnly")} /> : null}
+      {notReady ? <Hint text={t("updates.notReady")} /> : null}
       <p role="status" className="text-sm text-emerald-700 empty:hidden">
         {notice ?? ""}
       </p>
