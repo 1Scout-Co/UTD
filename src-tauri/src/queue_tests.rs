@@ -73,6 +73,8 @@ struct Fake {
     launched: Mutex<Vec<String>>,
     changed: Mutex<Vec<(String, TaskStatus)>>,
     busy: Mutex<HashSet<String>>,
+    /// Task chưa sẵn sàng (như task media chờ công cụ tự tải).
+    held: Mutex<HashSet<String>>,
     retries: AtomicUsize,
 }
 
@@ -100,6 +102,10 @@ impl Runtime for Fake {
 
     fn retry_later(&self) {
         self.retries.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn ready(&self, task: &DownloadTask) -> bool {
+        !self.held.lock().unwrap().contains(&task.id)
     }
 }
 
@@ -132,6 +138,29 @@ fn runs_three_at_a_time_in_order() {
     queue.release(&ids[0]);
     queue.release(&ids[0]);
     assert_eq!(fake.launched(), ids, "nhả hai lần không chạy thừa");
+    assert!(queue.waiting().is_empty());
+}
+
+/// Task chờ công cụ không giữ chỗ: task sau chạy trước; sẵn sàng rồi thì chạy theo đúng thứ tự hàng.
+#[test]
+fn tasks_that_are_not_ready_keep_their_place_without_a_slot() {
+    let fx = Fixture::new();
+    let (queue, fake) = started(&fx);
+    let ids = fx.tasks(6);
+    fake.held.lock().unwrap().extend([ids[0].clone(), ids[1].clone()]);
+    queue.submit(entries(&ids), Place::Back).unwrap();
+    assert_eq!(fake.launched(), ids[2..5], "đủ 3 chỗ cho task sẵn sàng");
+    assert_eq!(queue.waiting(), [ids[0].clone(), ids[1].clone(), ids[5].clone()]);
+    assert_eq!(fx.status(&ids[0]), TaskStatus::Queued);
+
+    fake.held.lock().unwrap().clear();
+    queue.pump();
+    assert_eq!(fake.launched(), ids[2..5], "còn đủ giới hạn thì không chạy thêm");
+    queue.release(&ids[2]);
+    assert_eq!(fake.launched().last(), Some(&ids[0]), "tới lượt thì task đầu hàng chạy trước");
+    assert!(queue.pause(&ids[1]).unwrap(), "task chờ công cụ vẫn tạm dừng được như task chờ lượt");
+    queue.release(&ids[3]);
+    assert_eq!(fake.launched().last(), Some(&ids[5]));
     assert!(queue.waiting().is_empty());
 }
 

@@ -10,13 +10,13 @@ use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use utd_engine::{now_ms, DownloadTask, ErrorClass, Journal, TaskError, TaskStatus};
 
-use crate::media::auto::{self, Auto, Wait};
+use crate::media::auto::{self, Wait};
 use crate::media::finish::{
     clamp, emit_progress, emit_task, error, fail, finalize, pause, set_status,
 };
 use crate::media::preset::{self, Settled};
 use crate::media::sources::Tool;
-use crate::media::{fast, ffmpeg_location, js_runtime_args, tokio_command, tools};
+use crate::media::{auto_tools, fast, ffmpeg_location, js_runtime_args, tokio_command, tools};
 use crate::state::AppState;
 
 enum StreamMessage {
@@ -53,12 +53,11 @@ pub async fn run(
     Ok(())
 }
 
-fn auto_tools(app: &AppHandle) -> Option<Auto> {
-    app.try_state::<Auto>().map(|state| state.inner().clone())
-}
-
 /// Công cụ đang được tự tải (lần đầu mở app): task vẫn "đang chờ" tới khi xong (yt-dlp, và ffmpeg
 /// khi tách âm thanh, chờ qua cả các lần thử lại); bấm Tạm dừng thì dừng. `false` = đã dừng.
+/// Thường hàng đợi đã giữ task (không giữ chỗ) tới lúc công cụ xong (`Auto::holds_media`), nên ở đây
+/// trả ngay; chỉ chờ thật khi trạng thái đổi đúng lúc task bắt đầu (vd vừa bật lại tự tải) — lúc đó
+/// task giữ chỗ trong hàng đợi, có giới hạn `TASK_PASSES` lượt rồi báo lỗi rõ.
 async fn wait_tools(app: &AppHandle, cancel: &CancellationToken, audio: bool) -> bool {
     let Some(auto) = auto_tools(app) else {
         return true;

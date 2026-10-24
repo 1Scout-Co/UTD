@@ -205,6 +205,28 @@ impl Auto {
             && !state.failed.contains(&tool)
     }
 
+    /// Hàng đợi chung chưa chạy task media lúc công cụ nó cần còn đang tự tải: task vẫn "Đang chờ lượt"
+    /// mà không giữ chỗ chạy (file HTTP phía sau chạy trước). Như `wait_for` của runner: công cụ bắt buộc
+    /// (yt-dlp; ffmpeg khi `audio`) chờ qua cả các lần thử lại sau lỗi, công cụ phụ (deno; ffmpeg khi tải
+    /// video) chỉ chờ lượt đang tải chưa lỗi. Tự tải tắt hoặc người dùng bấm Huỷ ⇒ không chờ.
+    pub(crate) fn holds_media(&self, audio: bool) -> bool {
+        let state = self.state();
+        if !state.enabled || state.paused {
+            return false;
+        }
+        let essential = |tool: Tool| tool == Tool::YtDlp || (audio && tool == Tool::Ffmpeg);
+        state.checking
+            || state
+                .pending
+                .iter()
+                .any(|tool| essential(*tool) || !state.failed.contains(tool))
+    }
+
+    /// Theo dõi trạng thái tự tải (hàng đợi xem lại task media đang chờ công cụ khi trạng thái đổi).
+    pub(crate) fn subscribe(&self) -> watch::Receiver<AutoState> {
+        self.inner.state.subscribe()
+    }
+
     /// Chờ công cụ đang/sắp được tự tải. `essential` (yt-dlp, ffmpeg khi tách âm thanh): chờ qua tối
     /// đa `passes` lượt tải xong kể từ lúc gọi, vẫn thiếu thì `Failed`. `optional` (deno, ffmpeg):
     /// chỉ chờ một lượt; lỗi thì chạy tiếp không có nó.
@@ -769,6 +791,38 @@ mod tests {
         auto.set_enabled(false).unwrap();
         let off = auto.wait_for(&[Tool::Ffmpeg], &[], TASK_PASSES, &never);
         assert_eq!(off.await, Wait::Ready);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Hàng đợi giữ task media (không giữ chỗ) đúng lúc runner sẽ phải chờ công cụ.
+    #[test]
+    fn queue_holds_media_tasks_only_while_their_tools_are_coming() {
+        let fake = Fake::new(None, vec![]);
+        let (auto, dir) = auto_with(&fake);
+        assert!(auto.holds_media(false), "đang dò công cụ lúc mở app");
+        auto.update(|state| {
+            state.checking = false;
+            state.pending = vec![Tool::Deno];
+        });
+        assert!(auto.holds_media(false), "deno đang tải lượt đầu: chờ một lượt");
+        auto.update(|state| state.failed = vec![Tool::Deno]);
+        assert!(!auto.holds_media(true), "deno lỗi: chạy tiếp không có nó");
+        auto.update(|state| {
+            state.pending = vec![Tool::Ffmpeg];
+            state.failed = vec![Tool::Ffmpeg];
+        });
+        assert!(!auto.holds_media(false), "ffmpeg lỗi: video vẫn chạy");
+        assert!(auto.holds_media(true), "tách âm thanh cần ffmpeg: chờ qua các lần thử lại");
+        auto.update(|state| {
+            state.pending = vec![Tool::YtDlp];
+            state.failed = vec![Tool::YtDlp];
+        });
+        assert!(auto.holds_media(false));
+        auto.update(|state| state.paused = true);
+        assert!(!auto.holds_media(true), "bấm Huỷ: task chạy và báo thiếu công cụ");
+        auto.update(|state| state.paused = false);
+        auto.set_enabled(false).unwrap();
+        assert!(!auto.holds_media(true), "tắt tự tải: không chờ");
         let _ = std::fs::remove_dir_all(dir);
     }
 

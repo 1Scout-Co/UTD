@@ -161,26 +161,32 @@ pub fn retry_media_tools(auto: tauri::State<'_, Auto>) -> AutoState {
     auto.state()
 }
 
-/// Lúc công cụ đang tự tải (lần đầu mở app): chờ yt-dlp và deno xong rồi mới phân tích. yt-dlp lỗi
-/// kiểu extractor ⇒ kiểm bản mới, có thì cài rồi phân tích lại một lần.
+/// Công cụ cho lệnh yt-dlp mà người dùng đang đợi (Phân tích, liệt kê kênh): lúc công cụ đang tự tải
+/// (lần đầu mở app) thì chờ yt-dlp và deno một lượt; vẫn thiếu yt-dlp thì câu lỗi nói rõ UTD tự thử lại.
+pub(crate) async fn interactive_tools(auto: Option<&Auto>) -> Result<tools::MediaTools, String> {
+    if let Some(auto) = auto {
+        let (essential, optional) = ([sources::Tool::YtDlp], [sources::Tool::Deno]);
+        let never = CancellationToken::new();
+        let _ = auto.wait_for(&essential, &optional, 1, &never).await;
+    }
+    tauri::async_runtime::spawn_blocking(tools::resolve)
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|missing| match auto {
+            Some(auto) => auto.missing_message(sources::Tool::YtDlp, missing),
+            None => missing,
+        })
+}
+
+/// Phân tích một link (hộp Tải media). yt-dlp lỗi kiểu extractor ⇒ kiểm bản mới, có thì cài rồi phân
+/// tích lại một lần.
 #[tauri::command]
 pub async fn media_probe(app: AppHandle, url: String) -> Result<probe::MediaProbeResult, String> {
     let url = validate_url(&url).map_err(|error| error.to_string())?;
-    let auto = app.try_state::<Auto>().map(|state| state.inner().clone());
+    let auto = auto_tools(&app);
     let mut retried = false;
     loop {
-        if let Some(auto) = &auto {
-            let (essential, optional) = ([sources::Tool::YtDlp], [sources::Tool::Deno]);
-            let never = CancellationToken::new();
-            let _ = auto.wait_for(&essential, &optional, 1, &never).await;
-        }
-        let tools = tauri::async_runtime::spawn_blocking(tools::resolve)
-            .await
-            .map_err(|error| error.to_string())?
-            .map_err(|missing| match &auto {
-                Some(auto) => auto.missing_message(sources::Tool::YtDlp, missing),
-                None => missing,
-            })?;
+        let tools = interactive_tools(auto.as_ref()).await?;
         let ffmpeg = tools.ffmpeg.is_some()
             || auto
                 .as_ref()
@@ -304,6 +310,64 @@ fn with_subfolder(
     let destination = folder.join(safe_base(name));
     std::fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
     Ok(destination)
+}
+
+fn auto_tools(app: &AppHandle) -> Option<Auto> {
+    app.try_state::<Auto>().map(|state| state.inner().clone())
+}
+
+/// Hàng đợi hỏi trước khi chạy task media (`queue::Runtime::ready`): công cụ task cần còn đang tự tải
+/// (`Auto::holds_media`) ⇒ chưa chạy, task vẫn "Đang chờ lượt" mà không giữ chỗ.
+pub(crate) fn waits_for_tools(app: &AppHandle, task_id: &str) -> bool {
+    let Some(auto) = auto_tools(app) else {
+        return false;
+    };
+    if auto.holds_media(false) {
+        return true;
+    }
+    // Chỉ còn ffmpeg (bắt buộc khi tách âm thanh) đang chờ thử lại: tuỳ task.
+    auto.holds_media(true)
+        && app.try_state::<AppState>().is_some_and(|state| {
+            state
+                .journal
+                .load_media_job(task_id)
+                .ok()
+                .flatten()
+                .is_some_and(|job| job.audio_format.is_some())
+        })
+}
+
+/// Task media vừa vào hàng: còn thiếu công cụ thì tự tải thử lại ngay, khỏi đợi hết thời gian chờ.
+pub(crate) fn want_tools(app: &AppHandle) {
+    if let Some(auto) = auto_tools(app)
+        && !auto.state().pending.is_empty()
+    {
+        auto.kick();
+    }
+}
+
+/// Công cụ tự tải đổi trạng thái (xong một lượt, lỗi, tắt, Huỷ) ⇒ hàng đợi xem lại task media đang chờ.
+pub(crate) fn watch_tools_for_queue(app: &AppHandle) {
+    let Some(auto) = auto_tools(app) else {
+        return;
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut receiver = auto.subscribe();
+        let mut last = None;
+        loop {
+            let holds = Some((auto.holds_media(false), auto.holds_media(true)));
+            if holds != last
+                && let Some(state) = app.try_state::<AppState>()
+            {
+                last = holds;
+                state.queue.pump();
+            }
+            if receiver.changed().await.is_err() {
+                return;
+            }
+        }
+    });
 }
 
 pub(crate) fn spawn_media_run(

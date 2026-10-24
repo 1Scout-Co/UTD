@@ -19,6 +19,8 @@ const DEFAULTS: Responses = {
   default_download_dir: 'C:\\Users\\utd\\Downloads\\UTD',
   disk_space: { freeBytes: 200e9, totalBytes: 500e9, label: 'Ổ C:' },
   take_media_request: null,
+  take_batch_request: null,
+  queue_settings: { limit: 3, maxLimit: 10 },
   get_update_check: { ready: true, enabled: true, available: null, installing: false },
   'plugin:app|version': '0.1.0',
   browser_integration_status: {

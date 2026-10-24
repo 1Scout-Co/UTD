@@ -28,7 +28,7 @@ use entries::{ChannelEntry, ChannelHead};
 use profile::ChannelProfile;
 pub use seen::{ChannelPick, remember};
 
-use crate::media::{probe, tokio_command, tools};
+use crate::media::{auto_tools, interactive_tools, js_runtime_args, probe, tokio_command, tools};
 use crate::state::AppState;
 
 /// Kênh dài hơn thì chỉ lấy chừng này video mới nhất (TikTok/YouTube trả mới nhất trước).
@@ -103,10 +103,8 @@ pub async fn channel_list(
     }
     let listing_url = crate::media_pages::channel_listing_url(&url)
         .ok_or_else(|| "Đây không phải link kênh TikTok hoặc kênh/playlist YouTube.".to_string())?;
-    let tools = tauri::async_runtime::spawn_blocking(tools::resolve)
-        .await
-        .map_err(|error| error.to_string())??;
-    let tools = Arc::new(tools);
+    // Như Phân tích: lần đầu mở app thì chờ yt-dlp/deno đang tự tải.
+    let tools = Arc::new(interactive_tools(auto_tools(&app).as_ref()).await?);
     let journal = app.state::<AppState>().journal.clone();
     let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
     let cancel = CancellationToken::new();
@@ -239,6 +237,7 @@ struct Request<'a> {
 async fn list_entries(request: &Request<'_>, sink: &impl Sink) -> ListingEvent {
     let mut command = tokio_command(&request.tools.yt_dlp);
     command
+        .args(js_runtime_args(request.tools))
         .args(listing_args(request.url))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

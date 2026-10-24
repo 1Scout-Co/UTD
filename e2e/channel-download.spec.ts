@@ -131,6 +131,7 @@ function mockDesktop(scenario: Scenario) {
     disk_space: () => ({ freeBytes: 5e11, totalBytes: 1e12, label: 'C:' }),
     get_update_check: () => ({ ready: true, enabled: false, available: null, installing: false }),
     take_media_request: () => null,
+    take_batch_request: () => null,
     add_download: (args) =>
       Promise.reject(`channel_page: ${String((args.input as Args).url)}`),
     // Hàm này chạy trong trang (addInitScript): không dùng được hằng của file test.
@@ -292,7 +293,7 @@ test('channel-model: lọc mới nhất N / khoảng ngày / chỉ video mới, 
   expect(channelPayloads([entries[1]], CHANNEL_QUALITIES[0], null, 'Kênh')[0].channel).toBeUndefined()
 })
 
-test('S-61: lọc, chọn, một chất lượng chung, thêm lần lượt từng video', async ({ page }) => {
+test('S-61: lọc, chọn, một chất lượng chung, cả kênh vào hàng đợi chung', async ({ page }) => {
   await page.addInitScript(mockDesktop, 'full')
   await page.goto('/')
   const app = desktop(page)
@@ -336,10 +337,9 @@ test('S-61: lọc, chọn, một chất lượng chung, thêm lần lượt từ
   await start.click()
   await expect(dialog).not.toBeVisible()
 
-  // Chỉ 2 video chạy cùng lúc; video thứ 3 chờ tới khi một video xong.
-  await expect(page.getByRole('status').filter({ hasText: 'còn 1 video chờ' })).toBeVisible()
+  // Cả 3 video vào hàng đợi chung của app ngay (cuối hàng, đúng thứ tự); app tự giới hạn số chạy cùng lúc.
+  await expect.poll(async () => (await app.calls('add_media_download')).length).toBe(3)
   const added = await app.calls('add_media_download')
-  expect(added).toHaveLength(2)
   expect(added[0]).toEqual({
     input: {
       url: 'https://www.tiktok.com/@kenh.mau/video/770000000000000005',
@@ -349,32 +349,15 @@ test('S-61: lọc, chọn, một chất lượng chung, thêm lần lượt từ
       pageUrl: 'https://www.tiktok.com/@kenh.mau/video/770000000000000005',
       subfolder: 'Kênh Mẫu',
       channel: { key: KEY, videoId: '770000000000000005' },
+      later: true,
     },
   })
-  const done = { ...(added[0].input as Record<string, unknown>) }
-  await app.emit('utd://task', {
-    id: 'task-1',
-    url: done.url,
-    finalUrl: null,
-    fileName: 'a.mp3',
-    destDir: 'C:/Users/Test/Downloads/UTD/Kênh Mẫu',
-    tempPath: '',
-    kind: 'media',
-    status: 'completed',
-    totalBytes: 1,
-    downloadedBytes: 1,
-    etag: null,
-    lastModified: null,
-    expectedSha256: null,
-    hashState: 'unavailable',
-    connections: 1,
-    error: null,
-    createdAt: 1,
-    updatedAt: 2,
-    completedAt: 2,
-  })
-  await expect.poll(async () => (await app.calls('add_media_download')).length).toBe(3)
-  await expect(page.getByRole('status').filter({ hasText: 'video chờ' })).toHaveCount(0)
+  expect(added.map((call) => (call.input as { channel: { videoId: string } }).channel.videoId)).toEqual([
+    '770000000000000005',
+    '770000000000000003',
+    '770000000000000001',
+  ])
+  await expect(page.getByRole('status').filter({ hasText: 'đang thêm' })).toHaveCount(0)
 })
 
 test('S-60: kênh dài liệt kê dần, Dừng giữ phần đã nhận', async ({ page }) => {

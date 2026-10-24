@@ -207,6 +207,8 @@ pub fn run() {
                 queue: queue.clone(),
             });
             queue.start(Arc::new(queue::AppRuntime(app.handle().clone())));
+            // Task media chờ công cụ tự tải nằm trong hàng mà không giữ chỗ: công cụ xong thì chạy.
+            media::watch_tools_for_queue(app.handle());
             log::info!("UTD engine ready at {}", directory.display());
             // Sau AppState: cần journal (cài đặt, download chạy tiếp sau khi cập nhật).
             updater::init(app);

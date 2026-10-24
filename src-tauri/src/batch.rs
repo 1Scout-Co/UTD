@@ -74,6 +74,9 @@ fn add_batch(app: &AppHandle, input: BatchInput) -> Result<BatchResult, String> 
             let media = AddMediaInput::with_quality(url.clone(), quality.clone());
             crate::media::create_media(&state.journal, &folder, media)
                 .map(|task| (Entry::new(task.id.clone()), task))
+        } else if crate::media_pages::is_channel_page(&url) {
+            // Không tải trang HTML của kênh: lô giữ lại link này kèm cách làm.
+            Err(crate::media_pages::CHANNEL_IN_BATCH.to_string())
         } else {
             add_file(&state, &folder, &mut names, url.clone())
         };

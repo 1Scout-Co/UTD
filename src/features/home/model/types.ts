@@ -134,6 +134,10 @@ export interface AddMediaPayload {
   subfolder?: string
   /** Tải cả kênh: để app nhớ id video đã tải. */
   channel?: { key: string; videoId: string }
+  /** Thư mục tải; không gửi ⇒ thư mục mặc định trong Cài đặt. */
+  destDir?: string
+  /** true ⇒ xếp cuối hàng đợi chung (tải cả kênh); mặc định chen đầu hàng. */
+  later?: boolean
 }
 
 /** Chất lượng chung cho link trang video trong lô (src-tauri/src/media/preset.rs). */

@@ -66,6 +66,10 @@ export function useBatchFlow(desktop: boolean, beforeOpen: () => void) {
   const openWith = useCallback((urls: string[]) => show(urls, false), [show])
   useBatchRequests(desktop, fromBrowser)
   useBatchShortcut(openEmpty)
-  const setOpen = (open: boolean) => setState((previous) => ({ ...previous, open }))
+  // Ổn định giữa các lần vẽ: màn chính dùng trong callback của luồng media/kênh.
+  const setOpen = useCallback(
+    (open: boolean) => setState((previous) => ({ ...previous, open })),
+    [],
+  )
   return { ...state, openEmpty, openWith, setOpen }
 }

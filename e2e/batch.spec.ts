@@ -345,6 +345,22 @@ test('S-07: lô từ trình duyệt mở hộp hàng loạt; Thêm vào hàng đ
   expect(sent[0]).toMatchObject({ input: { later: true, quality: 'best' } })
 })
 
+test('S-07: lô rồi link video từ trình duyệt: hộp mới thay hộp cũ, không chồng lên nhau', async ({ page }) => {
+  await page.addInitScript(mockDesktop, { early: null, failSecond: false })
+  await page.goto('/')
+  const desktop = app(page)
+  await expect.poll(desktop.listening).toBe(1)
+  await desktop.send(['https://example.com/a.zip', 'https://example.com/b.zip'])
+  await expect(page.getByLabel('Danh sách link')).toBeVisible()
+  await page.evaluate(() =>
+    (window as unknown as { __utd: Probe }).__utd.emit('utd://media-request', {
+      url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw',
+    }),
+  )
+  await expect(page.getByRole('dialog')).toHaveCount(1)
+  await expect(page.getByLabel('Danh sách link')).toHaveCount(0)
+})
+
 test('S-07: lô tới lúc UTD vừa mở (chưa kịp nghe) vẫn mở hộp hàng loạt', async ({ page }) => {
   await page.addInitScript(mockDesktop, { early: ['https://example.com/early.zip'], failSecond: false })
   await page.goto('/')

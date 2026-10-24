@@ -9,6 +9,9 @@
 //! - Tạm dừng task đang chờ: bỏ khỏi hàng, trạng thái `paused`. Task đang chạy thì người gọi huỷ token.
 //! - Giảm giới hạn không dừng task đang chạy; chỉ chưa chạy thêm cho tới khi dưới giới hạn.
 //! - Task con ẩn của media (luồng hình/tiếng) không qua đây: task cha giữ một chỗ.
+//! - Task media mà công cụ nó cần (yt-dlp, deno, ffmpeg) còn đang được tự tải (`Runtime::ready`): vẫn
+//!   `queued` ở nguyên chỗ, KHÔNG giữ chỗ chạy; task sau (vd file HTTP) chạy trước. Công cụ đổi trạng thái
+//!   thì `media::watch_tools_for_queue` gọi `pump` lại. Vì vậy lúc chờ công cụ không bao giờ chiếm lượt.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -28,6 +31,9 @@ const LIMIT_KEY: &str = "queue_limit";
 const ORDER_KEY: &str = "queue_order";
 /// Task đang bận (đổi tên, chuyển thư mục): thử chạy lại sau chừng này.
 const BUSY_RETRY: Duration = Duration::from_millis(500);
+/// Mỗi lần tìm task chạy được chỉ xét chừng này task đầu hàng (task phía sau chờ tới lượt xét sau),
+/// để hàng nghìn task media đang chờ công cụ không làm mỗi lần `pump` đọc cả journal.
+const MAX_SCAN: usize = 1000;
 
 /// Một task trong hàng. `rename`: chưa tải byte nào và người dùng không đặt tên ⇒ lấy tên server đề xuất.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +75,11 @@ pub trait Runtime: Send + Sync {
     fn changed(&self, task: &DownloadTask);
     /// Gọi lại [`DownloadQueue::pump`] sau một lúc (task bận).
     fn retry_later(&self);
+    /// Task chạy được chưa. `false` ⇒ để nguyên chỗ trong hàng (vẫn `queued`, không giữ chỗ chạy) cho
+    /// task sau chạy trước; điều kiện đổi thì gọi lại `pump` (task media chờ công cụ đang tự tải).
+    fn ready(&self, _task: &DownloadTask) -> bool {
+        true
+    }
 }
 
 #[derive(Default)]
@@ -200,26 +211,34 @@ impl DownloadQueue {
         }
     }
 
-    /// Lấy task kế còn chạy được (vẫn `queued` trong journal) và giữ chỗ cho nó.
+    /// Lấy task kế còn chạy được (vẫn `queued` trong journal, `Runtime::ready`) và giữ chỗ cho nó. Task
+    /// chưa sẵn sàng giữ nguyên chỗ trong hàng; task đã xoá/xong/đổi trạng thái ngoài hàng đợi thì bỏ.
     fn next_ready(&self) -> Option<(DownloadTask, Entry)> {
+        let runtime = self.runtime.get()?;
         let mut state = self.lock();
-        let mut picked = None;
-        let mut popped = false;
-        while !state.frozen && state.active.len() < state.limit {
-            let Some(entry) = state.waiting.pop_front() else {
-                break;
-            };
-            popped = true;
-            // Đã xoá, đã xong hoặc đổi trạng thái ngoài hàng đợi ⇒ bỏ.
-            if let Ok(Some(task)) = self.journal.load_task(&entry.id)
-                && task.status == TaskStatus::Queued
-            {
-                state.active.push(entry.clone());
-                picked = Some((task, entry));
-                break;
+        if state.frozen || state.active.len() >= state.limit {
+            return None;
+        }
+        let (mut index, mut dropped, mut picked) = (0, false, None);
+        while index < state.waiting.len().min(MAX_SCAN) {
+            let entry = state.waiting[index].clone();
+            match self.journal.load_task(&entry.id) {
+                Ok(Some(task)) if task.status == TaskStatus::Queued => {
+                    if runtime.ready(&task) {
+                        state.waiting.remove(index);
+                        state.active.push(entry.clone());
+                        picked = Some((task, entry));
+                        break;
+                    }
+                    index += 1;
+                }
+                _ => {
+                    state.waiting.remove(index);
+                    dropped = true;
+                }
             }
         }
-        if popped {
+        if dropped || picked.is_some() {
             self.persist(&state);
         }
         picked
@@ -433,6 +452,9 @@ impl Runtime for AppRuntime {
 
     fn changed(&self, task: &DownloadTask) {
         let _ = self.0.emit(TASK_EVENT, task);
+        if task.kind == TaskKind::Media && task.status == TaskStatus::Queued {
+            crate::media::want_tools(&self.0);
+        }
     }
 
     fn retry_later(&self) {
@@ -443,6 +465,10 @@ impl Runtime for AppRuntime {
                 state.queue.pump();
             }
         });
+    }
+
+    fn ready(&self, task: &DownloadTask) -> bool {
+        task.kind != TaskKind::Media || !crate::media::waits_for_tools(&self.0, &task.id)
     }
 }
 

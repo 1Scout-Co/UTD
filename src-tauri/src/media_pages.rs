@@ -42,6 +42,14 @@ pub fn channel_page_error(url: &str) -> String {
     format!("{CHANNEL_PAGE_ERROR}: {}", url.trim())
 }
 
+/// Link kênh lẫn trong lô (hộp Thêm hàng loạt, chất lượng chung): lô không liệt kê kênh, chỉ báo cách làm.
+pub const CHANNEL_IN_BATCH: &str = "Đây là link kênh: dán vào ô Thêm URL để chọn video của kênh.";
+
+/// Câu lỗi là mã `channel_page:` (Phân tích thấy link rút gọn trỏ tới kênh).
+pub fn is_channel_page_error(message: &str) -> bool {
+    message.starts_with(CHANNEL_PAGE_ERROR)
+}
+
 /// Thẻ của kênh YouTube liệt kê được video (`/@kênh/videos`); `featured` là trang chủ kênh.
 const YOUTUBE_TABS: &[&str] = &["videos", "shorts", "streams", "featured"];
 

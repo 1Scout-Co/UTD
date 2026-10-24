@@ -156,12 +156,23 @@ export function HomeScreen() {
         usedPercent: demoStats.storageUsed,
       }
 
+  // Task mới (thêm từ hộp Tải cả kênh) lên đầu danh sách.
+  const showTask = useCallback((task: EngineTask) => {
+    setTasks((previous) => [task, ...previous.filter((item) => item.id !== task.id)])
+    setScreenState("data")
+  }, [])
+  const channel = useChannelFlow(showTask)
+  const { openChannel, setOpen: setChannelOpen } = channel
+
+  // Mỗi lúc một hộp: link/lô từ trình duyệt tới liền nhau thì hộp mới thay hộp cũ, không chồng lên.
   const closeDialogs = useCallback(() => {
     setAddOpen(false)
     setMediaOpen(false)
     setSettingsOpen(false)
-  }, [])
+    setChannelOpen(false)
+  }, [setChannelOpen])
   const batch = useBatchFlow(desktop, closeDialogs)
+  const { setOpen: setBatchOpen } = batch
   // Task vừa thêm theo lô: lên đầu danh sách (thứ tự chạy do hàng đợi ở app quyết).
   const addTasks = (added: EngineTask[]) => {
     const ids = new Set(added.map((task) => task.id))
@@ -170,23 +181,16 @@ export function HomeScreen() {
     refreshStorage()
   }
 
-  // Task mới (thêm từ hộp Tải cả kênh) lên đầu danh sách.
-  const showTask = useCallback((task: EngineTask) => {
-    setTasks((previous) => [task, ...previous.filter((item) => item.id !== task.id)])
-    setScreenState("data")
-  }, [])
-  const channel = useChannelFlow(tasks, showTask)
-  const { openChannel } = channel
-
   // Mã `channel_page:` của app (kể cả link rút gọn trỏ tới kênh) mở thẳng hộp Tải cả kênh.
   const openChannelWith = useCallback(
     (url: string) => {
       setAddOpen(false)
       setSettingsOpen(false)
       setMediaOpen(false)
+      setBatchOpen(false)
       openChannel(url)
     },
-    [openChannel],
+    [openChannel, setBatchOpen],
   )
 
   // Link trang video ⇒ hộp Tải media; link kênh (TikTok @user, kênh/playlist YouTube) ⇒ hộp Tải cả kênh.
@@ -198,11 +202,13 @@ export function HomeScreen() {
       }
       setAddOpen(false)
       setSettingsOpen(false)
+      setBatchOpen(false)
+      setChannelOpen(false)
       setMediaError(null)
       setMediaRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1 }))
       setMediaOpen(true)
     },
-    [openChannelWith],
+    [openChannelWith, setBatchOpen, setChannelOpen],
   )
   useMediaRequests(desktop, openMediaWith)
 
@@ -354,8 +360,9 @@ export function HomeScreen() {
         onTaskRemoved={dropTask}
         onBatch={batch.openEmpty}
       />
+      {/* Hai hộp cùng cấp: key có tiền tố riêng để không trùng nhau (cùng bắt đầu từ 0). */}
       <BatchDialog
-        key={batch.key}
+        key={`batch-${batch.key}`}
         open={batch.open}
         onOpenChange={batch.setOpen}
         desktop={desktop}
@@ -376,7 +383,7 @@ export function HomeScreen() {
         onBatch={batch.openWith}
       />
       <MediaPickerDialog
-        key={mediaRequest?.key ?? 0}
+        key={`media-${mediaRequest?.key ?? 0}`}
         initialUrl={mediaRequest?.url}
         open={mediaOpen}
         onOpenChange={setMediaOpen}

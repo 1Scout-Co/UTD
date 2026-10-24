@@ -11,6 +11,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { isMac } from "@/shared/platform"
 
 import { formatBytes } from "../model/download-mapper"
 import type {
@@ -27,34 +28,51 @@ import { percentOf, StageProgress } from "./stage-progress"
 export interface ToolMeta {
   name: MediaToolName
   role: string
+  /** Nơi tải: mặc định GitHub (`repo` là tên kho). */
+  site?: string
   repo: string
   license: string
   size: string
 }
 
-/** Thông tin hiện trước khi tải: bấm nút = đồng ý tải từ nguồn này. */
+/**
+ * Thông tin hiện trước khi tải: bấm nút = đồng ý tải từ nguồn này. Theo bảng nguồn của app
+ * (`src-tauri/src/media/sources.rs`): Windows dùng bản `.exe`/zip, macOS bản `yt-dlp_macos`, zip deno của
+ * Apple và ffmpeg + ffprobe của Martin Riedl. Kích thước đo ngày 2026-10-24.
+ */
 export const TOOLS: ToolMeta[] = [
   {
     name: "yt-dlp",
     role: "tải video từ trang web",
     repo: "yt-dlp/yt-dlp",
-    license: "Unlicense (bản .exe có phần GPLv3+)",
-    size: "~17 MB",
+    license: isMac
+      ? "Unlicense (bản yt-dlp_macos có phần GPLv3+)"
+      : "Unlicense (bản .exe có phần GPLv3+)",
+    size: isMac ? "~35 MB" : "~17 MB",
   },
   {
     name: "deno",
     role: "giải thử thách YouTube",
     repo: "denoland/deno",
     license: "MIT",
-    size: "~43 MB",
+    size: isMac ? "~40 MB" : "~43 MB",
   },
-  {
-    name: "ffmpeg",
-    role: "ghép, đổi định dạng",
-    repo: "yt-dlp/FFmpeg-Builds",
-    license: "GPLv3, tải riêng, không kèm bộ cài",
-    size: "~191 MB",
-  },
+  isMac
+    ? {
+        name: "ffmpeg",
+        role: "ghép, đổi định dạng",
+        site: "Martin Riedl",
+        repo: "ffmpeg.martin-riedl.de",
+        license: "GPLv3, tải riêng, không kèm bộ cài",
+        size: "~60 MB",
+      }
+    : {
+        name: "ffmpeg",
+        role: "ghép, đổi định dạng",
+        repo: "yt-dlp/FFmpeg-Builds",
+        license: "GPLv3, tải riêng, không kèm bộ cài",
+        size: "~191 MB",
+      },
 ]
 
 const SOURCE_LABEL: Record<MediaToolSource, string> = {
@@ -136,7 +154,7 @@ export function ConsentNote({
       <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
       <span>
         {lead ? `${lead} ` : null}
-        Nguồn: GitHub <code>{meta.repo}</code> · Giấy phép: {meta.license} ·{" "}
+        Nguồn: {meta.site ?? "GitHub"} <code>{meta.repo}</code> · Giấy phép: {meta.license} ·{" "}
         <span className="whitespace-nowrap">{meta.size}</span> · Kiểm{" "}
         <span className="whitespace-nowrap">SHA-256</span> trước khi dùng.
       </span>

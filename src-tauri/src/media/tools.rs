@@ -256,7 +256,8 @@ fn own_only() -> bool {
 }
 
 /// Chỗ cài quen thuộc mà PATH của app có thể thiếu: bộ cài deno (`~/.deno/bin`); app macOS mở từ
-/// Finder chỉ có PATH tối thiểu nên thêm Homebrew/MacPorts.
+/// Finder/Dock chỉ có PATH tối thiểu (`/usr/bin:/bin:/usr/sbin:/sbin`) nên thêm Homebrew (Apple Silicon
+/// `/opt/homebrew`, Intel `/usr/local`) và MacPorts. Chỗ DUY NHẤT dò công cụ ngoài PATH trên macOS.
 fn usual_dirs() -> Vec<PathBuf> {
     let home = env_dir("USERPROFILE").or_else(|| env_dir("HOME"));
     let mut dirs: Vec<PathBuf> = home
@@ -432,17 +433,8 @@ fn registry_path_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// macOS không có PATH lưu trong registry, mà app mở từ Finder/Dock chỉ có PATH tối thiểu
-/// (`/usr/bin:/bin:/usr/sbin:/sbin`): thêm chỗ Homebrew (Apple Silicon, Intel) và MacPorts cài công cụ.
-#[cfg(target_os = "macos")]
-fn registry_path_dirs() -> Vec<PathBuf> {
-    ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
-        .into_iter()
-        .map(PathBuf::from)
-        .collect()
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
+/// Ngoài Windows không có PATH lưu trong registry (chỗ cài quen thuộc của macOS: `usual_dirs`).
+#[cfg(not(windows))]
 fn registry_path_dirs() -> Vec<PathBuf> {
     Vec::new()
 }

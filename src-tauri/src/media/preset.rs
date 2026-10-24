@@ -152,7 +152,13 @@ pub(super) async fn settle(
         Ok(result) => result,
         Err(failure) if failure.outdated => return Ok(Settled::Outdated(failure.message)),
         Err(failure) => {
-            probe_failed(sink, journal, task, &failure.message)?;
+            // Link rút gọn trỏ tới kênh: không có hộp nào mở ở đây, báo cách làm thay cho mã `channel_page:`.
+            let message = if crate::media_pages::is_channel_page_error(&failure.message) {
+                crate::media_pages::CHANNEL_IN_BATCH
+            } else {
+                &failure.message
+            };
+            probe_failed(sink, journal, task, message)?;
             return Ok(Settled::Stopped);
         }
     };

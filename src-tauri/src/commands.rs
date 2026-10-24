@@ -245,16 +245,39 @@ fn measure_disk(app: &AppHandle, path: Option<String>) -> Result<DiskSpace, Stri
     std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
     let free_bytes = fs2::available_space(&path).map_err(|error| error.to_string())?;
     let total_bytes = fs2::total_space(&path).map_err(|error| error.to_string())?;
-    let label = path
-        .components()
-        .next()
-        .map(|component| component.as_os_str().to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Ổ đĩa".into());
     Ok(DiskSpace {
         free_bytes,
         total_bytes,
-        label,
+        label: volume_label(&path),
     })
+}
+
+/// Tên ổ trên thẻ dung lượng: Windows `C:`; macOS tên ổ như Finder (không phải `/`).
+fn volume_label(path: &Path) -> String {
+    if cfg!(target_os = "macos") {
+        return mac_volume_label(path, Path::new("/Volumes"));
+    }
+    path.components()
+        .next()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Ổ đĩa".into())
+}
+
+/// macOS: ổ ngoài là `/Volumes/<tên>`; ổ khởi động có liên kết trong `/Volumes` trỏ về `/` mang tên ổ
+/// (thường "Macintosh HD"). Không thấy thì gọi chung "Ổ đĩa".
+fn mac_volume_label(path: &Path, volumes: &Path) -> String {
+    if let Ok(rest) = path.strip_prefix(volumes)
+        && let Some(name) = rest.components().next()
+    {
+        return name.as_os_str().to_string_lossy().into_owned();
+    }
+    std::fs::read_dir(volumes)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find(|entry| std::fs::read_link(entry.path()).is_ok_and(|target| target == Path::new("/")))
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Ổ đĩa".into())
 }
 
 /// Thư mục người dùng chọn ở hộp Thêm (kiểm như Cài đặt, tạo nếu chưa có), không chọn ⇒ thư mục mặc định.
@@ -736,6 +759,22 @@ mod tests {
             is_within(&root.join("utd-data").join("bin"), &data),
             "APFS mặc định không phân biệt hoa thường"
         );
+    }
+
+    #[test]
+    fn mac_disk_card_shows_the_volume_name_not_a_slash() {
+        let root = scratch();
+        let volumes = root.join("Volumes");
+        std::fs::create_dir_all(volumes.join("USB")).unwrap();
+        let film = volumes.join("USB").join("Phim");
+        assert_eq!(mac_volume_label(&film, &volumes), "USB");
+        assert_eq!(mac_volume_label(Path::new("/Users/ban/Downloads"), &volumes), "Ổ đĩa");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/", volumes.join("Macintosh HD")).unwrap();
+            assert_eq!(mac_volume_label(Path::new("/Users/ban/Downloads"), &volumes), "Macintosh HD");
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(target_os = "macos")]

@@ -6,12 +6,13 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { cn } from "cn"
+import { isMac } from "@/shared/platform"
 
 import type { DownloadFilter } from "../../model/types"
 import { TABS } from "./soniox-table-parts"
 
 /** Phím tắt hiện như hệ điều hành quen: ⌘ trên Mac, Ctrl trên Windows (bắt phím thì nhận cả hai). */
-const MOD_KEY = /Mac/.test(navigator.userAgent) ? "⌘" : "Ctrl"
+const MOD_KEY = isMac ? "⌘" : "Ctrl"
 
 function SearchField({
   query,
