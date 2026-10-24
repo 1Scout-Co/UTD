@@ -16,7 +16,9 @@ use crate::media::finish::{
 };
 use crate::media::preset::{self, Settled};
 use crate::media::sources::Tool;
-use crate::media::{auto_tools, fast, ffmpeg_location, js_runtime_args, tokio_command, tools};
+use crate::media::{
+    auto_tools, fast, ffmpeg_location, js_runtime_args, kill_tree, tokio_command, tools,
+};
 use crate::state::AppState;
 
 enum StreamMessage {
@@ -304,7 +306,8 @@ async fn attempt(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                let _ = child.kill().await;
+                // Tiến trình con của yt-dlp còn sống thì vẫn ghi vào file .part sau khi đã Tạm dừng.
+                kill_tree(&mut child).await;
                 let _ = child.wait().await;
                 out_task.abort();
                 err_task.abort();

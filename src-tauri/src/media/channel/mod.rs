@@ -30,7 +30,9 @@ pub use seen::{ChannelPick, forget, remember};
 #[cfg(test)]
 pub(crate) use seen::is_downloaded;
 
-use crate::media::{auto_tools, interactive_tools, js_runtime_args, probe, tokio_command, tools};
+use crate::media::{
+    auto_tools, interactive_tools, js_runtime_args, kill_tree, probe, tokio_command, tools,
+};
 use crate::state::AppState;
 
 /// Kênh dài hơn thì chỉ lấy chừng này video mới nhất (TikTok/YouTube trả mới nhất trước).
@@ -260,7 +262,7 @@ async fn list_entries(request: &Request<'_>, sink: &impl Sink) -> ListingEvent {
     listing.ready = Some(request.ready);
     let stop = listing.read(stdout, request.cancel).await;
     if stop != Stop::Ended {
-        let _ = child.start_kill();
+        kill_tree(&mut child).await;
     }
     let success = child.wait().await.is_ok_and(|status| status.success());
     let stderr = match stderr {

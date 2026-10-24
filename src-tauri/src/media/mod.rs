@@ -418,6 +418,27 @@ pub(crate) fn tokio_command(program: &Path) -> tokio::process::Command {
     command
 }
 
+/// Dừng tiến trình cùng các tiến trình con. yt-dlp.exe (PyInstaller một file) chạy lại chính nó thành
+/// tiến trình con: chỉ giết tiến trình ngoài thì tiến trình con vẫn liệt kê/tải tiếp và giữ ống
+/// stdout/stderr, bên đọc chờ tới khi nó tự xong (nút Dừng của Tải cả kênh treo cả phút). Windows:
+/// `taskkill /T` giết cả cây, phải gọi lúc tiến trình ngoài còn sống.
+pub(crate) async fn kill_tree(child: &mut tokio::process::Child) {
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        let taskkill = std::env::var_os("SystemRoot")
+            .map(|root| std::path::PathBuf::from(root).join(r"System32\taskkill.exe"))
+            .unwrap_or_else(|| "taskkill.exe".into());
+        let _ = tokio_command(&taskkill)
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+    }
+    let _ = child.start_kill();
+}
+
 pub(crate) fn ffmpeg_location(tools: &tools::MediaTools) -> Option<String> {
     tools::ffmpeg_directory(tools.ffmpeg.as_deref())
 }
@@ -523,5 +544,34 @@ mod tests {
         // Bản trước EJS không biết cờ này: truyền vào là lỗi "no such option".
         assert!(js_runtime_args(&tools_with("2025.10.22", Some(deno))).is_empty());
         assert!(js_runtime_args(&tools_with("không rõ", Some(deno))).is_empty());
+    }
+
+    /// Như yt-dlp.exe: `cmd` chạy `ping` làm tiến trình con, `ping` giữ ống stdout. Giết cả cây thì đọc
+    /// stdout tới EOF ngay; chỉ giết `cmd` thì phải chờ `ping` tự xong (~30 s).
+    #[cfg(windows)]
+    #[test]
+    fn kill_tree_also_stops_children_holding_the_pipe() {
+        use tokio::io::AsyncReadExt;
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let mut child = tokio_command(Path::new("cmd.exe"))
+                .args(["/C", "ping -n 30 127.0.0.1"])
+                .stdout(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut stdout = child.stdout.take().unwrap();
+            let mut first = [0u8; 1];
+            stdout.read_exact(&mut first).await.unwrap();
+            kill_tree(&mut child).await;
+            let mut rest = Vec::new();
+            let drained = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                stdout.read_to_end(&mut rest),
+            )
+            .await;
+            assert!(drained.is_ok(), "tiến trình con vẫn giữ ống stdout");
+            let _ = child.wait().await;
+        });
     }
 }
