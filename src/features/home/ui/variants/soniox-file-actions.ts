@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 
-import { t } from "@/shared/i18n/i18n"
+import { commandErrorText, t } from "@/shared/i18n/i18n"
 
 import { isDesktopApp } from "../../api/downloads"
 import {
@@ -25,10 +25,6 @@ export type FileActionHooks = {
 
 export type ActionMessage = { tone: "ok" | "error"; text: string }
 
-function messageOf(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
-}
-
 /** Chạy một thao tác; trả chuỗi = báo thành công, ném lỗi = báo lỗi. Thông báo tự tắt sau 6 giây. */
 function useActionMessage() {
   const [message, setMessage] = useState<ActionMessage | null>(null)
@@ -46,7 +42,7 @@ function useActionMessage() {
         if (ok) setMessage({ tone: "ok", text: ok })
       })
       .catch((reason: unknown) =>
-        setMessage({ tone: "error", text: messageOf(reason) })
+        setMessage({ tone: "error", text: commandErrorText(reason) })
       )
   }
 

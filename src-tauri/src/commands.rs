@@ -186,8 +186,8 @@ pub async fn default_download_dir(app: AppHandle) -> Result<String, String> {
 const DOWNLOAD_DIR_KEY: &str = "download_dir";
 /// Chừa chỗ cho tên file trong giới hạn 260 ký tự của Windows.
 const MAX_DOWNLOAD_DIR_CHARS: usize = 200;
-const INSIDE_DATA_DIR: &str = "Không dùng thư mục dữ liệu của UTD để tải.";
-const SAVE_FAILED: &str = "Không lưu được cài đặt.";
+const INSIDE_DATA_DIR: &str = "[dir.data_dir] Không dùng thư mục dữ liệu của UTD để tải.";
+const SAVE_FAILED: &str = "[settings.save_failed] Không lưu được cài đặt.";
 
 /// Lưu thư mục tải mặc định; trả đường dẫn đã chuẩn hoá.
 /// Chạy ngoài luồng giao diện: tạo thư mục / ghi thử trên ổ mạng có thể chậm.
@@ -390,10 +390,10 @@ fn is_bad_folder_name(name: &str) -> bool {
 fn parse_download_dir(raw: &str) -> Result<PathBuf, String> {
     let value = raw.trim();
     if value.is_empty() {
-        return Err("Chưa chọn thư mục.".into());
+        return Err("[dir.empty] Chưa chọn thư mục.".into());
     }
     if value.chars().count() > MAX_DOWNLOAD_DIR_CHARS {
-        return Err("Đường dẫn quá dài.".into());
+        return Err("[dir.too_long] Đường dẫn quá dài.".into());
     }
     let path = Path::new(value);
     let bad_name = path.components().any(|component| match component {
@@ -401,20 +401,20 @@ fn parse_download_dir(raw: &str) -> Result<PathBuf, String> {
         _ => false,
     });
     if value.chars().any(is_hidden_char) || bad_name {
-        return Err("Đường dẫn có ký tự không hợp lệ.".into());
+        return Err("[dir.bad_chars] Đường dẫn có ký tự không hợp lệ.".into());
     }
     if !path.is_absolute() {
         return Err(if cfg!(windows) {
-            "Cần đường dẫn đầy đủ, ví dụ D:\\Tải về.".into()
+            "[dir.relative] Cần đường dẫn đầy đủ, ví dụ D:\\Tải về.".into()
         } else {
-            "Cần đường dẫn đầy đủ, ví dụ /Users/ban/Downloads/UTD.".into()
+            "[dir.relative_mac] Cần đường dẫn đầy đủ, ví dụ /Users/ban/Downloads/UTD.".into()
         });
     }
     if path
         .components()
         .any(|component| matches!(component, Component::ParentDir))
     {
-        return Err("Đường dẫn không được chứa \"..\".".into());
+        return Err("[dir.dot_dot] Đường dẫn không được chứa \"..\".".into());
     }
     Ok(path.components().collect())
 }
@@ -436,7 +436,7 @@ fn checked_dest_dir(raw: &str, data_dir: &Path) -> Result<PathBuf, String> {
 fn create_download_dir(raw: &str, data_dir: &Path, probe: bool) -> Result<PathBuf, String> {
     let folder = parse_download_dir(raw)?;
     if folder.is_file() {
-        return Err("Đây là tệp, hãy chọn một thư mục.".into());
+        return Err("[dir.is_file] Đây là tệp, hãy chọn một thư mục.".into());
     }
     if is_within(&folder, data_dir) {
         return Err(INSIDE_DATA_DIR.into());
@@ -450,7 +450,7 @@ fn create_download_dir(raw: &str, data_dir: &Path, probe: bool) -> Result<PathBu
     if let Err(error) = std::fs::create_dir_all(&folder) {
         remove_empty_dirs(&created);
         log::warn!("Download folder create failed: {}", error.kind());
-        return Err("Không tạo được thư mục này.".into());
+        return Err("[dir.create_failed] Không tạo được thư mục này.".into());
     }
     // Junction hoặc tên 8.3 vẫn có thể trỏ vào thư mục dữ liệu: so cả đường dẫn thật.
     let real_inside = match (
@@ -483,7 +483,7 @@ fn remove_empty_dirs(levels: &[PathBuf]) {
 
 /// Tạo rồi xoá một tệp tên ngẫu nhiên: chứng minh ghi và xoá được trong thư mục.
 fn probe_writable(folder: &Path) -> Result<(), String> {
-    let failed = || "Không ghi được vào thư mục này.".to_string();
+    let failed = || "[dir.not_writable] Không ghi được vào thư mục này.".to_string();
     let probe = folder.join(format!(".utd-probe-{}.tmp", uuid::Uuid::new_v4().simple()));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -591,7 +591,7 @@ mod tests {
         let long = root.join("x".repeat(MAX_DOWNLOAD_DIR_CHARS));
         assert_eq!(
             prepare_download_dir(&text(&long), &data).unwrap_err(),
-            "Đường dẫn quá dài."
+            "[dir.too_long] Đường dẫn quá dài."
         );
         #[cfg(windows)]
         for name in ["a?b", "NUL", "com1.txt", "Phim.", "Phim "] {

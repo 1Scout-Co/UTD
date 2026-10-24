@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { formatBytes, formatNumber } from "@/shared/i18n/format"
+import { t } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
-import { formatBytes } from "../model/download-mapper"
-import type { BatchRow } from "../model/batch-links"
+import { groupOf, type BatchRow } from "../model/batch-links"
 import type { BatchQuality } from "../model/types"
 
 export type SourceMode = "list" | "pattern"
@@ -56,10 +57,7 @@ export function Segmented<T extends string>({
   )
 }
 
-const MODES: { id: SourceMode; label: string }[] = [
-  { id: "list", label: "Danh sách" },
-  { id: "pattern", label: "Mẫu" },
-]
+const MODES: SourceMode[] = ["list", "pattern"]
 
 /** File .txt lớn hơn chừng này thì không đọc (10.000 link dài vẫn dưới 5 MB). */
 const MAX_TEXT_FILE = 5 * 1024 * 1024
@@ -96,13 +94,13 @@ export function BatchSource({
     event.target.value = ""
     if (!file) return
     if (file.size > MAX_TEXT_FILE) {
-      onError("File quá lớn (tối đa 5 MB).")
+      onError(t("batch.fileTooBig", { size: formatBytes(MAX_TEXT_FILE) }))
       return
     }
     void file
       .text()
       .then(onAppend)
-      .catch(() => onError("Không đọc được file."))
+      .catch(() => onError(t("batch.fileReadFailed")))
   }
   const paste = () => {
     void navigator.clipboard
@@ -114,12 +112,18 @@ export function BatchSource({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Segmented label="Nguồn link" value={mode} options={MODES} onChange={onMode} disabled={busy} />
+        <Segmented
+          label={t("batch.source")}
+          value={mode}
+          options={MODES.map((id) => ({ id, label: t(`batch.mode.${id}`) }))}
+          onChange={onMode}
+          disabled={busy}
+        />
         {mode === "list" ? (
-          <div className="ml-auto flex gap-1.5">
+          <div className="ms-auto flex gap-1.5">
             <Button type="button" variant="outline" disabled={busy} onClick={paste}>
               <ClipboardPaste />
-              Dán
+              {t("app.paste")}
             </Button>
             <Button
               type="button"
@@ -128,7 +132,7 @@ export function BatchSource({
               onClick={() => fileRef.current?.click()}
             >
               <FileText />
-              Nhập .txt
+              {t("batch.importTxt")}
             </Button>
             <input
               ref={fileRef}
@@ -144,17 +148,17 @@ export function BatchSource({
       </div>
       {mode === "list" ? (
         <Textarea
-          aria-label="Danh sách link"
+          aria-label={t("batch.listLabel")}
           value={text}
           onChange={(event) => onText(event.target.value)}
-          placeholder={"Mỗi dòng một link\nhttps://example.com/file-1.zip"}
+          placeholder={`${t("batch.listPlaceholder")}\nhttps://example.com/file-1.zip`}
           disabled={busy}
           spellCheck={false}
           className="max-h-28 min-h-20 font-mono text-sm"
         />
       ) : (
         <Input
-          aria-label="Mẫu link"
+          aria-label={t("batch.patternLabel")}
           value={pattern}
           onChange={(event) => onPattern(event.target.value)}
           placeholder="https://example.com/anh[001-120].jpg"
@@ -189,11 +193,6 @@ function SizeCell({ row, probing }: { row: BatchRow; probing: boolean }) {
   return <span>{row.size === null ? "—" : formatBytes(row.size)}</span>
 }
 
-const KIND_LABEL: Record<BatchRow["kind"], string> = {
-  file: "File",
-  media: "Video",
-  page: "Trang web",
-}
 
 /**
  * Bảng xem trước: tick từng dòng hoặc tất cả. Chỉ vẽ các dòng đang thấy (mẫu có thể ra 10.000 link);
@@ -224,37 +223,39 @@ export function BatchTable({
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
     >
       <table className="w-full table-fixed text-sm">
-        <thead className="sticky top-0 z-10 bg-muted text-left text-xs text-muted-foreground">
+        <thead className="sticky top-0 z-10 bg-muted text-start text-xs text-muted-foreground">
           <tr className="h-9">
-            <th className="w-10 pl-3">
+            <th className="w-10 ps-3">
               <Checkbox
-                aria-label="Chọn tất cả"
+                aria-label={t("app.selectAll")}
                 checked={rows.length > 0 && checked === rows.length}
                 indeterminate={checked > 0 && checked < rows.length}
                 onCheckedChange={(value) => onToggleAll(value)}
               />
             </th>
-            <th className="font-medium">Tên file</th>
-            <th className="w-24 font-medium">Kích thước</th>
-            <th className="w-24 pr-3 font-medium">Loại</th>
+            <th className="font-medium">{t("add.fileName")}</th>
+            <th className="w-24 font-medium">{t("table.size")}</th>
+            <th className="w-24 pe-3 font-medium">{t("batch.type")}</th>
           </tr>
         </thead>
         <tbody>
           {first > 0 ? <tr style={{ height: first * ROW_HEIGHT }} aria-hidden /> : null}
           {shown.map((row) => (
             <tr key={row.url} className="h-9 border-t border-border/40" title={row.url}>
-              <td className="pl-3">
+              <td className="ps-3">
                 <Checkbox
-                  aria-label={`Chọn ${row.name}`}
+                  aria-label={t("batch.selectRow", { name: row.name })}
                   checked={row.checked}
                   onCheckedChange={(value) => onToggle(row.url, value)}
                 />
               </td>
-              <td className="truncate pr-2">{row.name}</td>
+              <td dir="auto" className="truncate pe-2 [text-align:match-parent]">
+                {row.name}
+              </td>
               <td className="tabular-nums">
                 <SizeCell row={row} probing={probing} />
               </td>
-              <td className="pr-3">
+              <td className="pe-3">
                 <span
                   className={cn(
                     "rounded-full px-2 py-0.5 text-xs",
@@ -265,7 +266,7 @@ export function BatchTable({
                         : "bg-card",
                   )}
                 >
-                  {KIND_LABEL[row.kind]}
+                  {row.kind === "file" ? t("batch.kind.file") : groupLabel(groupOf(row))}
                 </span>
               </td>
             </tr>
@@ -279,6 +280,11 @@ export function BatchTable({
   )
 }
 
+/** Tên nhóm của bộ lọc nhanh: nhóm đặt sẵn (`:video`…) theo ngôn ngữ, còn lại là đuôi file. */
+function groupLabel(name: string): string {
+  return name.startsWith(":") ? t(`batch.group.${name.slice(1) as "video" | "page" | "other"}`) : name
+}
+
 /** Lọc nhanh theo loại (đuôi file, Video, Trang web): bấm để tick/bỏ cả nhóm. */
 export function GroupChips({
   groups,
@@ -289,7 +295,7 @@ export function GroupChips({
 }) {
   if (groups.length < 2) return null
   return (
-    <div role="group" aria-label="Lọc theo loại" className="flex flex-wrap gap-1.5">
+    <div role="group" aria-label={t("batch.filterByType")} className="flex flex-wrap gap-1.5">
       {groups.map((group) => {
         const all = group.checked === group.total
         return (
@@ -302,8 +308,10 @@ export function GroupChips({
             onClick={() => onToggle(group.name, !all)}
             className={cn("rounded-full", all ? "bg-accent text-accent-foreground" : "")}
           >
-            {group.name}
-            <span className="tabular-nums text-muted-foreground">{group.total}</span>
+            {groupLabel(group.name)}
+            <span className="tabular-nums text-muted-foreground">
+              {formatNumber(group.total, 0)}
+            </span>
           </Button>
         )
       })}
@@ -311,8 +319,8 @@ export function GroupChips({
   )
 }
 
+// "best" thêm lúc vẽ (nhãn theo ngôn ngữ, format.best); còn lại là tên định dạng.
 const QUALITIES: { id: BatchQuality; label: string }[] = [
-  { id: "best", label: "Tốt nhất" },
   { id: "1080", label: "1080p" },
   { id: "720", label: "720p" },
   { id: "audio-m4a", label: "M4A" },
@@ -334,12 +342,15 @@ export function QualityPicker({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="text-sm font-medium">
-        Video <span className="text-muted-foreground tabular-nums">({count})</span>
+        {t("batch.group.video")}{" "}
+        <span className="text-muted-foreground tabular-nums">
+          ({formatNumber(count, 0)})
+        </span>
       </span>
       <Segmented
-        label="Chất lượng video"
+        label={t("batch.videoQuality")}
         value={value}
-        options={QUALITIES}
+        options={[{ id: "best", label: t("format.best") }, ...QUALITIES]}
         onChange={onChange}
         disabled={disabled}
       />
@@ -363,10 +374,10 @@ export function FolderButton({
     <button
       type="button"
       disabled={!desktop || disabled}
-      title={desktop ? dir : "Chọn thư mục chỉ có trong app UTD"}
-      aria-label={`Lưu tại ${dir || "Downloads\\UTD"}`}
+      title={desktop ? dir : t("add.pickDesktopOnly")}
+      aria-label={t("batch.saveTo", { dir: dir || "Downloads\\UTD" })}
       onClick={onPick}
-      className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-input px-3 text-left text-sm text-muted-foreground transition-colors hover:border-foreground/25 disabled:cursor-not-allowed disabled:opacity-70"
+      className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-input px-3 text-start text-sm text-muted-foreground transition-colors hover:border-foreground/25 disabled:cursor-not-allowed disabled:opacity-70"
     >
       <FolderOpen className="size-4 shrink-0" />
       <span className="truncate">{dir || "Downloads\\UTD"}</span>

@@ -13,5 +13,11 @@
   "sendFailed": { "message": "無法將要求傳送到 UTD。" },
   "noResponse": { "message": "UTD 沒有回應。" },
   "notRunning": { "message": "UTD 未執行。請開啟 UTD 後再試。" },
-  "notConnected": { "message": "無法連線到 UTD。請確認 UTD 正在執行，且已啟用瀏覽器整合。" }
+  "notConnected": { "message": "無法連線到 UTD。請確認 UTD 正在執行，且已啟用瀏覽器整合。" },
+  "menuAll": { "message": "用 UTD 下載所有連結" },
+  "readLinksFailed": { "message": "無法讀取此頁面上的連結。" },
+  "noLinks": { "message": "此頁面上沒有可下載的連結。" },
+  "tooManyLinks": { "message": "單次傳送的連結過多。" },
+  "openedForChannel": { "message": "已開啟 UTD 以下載整個頻道。" },
+  "openedForLinks": { "message": "已開啟 UTD 以選擇連結。" }
 }

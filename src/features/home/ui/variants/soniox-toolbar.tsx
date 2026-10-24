@@ -156,11 +156,11 @@ export function SonioxToolbar({
           <Button
             variant="outline"
             className="h-9 px-3 text-sm"
-            title="Thêm hàng loạt (Ctrl+B)"
+            title={t("batch.shortcut", { keys: `${MOD_KEY}+B` })}
             onClick={onBatch}
           >
             <ListPlus />
-            Hàng loạt
+            {t("batch.button")}
           </Button>
         ) : null}
         <Button

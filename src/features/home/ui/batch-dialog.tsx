@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { commandErrorText, t } from "@/shared/i18n/i18n"
 
 import { addBatchDownloads, pickFolder } from "../api/downloads"
 import { groupOf, type BatchRow } from "../model/batch-links"
@@ -23,10 +24,6 @@ import {
   type SourceMode,
 } from "./batch-dialog-parts"
 import { groupsOf, summaryOf, useBatchRows, useSourceLinks } from "./use-batch-rows"
-
-function messageOf(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
-}
 
 export interface BatchDialogProps {
   open: boolean
@@ -65,10 +62,16 @@ function useSubmit(props: BatchDialogProps, setText: (text: string) => void, set
       }
       setMode("list")
       setText(result.failed.map((item) => item.url).join("\n"))
-      const added = result.tasks.length ? `Đã thêm ${result.tasks.length}. ` : ""
-      setError(`${added}${result.failed.length} link lỗi: ${result.failed[0].message}`)
+      const added = result.tasks.length
+        ? `${t("batch.added", { count: result.tasks.length })} `
+        : ""
+      const failed = t("batch.failed", {
+        count: result.failed.length,
+        error: commandErrorText(result.failed[0].message),
+      })
+      setError(`${added}${failed}`)
     } catch (reason) {
-      setError(messageOf(reason))
+      setError(commandErrorText(reason))
     } finally {
       setBusy(false)
     }
@@ -126,11 +129,11 @@ function BatchActions({
       <FolderButton dir={dir} desktop={desktop} disabled={busy} onPick={onPick} />
       <Button variant="outline" type="button" disabled={busy || !ready} onClick={() => onSend(true)}>
         <ListPlus />
-        Thêm vào hàng đợi
+        {t("batch.queue")}
       </Button>
       <Button data-primary type="button" disabled={busy || !ready} onClick={() => onSend(false)}>
         <Play />
-        {busy ? "Đang thêm…" : "Bắt đầu ngay"}
+        {busy ? t("app.adding") : t("batch.startNow")}
       </Button>
     </div>
   )
@@ -162,7 +165,7 @@ export function BatchDialog(props: BatchDialogProps) {
   const pick = () =>
     void pickFolder(destDir ?? defaultDir)
       .then((picked) => picked && setDestDir(picked))
-      .catch((reason: unknown) => setError(messageOf(reason)))
+      .catch((reason: unknown) => setError(commandErrorText(reason)))
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
@@ -173,9 +176,9 @@ export function BatchDialog(props: BatchDialogProps) {
         className="max-h-[calc(100svh-2rem)] gap-4 overflow-y-auto sm:max-w-[720px]"
       >
         <DialogHeader>
-          <DialogTitle>Thêm hàng loạt</DialogTitle>
+          <DialogTitle>{t("batch.title")}</DialogTitle>
           <DialogDescription className="sr-only">
-            Dán nhiều link, nhập file .txt hoặc dùng mẫu, chọn link rồi tải.
+            {t("batch.description")}
           </DialogDescription>
         </DialogHeader>
         <BatchSource

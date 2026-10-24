@@ -172,7 +172,7 @@ impl Auto {
         self.inner
             .journal
             .set_setting(SETTING_KEY, if enabled { "on" } else { "off" })
-            .map_err(|_| "Không lưu được cài đặt.".to_string())?;
+            .map_err(|_| "[settings.save_failed] Không lưu được cài đặt.".to_string())?;
         let stop = !enabled && self.state().active.is_some();
         self.update(|state| {
             state.enabled = enabled;
@@ -285,7 +285,7 @@ impl Auto {
             // Người dùng bấm Huỷ (Cài đặt) sau lúc mình nhờ tải, hoặc trước đó mà mình không được bật lại.
             if state.paused && (start.is_some() || !revive) {
                 return if needed {
-                    Wait::Failed("Đã huỷ tải công cụ.".into())
+                    Wait::Failed("[tool.auto_cancelled] Đã huỷ tải công cụ.".into())
                 } else {
                     Wait::Ready
                 };
@@ -310,8 +310,12 @@ impl Auto {
             return fallback;
         }
         match state.error {
-            Some(reason) => format!("Chưa tải được {}: {reason} UTD sẽ tự thử lại.", tool.name()),
-            None => format!("Chưa tải xong {}. UTD sẽ tự thử lại.", tool.name()),
+            Some(reason) => format!(
+                "[tool.auto_retry] Chưa tải được {}: {} UTD sẽ tự thử lại.",
+                tool.name(),
+                crate::coded::plain(&reason)
+            ),
+            None => format!("[tool.auto_pending] Chưa tải xong {}. UTD sẽ tự thử lại.", tool.name()),
         }
     }
 
@@ -371,7 +375,7 @@ impl Auto {
                     .iter()
                     .find(|(failed, _)| failed == tool)
                     .map(|(_, message)| message.clone())
-                    .unwrap_or_else(|| format!("Đã tải {} nhưng không chạy được.", tool.name()))
+                    .unwrap_or_else(|| format!("[tool.auto_broken] Đã tải {} nhưng không chạy được.", tool.name()))
             });
             let delay = message.as_ref().map(|_| {
                 let delay = self.inner.backoff[failures.min(self.inner.backoff.len() - 1)];
@@ -600,7 +604,7 @@ impl Toolbox for Machine {
     ) -> BoxFuture<'_, Result<Outcome, InstallError>> {
         Box::pin(async move {
             let platform = self.platform.ok_or_else(|| {
-                InstallError::Failed("Chưa tự tải được công cụ trên hệ điều hành này.".into())
+                InstallError::Failed("[tool.unsupported_os] Chưa tự tải được công cụ trên hệ điều hành này.".into())
             })?;
             let release = sources::release(tool, platform);
             let bin = tools::bin_dir();
@@ -816,7 +820,7 @@ mod tests {
         });
         tokio::time::sleep(Duration::from_millis(50)).await;
         auto.update(|state| state.paused = true);
-        assert_eq!(task.await.unwrap(), Wait::Failed("Đã huỷ tải công cụ.".into()));
+        assert_eq!(task.await.unwrap(), Wait::Failed("[tool.auto_cancelled] Đã huỷ tải công cụ.".into()));
         auto.update(|state| state.paused = false);
         // ffmpeg vừa lỗi: không còn "sắp có" (Phân tích không hứa định dạng cần ffmpeg).
         auto.update(|state| state.failed = vec![Tool::Ffmpeg]);
@@ -848,7 +852,7 @@ mod tests {
             &never,
         );
         let waited = tokio::time::timeout(Duration::from_millis(500), task).await;
-        assert_eq!(waited, Ok(Wait::Failed("Đã huỷ tải công cụ.".into())));
+        assert_eq!(waited, Ok(Wait::Failed("[tool.auto_cancelled] Đã huỷ tải công cụ.".into())));
         assert!(auto.state().paused, "vẫn tạm dừng, không tải lại");
         assert!(!auto.holds_media(false), "task media khác không bị giữ lại");
         assert_eq!(

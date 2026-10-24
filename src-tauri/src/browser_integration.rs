@@ -113,7 +113,7 @@ const TEST_INTEGRATION_ENV: &str = "UTD_TEST_BROWSER_INTEGRATION";
 fn check_isolated_install(isolated: bool, allowed: bool) -> Result<(), String> {
     if isolated && !allowed {
         return Err(
-            "Bản chạy thử (UTD_DATA_DIR) không cài tích hợp trình duyệt, để khỏi ghi đè bản UTD đã cài."
+            "[browser.test_build] Bản chạy thử (UTD_DATA_DIR) không cài tích hợp trình duyệt, để khỏi ghi đè bản UTD đã cài."
                 .into(),
         );
     }
@@ -173,7 +173,7 @@ fn install_host(host_path: &Path) -> Result<(), String> {
         let _ = std::fs::remove_file(host_path);
         std::fs::copy(&current, host_path).map_err(|second| {
             format!(
-                "Không cài được native host ({first}; {second}). Đóng UTD đang chạy rồi thử lại."
+                "[browser.host_locked] Không cài được native host ({first}; {second}). Đóng UTD đang chạy rồi thử lại."
             )
         })?;
     }
@@ -184,12 +184,12 @@ fn install_host(host_path: &Path) -> Result<(), String> {
 fn install_host(host_path: &Path) -> Result<(), String> {
     let app = mac::installed_exe()?;
     mac::write_host_script(host_path, &app, crate::ipc::isolated_data_dir().as_deref())
-        .map_err(|error| format!("Không cài được native host ({error})."))
+        .map_err(|error| format!("[browser.host_failed] Không cài được native host ({error})."))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn install_host(_: &Path) -> Result<(), String> {
-    Err("Tích hợp trình duyệt mới có trên Windows và macOS.".into())
+    Err("[browser.unsupported_os] Tích hợp trình duyệt mới có trên Windows và macOS.".into())
 }
 
 #[tauri::command]
@@ -318,10 +318,10 @@ fn register_windows(chromium_manifest: &Path, firefox_manifest: &Path) -> Result
 fn write_registry(root: &winreg::RegKey, key: &str, manifest: &Path) -> Result<(), String> {
     let (subkey, _) = root
         .create_subkey(key)
-        .map_err(|error| format!("Không ghi được đăng ký tích hợp: {error}"))?;
+        .map_err(|error| format!("[browser.register_failed] Không ghi được đăng ký tích hợp: {error}"))?;
     subkey
         .set_value("", &manifest.to_string_lossy().to_string())
-        .map_err(|error| format!("Không ghi được đăng ký tích hợp: {error}"))
+        .map_err(|error| format!("[browser.register_failed] Không ghi được đăng ký tích hợp: {error}"))
 }
 
 #[cfg(test)]

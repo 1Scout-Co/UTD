@@ -13,5 +13,11 @@
   "sendFailed": { "message": "Gagal mengirim permintaan ke UTD." },
   "noResponse": { "message": "UTD tidak merespons." },
   "notRunning": { "message": "UTD belum berjalan. Buka UTD lalu coba lagi." },
-  "notConnected": { "message": "Tidak dapat terhubung ke UTD. Pastikan UTD berjalan dan integrasi browser aktif." }
+  "notConnected": { "message": "Tidak dapat terhubung ke UTD. Pastikan UTD berjalan dan integrasi browser aktif." },
+  "menuAll": { "message": "Unduh semua tautan dengan UTD" },
+  "readLinksFailed": { "message": "Gagal membaca tautan di halaman ini." },
+  "noLinks": { "message": "Tidak ada tautan yang dapat diunduh di halaman ini." },
+  "tooManyLinks": { "message": "Terlalu banyak tautan dalam satu kiriman." },
+  "openedForChannel": { "message": "UTD dibuka untuk mengunduh seluruh channel." },
+  "openedForLinks": { "message": "UTD dibuka untuk memilih tautan." }
 }

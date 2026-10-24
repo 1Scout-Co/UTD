@@ -13,5 +13,11 @@
   "sendFailed": { "message": "İstek UTD'ye gönderilemedi." },
   "noResponse": { "message": "UTD yanıt vermiyor." },
   "notRunning": { "message": "UTD çalışmıyor. UTD'yi açıp yeniden deneyin." },
-  "notConnected": { "message": "UTD'ye bağlanılamadı. UTD'nin çalıştığından ve tarayıcı tümleştirmesinin açık olduğundan emin olun." }
+  "notConnected": { "message": "UTD'ye bağlanılamadı. UTD'nin çalıştığından ve tarayıcı tümleştirmesinin açık olduğundan emin olun." },
+  "menuAll": { "message": "Tüm bağlantıları UTD ile indir" },
+  "readLinksFailed": { "message": "Bu sayfadaki bağlantılar okunamadı." },
+  "noLinks": { "message": "Bu sayfada indirilebilir bağlantı bulunamadı." },
+  "tooManyLinks": { "message": "Tek gönderimde çok fazla bağlantı var." },
+  "openedForChannel": { "message": "Kanalın tamamını indirmek için UTD açıldı." },
+  "openedForLinks": { "message": "Bağlantıları seçmek için UTD açıldı." }
 }

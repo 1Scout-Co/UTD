@@ -18,7 +18,7 @@ const CHROMIUM_BROWSERS: [&str; 7] = [
 ];
 const FIREFOX_BROWSERS: [&str; 1] = ["Mozilla"];
 
-const MOVE_TO_APPLICATIONS: &str = "Kéo UTD vào thư mục Applications, mở lại rồi bật tích hợp.";
+const MOVE_TO_APPLICATIONS: &str = "[browser.move_to_apps] Kéo UTD vào thư mục Applications, mở lại rồi bật tích hợp.";
 
 /// Đường dẫn app đang chạy, chỉ khi nó nằm yên một chỗ. Mở thẳng từ file .dmg, hay từ Downloads khi
 /// còn cờ quarantine (macOS chạy bản sao tạm chỉ-đọc ở `AppTranslocation`) thì chỗ đó sẽ biến mất.
@@ -102,7 +102,7 @@ pub fn refresh_host_script(directory: &Path) -> io::Result<()> {
 pub(super) fn register(chromium_manifest: &Path, firefox_manifest: &Path) -> Result<(), String> {
     let home = std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
-        .ok_or_else(|| "Không tìm thấy thư mục người dùng.".to_string())?;
+        .ok_or_else(|| "[browser.no_home] Không tìm thấy thư mục người dùng.".to_string())?;
     let support = PathBuf::from(home)
         .join("Library")
         .join("Application Support");
@@ -125,7 +125,7 @@ fn register_in(support: &Path, chromium: &Path, firefox: &Path) -> Result<usize,
             let hosts = root.join("NativeMessagingHosts");
             std::fs::create_dir_all(&hosts)
                 .and_then(|()| std::fs::copy(manifest, hosts.join(format!("{HOST_NAME}.json"))))
-                .map_err(|error| format!("Không ghi được đăng ký tích hợp: {error}"))?;
+                .map_err(|error| format!("[browser.register_failed] Không ghi được đăng ký tích hợp: {error}"))?;
             written += 1;
         }
     }

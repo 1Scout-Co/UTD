@@ -156,7 +156,7 @@ fn failures_keep_what_was_listed_and_explain_why() {
         panic!("phải là done");
     };
     assert_eq!((total, complete), (1, false));
-    assert!(error.unwrap().starts_with("Tài khoản riêng tư"));
+    assert!(error.unwrap().starts_with("[channel.private_all] Tài khoản riêng tư"));
     assert_eq!(sink.entries().len(), 1, "video đã đọc vẫn gửi đi");
 }
 
@@ -165,19 +165,19 @@ fn explains_common_listing_errors() {
     let cases = [
         (
             "ERROR: [tiktok:user] a: This account does not have any videos posted",
-            "Kênh chưa đăng video nào.",
+            "[channel.no_videos] Kênh chưa đăng video nào.",
         ),
         (
             "ERROR: [tiktok:user] a: Unable to extract secondary user ID.",
-            "TikTok không trả",
+            "[channel.tiktok_refused] TikTok không trả",
         ),
         (
             "ERROR: [youtube:tab] @a: This channel does not exist.",
-            "Không tìm thấy kênh.",
+            "[channel.not_found] Không tìm thấy kênh.",
         ),
         (
             "ERROR: Unable to download webpage: <urlopen error timed out>",
-            "Không kết nối được",
+            "[probe.connect] Không kết nối được",
         ),
     ];
     for (stderr, expected) in cases {

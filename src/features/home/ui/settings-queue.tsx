@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react"
 
+import { formatNumber } from "@/shared/i18n/format"
+import { commandErrorText, t } from "@/shared/i18n/i18n"
+
 import { queueSettings, setQueueLimit } from "../api/downloads"
 import { Segmented } from "./batch-dialog-parts"
 import { SettingsSection } from "./settings-section"
@@ -7,10 +10,6 @@ import { SettingsSection } from "./settings-section"
 /** Mặc định của hàng đợi (src-tauri/src/queue.rs `DEFAULT_LIMIT`). */
 const DEFAULT_LIMIT = 3
 const CHOICES = [1, 2, 3, 4, 5, 6, 8, 10]
-
-function messageOf(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
-}
 
 /** Mục "Tải cùng lúc" (S-27): số download chạy một lúc, áp cho mọi download kể cả media. */
 export function SettingsQueue({ open, desktop }: { open: boolean; desktop: boolean }) {
@@ -22,7 +21,7 @@ export function SettingsQueue({ open, desktop }: { open: boolean; desktop: boole
     let live = true
     queueSettings()
       .then((settings) => live && setLimit(settings.limit))
-      .catch((reason: unknown) => live && setError(messageOf(reason)))
+      .catch((reason: unknown) => live && setError(commandErrorText(reason)))
     return () => {
       live = false
     }
@@ -34,18 +33,21 @@ export function SettingsQueue({ open, desktop }: { open: boolean; desktop: boole
     setError(null)
     setQueueLimit(next)
       .then((settings) => setLimit(settings.limit))
-      .catch((reason: unknown) => setError(messageOf(reason)))
+      .catch((reason: unknown) => setError(commandErrorText(reason)))
   }
 
   return (
     <SettingsSection
-      title="Tải cùng lúc"
-      description="Số download chạy một lúc; còn lại xếp hàng, xong cái này tự chạy cái kế."
+      title={t("queue.title")}
+      description={t("queue.description")}
     >
       <Segmented
-        label="Số download chạy cùng lúc"
+        label={t("queue.limitLabel")}
         value={String(limit)}
-        options={CHOICES.map((choice) => ({ id: String(choice), label: String(choice) }))}
+        options={CHOICES.map((choice) => ({
+          id: String(choice),
+          label: formatNumber(choice, 0),
+        }))}
         onChange={change}
         disabled={!desktop}
       />

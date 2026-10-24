@@ -102,8 +102,8 @@ pub async fn probe(
         .kill_on_drop(true);
     let output = timeout(Duration::from_secs(45), command.output())
         .await
-        .map_err(|_| "Nguồn media phản hồi quá lâu.".to_string())?
-        .map_err(|error| format!("Không chạy được yt-dlp: {error}"))?;
+        .map_err(|_| "[probe.timeout] Nguồn media phản hồi quá lâu.".to_string())?
+        .map_err(|error| format!("[media.spawn] Không chạy được yt-dlp: {error}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ProbeFailure {
@@ -112,7 +112,7 @@ pub async fn probe(
         });
     }
     let value: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|_| "yt-dlp trả về dữ liệu không đọc được.".to_string())?;
+        .map_err(|_| "[probe.bad_output] yt-dlp trả về dữ liệu không đọc được.".to_string())?;
     let result = build_result(url, &value, ffmpeg_available)?;
     // Lượt tải ngay sau đó dùng lại các luồng này, khỏi chạy yt-dlp lần hai.
     probe_cache::remember(&value, url, resolve::now_secs());
@@ -125,7 +125,7 @@ fn build_result(
     ffmpeg_available: bool,
 ) -> Result<MediaProbeResult, String> {
     if value.get("_has_drm").and_then(Value::as_bool) == Some(true) {
-        return Err("Nội dung có DRM; UTD không vượt qua bảo vệ bản quyền.".into());
+        return Err("[media.drm] Nội dung có DRM; UTD không vượt qua bảo vệ bản quyền.".into());
     }
     if value.get("_type").and_then(Value::as_str) == Some("playlist") {
         let link = value
@@ -141,7 +141,7 @@ fn build_result(
             .and_then(Value::as_str)
             .is_some_and(|status| status == "is_live" || status == "is_upcoming")
     {
-        return Err("Chưa hỗ trợ tải livestream.".into());
+        return Err("[probe.live] Chưa hỗ trợ tải livestream.".into());
     }
     let title = value
         .get("title")
@@ -197,7 +197,7 @@ fn parse_formats(value: &Value) -> Result<Vec<Format>, String> {
         .iter()
         .all(|format| !format.has_video && !format.has_audio)
     {
-        return Err("Không tìm thấy định dạng media có thể tải.".into());
+        return Err("[probe.no_formats] Không tìm thấy định dạng media có thể tải.".into());
     }
     Ok(formats)
 }
@@ -554,7 +554,7 @@ fn sum_size(video: Option<u64>, audio: Option<u64>) -> Option<u64> {
 pub(super) fn classify_stderr(stderr: &str) -> String {
     let message = stderr.to_ascii_lowercase();
     if message.contains("drm") {
-        return "Nội dung có DRM; UTD không vượt qua bảo vệ bản quyền.".into();
+        return "[media.drm] Nội dung có DRM; UTD không vượt qua bảo vệ bản quyền.".into();
     }
     if message.contains("sign in")
         || message.contains("log in")
@@ -562,24 +562,24 @@ pub(super) fn classify_stderr(stderr: &str) -> String {
         || message.contains("cookies")
         || message.contains("not a bot")
     {
-        return "Nguồn này cần đăng nhập hoặc cookie. UTD chưa gửi cookie ở bản này.".into();
+        return "[media.login] Nguồn này cần đăng nhập hoặc cookie. UTD chưa gửi cookie ở bản này.".into();
     }
     if message.contains("unsupported url") || message.contains("no video formats found") {
-        return "URL này chưa được hỗ trợ hoặc không có định dạng tải được.".into();
+        return "[probe.unsupported] URL này chưa được hỗ trợ hoặc không có định dạng tải được.".into();
     }
     if message.contains("private video")
         || message.contains("video unavailable")
         || message.contains("has been removed")
     {
-        return "Media không công khai hoặc đã bị gỡ.".into();
+        return "[media.unavailable] Media không công khai hoặc đã bị gỡ.".into();
     }
     if message.contains("timed out")
         || message.contains("connection")
         || message.contains("network")
     {
-        return "Không kết nối được tới nguồn media.".into();
+        return "[probe.connect] Không kết nối được tới nguồn media.".into();
     }
-    "Không đọc được thông tin media từ URL này.".into()
+    "[probe.failed] Không đọc được thông tin media từ URL này.".into()
 }
 
 #[cfg(test)]

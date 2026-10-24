@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react"
 import { Info, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { t } from "@/shared/i18n/i18n"
+import { commandErrorText, t } from "@/shared/i18n/i18n"
 
 import {
   cancelMediaToolInstall,
@@ -31,10 +31,6 @@ import { useToolsAuto } from "./tools-auto"
 
 /** own = false: lần cài bắt đầu trước khi mở lại Cài đặt, theo dõi bằng cách hỏi lại. */
 type Busy = { tool: MediaToolName; own: boolean }
-
-function messageOf(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
-}
 
 function infoOf(status: MediaToolsStatus | null, tool: MediaToolName) {
   if (tool === "yt-dlp") return status?.ytDlp ?? null
@@ -83,7 +79,7 @@ function useToolStatus(desktop: boolean) {
         if (value.installing) setBusy({ tool: value.installing, own: false })
       })
       .catch((reason: unknown) => {
-        if (!disposed) setError(messageOf(reason))
+        if (!disposed) setError(commandErrorText(reason))
       })
     return () => {
       disposed = true
@@ -137,7 +133,7 @@ function useAutoTools(desktop: boolean, state: ReturnType<typeof useToolStatus>)
   const toggle = (enabled: boolean) => {
     void setMediaToolsAuto(enabled)
       .then(auto.setState)
-      .catch((reason: unknown) => state.setError(messageOf(reason)))
+      .catch((reason: unknown) => state.setError(commandErrorText(reason)))
   }
   return { auto: auto.state, toggle }
 }
@@ -166,8 +162,8 @@ function useMediaTools(desktop: boolean) {
           : t("tools.installed", { tool, version: after })
       )
     } catch (reason) {
-      if (cancelled.current) setNotice(messageOf(reason))
-      else state.setError(messageOf(reason))
+      if (cancelled.current) setNotice(commandErrorText(reason))
+      else state.setError(commandErrorText(reason))
     } finally {
       state.setBusy(null)
       state.setProgress(null)
@@ -211,7 +207,7 @@ export function SettingsMediaTools({ desktop }: { desktop: boolean }) {
                 <p className="text-sm font-semibold">
                   {meta.name}{" "}
                   <span className="font-normal text-muted-foreground">
-                    · {t(meta.role)}
+                    · {meta.role()}
                   </span>
                 </p>
                 <ToolState info={info} desktop={desktop} check={check} />
@@ -249,7 +245,7 @@ function autoError(auto: MediaToolsAuto | null): string | null {
   if (!auto?.enabled || auto.paused || !auto.error || !auto.pending.length) {
     return null
   }
-  return `${auto.error} UTD sẽ tự thử lại.`
+  return t("toolsAuto.errorRetry", { error: commandErrorText(auto.error) })
 }
 
 /** Thông báo xong, lỗi, và nút Thử lại khi chưa hỏi được trạng thái công cụ. */

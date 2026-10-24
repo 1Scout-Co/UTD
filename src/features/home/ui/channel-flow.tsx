@@ -3,6 +3,7 @@ import { useCallback, useRef, useState } from "react"
 import { Loader2, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { t } from "@/shared/i18n/i18n"
 
 import { addMediaDownload } from "../api/downloads"
 import type { AddMediaPayload, EngineTask } from "../model/types"
@@ -103,16 +104,20 @@ export function ChannelFlow({
       {queue.waiting > 0 ? (
         <div
           role="status"
-          className="fixed bottom-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full bg-card py-1.5 pr-1.5 pl-3.5 text-sm shadow-soft ring-1 ring-foreground/5"
+          className="fixed bottom-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full bg-card py-1.5 ps-3.5 pe-1.5 text-sm shadow-soft ring-1 ring-foreground/5"
         >
           <Loader2 className="size-3.5 animate-spin text-primary" />
-          <span className="tabular-nums">Kênh: đang thêm {queue.waiting} video</span>
+          <span className="tabular-nums">
+            {t("channel.adding", { count: queue.waiting })}
+          </span>
           {queue.failed > 0 ? (
-            <span className="text-xs text-red-700 tabular-nums">· {queue.failed} lỗi</span>
+            <span className="text-xs text-red-700 tabular-nums">
+              · {t("channel.addFailed", { count: queue.failed })}
+            </span>
           ) : null}
           <Button type="button" variant="ghost" size="xs" onClick={queue.clear}>
             <X />
-            Dừng
+            {t("channel.stop")}
           </Button>
         </div>
       ) : null}

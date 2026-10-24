@@ -43,7 +43,7 @@ pub fn channel_page_error(url: &str) -> String {
 }
 
 /// Link kênh lẫn trong lô (hộp Thêm hàng loạt, chất lượng chung): lô không liệt kê kênh, chỉ báo cách làm.
-pub const CHANNEL_IN_BATCH: &str = "Đây là link kênh: dán vào ô Thêm URL để chọn video của kênh.";
+pub const CHANNEL_IN_BATCH: &str = "[batch.channel_link] Đây là link kênh: dán vào ô Thêm URL để chọn video của kênh.";
 
 /// Câu lỗi là mã `channel_page:` (Phân tích thấy link rút gọn trỏ tới kênh).
 pub fn is_channel_page_error(message: &str) -> bool {

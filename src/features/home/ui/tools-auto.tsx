@@ -3,6 +3,8 @@ import { useEffect, useState } from "react"
 import { Loader2, RefreshCw, Wrench } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { formatPercent } from "@/shared/i18n/format"
+import { commandErrorText, t } from "@/shared/i18n/i18n"
 
 import {
   mediaToolsAuto,
@@ -80,13 +82,6 @@ type Shown = {
   failed: boolean
 }
 
-const STAGE_TEXT: Record<MediaToolProgress["stage"], string> = {
-  checksum: "Chuẩn bị",
-  download: "Đang tải",
-  extract: "Giải nén",
-  check: "Chạy thử",
-  install: "Đang cài",
-}
 
 /** Việc đang làm, gói trong vài chữ; null = không có gì để hiện. */
 function shown(
@@ -105,14 +100,15 @@ function shown(
         : stage === "checksum"
           ? null
           : 100
-    const verb = state.active ? STAGE_TEXT[stage] : "Cập nhật"
-    const text = `${verb} ${busy}`
+    const text = state.active
+      ? t(`toolsAuto.stage.${stage}`, { tool: busy })
+      : t("toolsAuto.updating", { tool: busy })
     return { tool: busy, percent, text, wait: null, failed: false }
   }
   const next = state.failed[0] ?? state.pending[0]
   if (!next || !state.error) return null
   const wait = seconds !== null && seconds > 0 ? seconds : null
-  const text = `Chưa tải được ${next}`
+  const text = t("toolsAuto.failed", { tool: next })
   return { tool: next, percent: null, text, wait, failed: true }
 }
 
@@ -122,7 +118,7 @@ function RetryButton({ onDone }: { onDone: (state: MediaToolsAuto) => void }) {
       type="button"
       variant="ghost"
       size="xs"
-      className="-ml-2"
+      className="-ms-2"
       onClick={() =>
         void retryMediaTools()
           .then(onDone)
@@ -130,7 +126,7 @@ function RetryButton({ onDone }: { onDone: (state: MediaToolsAuto) => void }) {
       }
     >
       <RefreshCw />
-      Thử lại
+      {t("app.retry")}
     </Button>
   )
 }
@@ -145,22 +141,26 @@ export function ToolsAutoCard({ desktop }: { desktop: boolean }) {
     <div
       role="status"
       data-testid="tools-auto"
-      title={view.failed ? (state?.error ?? undefined) : undefined}
+      title={
+        view.failed && state?.error ? commandErrorText(state.error) : undefined
+      }
       className="space-y-2 rounded-xl bg-card p-3 shadow-soft ring-1 ring-foreground/5"
     >
       <div className="flex items-center justify-between gap-2 text-xs">
         <span className="inline-flex items-center gap-1.5 text-muted-foreground">
           <Wrench className="size-3.5" />
-          Công cụ media
+          {t("tools.title")}
         </span>
         {view.percent !== null ? (
-          <span className="font-semibold tabular-nums">{view.percent}%</span>
+          <span className="font-semibold tabular-nums">
+            {formatPercent(view.percent)}
+          </span>
         ) : null}
       </div>
       {view.failed ? null : (
         <StageProgress
           percent={view.percent}
-          label={`Tiến độ tải ${view.tool}`}
+          label={t("tools.progress", { tool: view.tool })}
         />
       )}
       <p
@@ -177,10 +177,12 @@ export function ToolsAutoCard({ desktop }: { desktop: boolean }) {
           {view.wait !== null ? (
             <>
               <RetryButton onDone={setState} />
-              <span className="tabular-nums">hoặc chờ {view.wait} s</span>
+              <span className="tabular-nums">
+                {t("toolsAuto.wait", { seconds: view.wait })}
+              </span>
             </>
           ) : (
-            "Đang thử lại…"
+            t("toolsAuto.retrying")
           )}
         </div>
       ) : null}
@@ -205,8 +207,13 @@ export function ToolsAutoNote({ desktop }: { desktop: boolean }) {
     >
       <Loader2 className="size-3.5 shrink-0 animate-spin" />
       {view.failed
-        ? `${view.text}. UTD đang tự thử lại…`
-        : `Lần đầu dùng: ${view.text.toLowerCase()}${view.percent !== null ? ` ${view.percent}%` : ""}…`}
+        ? t("toolsAuto.autoRetry", { task: view.text })
+        : t("toolsAuto.firstUse", {
+            task:
+              view.percent !== null
+                ? `${view.text} ${formatPercent(view.percent)}`
+                : view.text,
+          })}
     </p>
   )
 }

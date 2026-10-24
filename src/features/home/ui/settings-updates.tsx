@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 
-import { t } from "@/shared/i18n/i18n"
+import { commandErrorText, t } from "@/shared/i18n/i18n"
 
 import {
   appVersion,
@@ -26,10 +26,6 @@ import {
 
 /** own = false: lần cài bắt đầu trước khi mở lại Cài đặt, theo dõi bằng cách hỏi lại. */
 type Busy = { kind: "check" } | { kind: "install"; own: boolean }
-
-function messageOf(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
-}
 
 /** Số phiên bản đang chạy; null khi chưa đọc được hoặc ở bản xem trước trên trình duyệt. */
 export function useAppVersion(desktop: boolean): string | null {
@@ -102,7 +98,7 @@ function useUpdateState(active: boolean) {
         if (value.installing) setBusy({ kind: "install", own: false })
       })
       .catch((reason: unknown) => {
-        if (!disposed) setError(messageOf(reason))
+        if (!disposed) setError(commandErrorText(reason))
       })
     return () => {
       disposed = true
@@ -145,7 +141,7 @@ function useUpdates(active: boolean) {
       updates.setAvailable(found)
       if (!found) setNotice(t("updates.latest"))
     } catch (reason) {
-      setError(messageOf(reason))
+      setError(commandErrorText(reason))
     } finally {
       setBusy(null)
     }
@@ -160,7 +156,7 @@ function useUpdates(active: boolean) {
     try {
       await installUpdate()
     } catch (reason) {
-      setError(messageOf(reason))
+      setError(commandErrorText(reason))
       setBusy(null)
       setProgress(null)
     }
@@ -175,7 +171,7 @@ function useUpdates(active: boolean) {
       await setUpdateCheck(enabled)
     } catch (reason) {
       updates.setState(before)
-      setError(messageOf(reason))
+      setError(commandErrorText(reason))
     }
   }
 

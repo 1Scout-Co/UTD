@@ -11,15 +11,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { t } from "@/shared/i18n/i18n"
+import { commandErrorText, t } from "@/shared/i18n/i18n"
 
 import type { DownloadItem } from "../model/types"
 
 const INVALID = /[\\/:*?"<>|]/
-
-function messageOf(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
-}
 
 type RenameProps = {
   item: DownloadItem
@@ -46,7 +42,7 @@ function useRenameForm({ item, onClose, onSubmit }: RenameProps) {
       await onSubmit(item.id, next)
       onClose()
     } catch (reason) {
-      setError(messageOf(reason))
+      setError(commandErrorText(reason))
     } finally {
       setBusy(false)
     }

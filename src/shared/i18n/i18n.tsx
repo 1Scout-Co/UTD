@@ -8,7 +8,7 @@ import {
   languageOf,
   type LanguageCode,
 } from "./languages"
-import { savedLanguage, saveLanguage } from "./storage"
+import { applyNativeLanguage, savedLanguage, saveLanguage } from "./storage"
 
 // Chuỗi giao diện: khoá phẳng "nhóm.tên" trong locales/<code>.json, tiếng Việt (vi.json) là nguồn.
 // Số nhiều: "khoá#one", "khoá#other"… theo Intl.PluralRules, gọi t("khoá", { count }).
@@ -19,13 +19,6 @@ type Base<K> = K extends `${infer B}#${string}` ? B : K
 export type MessageKey = Base<keyof Source & string>
 type Messages = Record<string, string>
 type Vars = Record<string, string | number>
-
-// Mỗi file dịch là một tệp riêng trong dist/assets (không nằm trong JS): chỉ tải file đang dùng.
-const FILES = import.meta.glob<string>("./locales/*.json", {
-  eager: true,
-  query: "?url",
-  import: "default",
-})
 
 let current: LanguageCode = "vi"
 let messages: Messages = {}
@@ -38,11 +31,12 @@ const loaded = new Map<LanguageCode, Promise<Messages>>()
 function load(code: LanguageCode): Promise<Messages> {
   let pending = loaded.get(code)
   if (!pending) {
-    const url = FILES[`./locales/${code}.json`]
-    pending = fetch(url).then((response) => {
-      if (!response.ok) throw new Error(`locale ${code}: ${response.status}`)
-      return response.json() as Promise<Messages>
-    })
+    pending = import("./locale-files")
+      .then(({ LOCALE_FILES }) => fetch(LOCALE_FILES[`./locales/${code}.json`]))
+      .then((response) => {
+        if (!response.ok) throw new Error(`locale ${code}: ${response.status}`)
+        return response.json() as Promise<Messages>
+      })
     pending.catch(() => loaded.delete(code))
     loaded.set(code, pending)
   }
@@ -63,6 +57,7 @@ async function apply(code: LanguageCode) {
   setFormatLocale(locale)
   document.documentElement.lang = code
   document.documentElement.dir = isRtl(code) ? "rtl" : "ltr"
+  applyNativeLanguage(code)
   listeners.forEach((listener) => listener())
 }
 
@@ -135,6 +130,23 @@ export function tx(
         part
       )
     )
+}
+
+/** Mã ổn định từ Rust (vd lý do video kênh bị chặn: `private`, `live`) → nhãn `<nhóm>.<mã>`; mã lạ hiện nguyên. */
+export function codeText(group: string, code: string): string {
+  return lookup(`${group}.${code}`) ?? code
+}
+
+/**
+ * Lỗi trả về từ lệnh Rust (`invoke` bị từ chối): dạng `[nhóm.tên] câu tiếng Việt` (src-tauri/src/coded.rs).
+ * Giao diện tiếng Việt hiện nguyên câu (giữ chi tiết như tên công cụ, số MB); ngôn ngữ khác dịch theo mã
+ * `err.<mã>`. Câu không có mã hiện nguyên.
+ */
+export function commandErrorText(reason: unknown): string {
+  const message = reason instanceof Error ? reason.message : String(reason)
+  const coded = /^\[([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)\] ([\s\S]*)$/.exec(message)
+  if (!coded) return message
+  return current === "vi" ? coded[2] : errorText(coded[1], coded[2])
 }
 
 /**

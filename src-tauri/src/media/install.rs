@@ -62,10 +62,10 @@ impl Drop for ActiveGuard {
 fn begin(tool: &'static str) -> Result<(ActiveGuard, CancellationToken), InstallError> {
     let mut active = ACTIVE
         .lock()
-        .map_err(|_| InstallError::Failed("Không bắt đầu được việc tải công cụ.".into()))?;
+        .map_err(|_| InstallError::Failed("[tool.start_failed] Không bắt đầu được việc tải công cụ.".into()))?;
     if let Some((name, _)) = active.as_ref() {
         return Err(InstallError::Busy(format!(
-            "Đang tải {name}. Chờ xong rồi thử lại."
+            "[tool.busy] Đang tải {name}. Chờ xong rồi thử lại."
         )));
     }
     let token = CancellationToken::new();
@@ -166,9 +166,9 @@ pub(crate) struct Job<'a> {
 
 /// Nút "Tải/Cập nhật" trong Cài đặt.
 pub async fn install(app: AppHandle, tool: &str) -> Result<tools::MediaToolsStatus, String> {
-    let tool = Tool::parse(tool).ok_or_else(|| "Công cụ không hợp lệ.".to_string())?;
+    let tool = Tool::parse(tool).ok_or_else(|| "[tool.invalid] Công cụ không hợp lệ.".to_string())?;
     let platform = Platform::current()
-        .ok_or_else(|| "Chưa tự tải được công cụ trên hệ điều hành này.".to_string())?;
+        .ok_or_else(|| "[tool.unsupported_os] Chưa tự tải được công cụ trên hệ điều hành này.".to_string())?;
     let release = sources::release(tool, platform);
     let current = if tool == Tool::Ffmpeg {
         None
@@ -278,7 +278,7 @@ async fn check_binaries(
     for binary in &job.release.binaries {
         let found = unpack::locate(out, &binary.name).ok_or_else(|| {
             InstallError::Failed(format!(
-                "Gói {tool} không có {} nên UTD đã dừng.",
+                "[tool.package_incomplete] Gói {tool} không có {} nên UTD đã dừng.",
                 binary.name
             ))
         })?;
@@ -286,7 +286,7 @@ async fn check_binaries(
         let line = run_check(&found, binary.flag).await;
         if !line.as_deref().is_some_and(binary.accept) {
             return Err(InstallError::Failed(format!(
-                "Bản {tool} vừa tải không chạy được nên UTD giữ nguyên bản cũ."
+                "[tool.broken_new] Bản {tool} vừa tải không chạy được nên UTD giữ nguyên bản cũ."
             )));
         }
         pairs.push((found, job.bin.join(&binary.name)));
@@ -369,7 +369,7 @@ async fn fetch_asset(
         }
         let expected = located.hash.ok_or_else(|| {
             InstallError::Failed(format!(
-                "Danh sách SHA-256 không có {} nên UTD đã dừng.",
+                "[tool.checksum_missing] Danh sách SHA-256 không có {} nên UTD đã dừng.",
                 located.name
             ))
         })?;
@@ -393,7 +393,7 @@ async fn fetch_asset(
         }
     }
     Err(InstallError::Failed(format!(
-        "Không tải được {}. Thử lại sau ít phút.",
+        "[tool.download_failed] Không tải được {}. Thử lại sau ít phút.",
         tool.name()
     )))
 }
@@ -408,38 +408,38 @@ async fn wait_retry(job: &Job<'_>, cancel: &CancellationToken) -> Result<(), Ins
 fn describe(error: FetchError, tool: &str) -> InstallError {
     log::warn!("Tool download error ({tool}): {error}");
     let message = match error {
-        FetchError::Cancelled => return InstallError::Cancelled(format!("Đã huỷ tải {tool}.")),
+        FetchError::Cancelled => return InstallError::Cancelled(format!("[tool.cancelled] Đã huỷ tải {tool}.")),
         FetchError::HostNotAllowed(host) | FetchError::InsecureUrl(host) => {
-            format!("Nguồn tải chuyển tới máy chủ lạ ({host}) nên UTD đã dừng.")
+            format!("[tool.redirect_host] Nguồn tải chuyển tới máy chủ lạ ({host}) nên UTD đã dừng.")
         }
         FetchError::TooManyRedirects => {
-            "Nguồn tải chuyển hướng quá nhiều lần nên UTD đã dừng.".into()
+            "[tool.redirect_loop] Nguồn tải chuyển hướng quá nhiều lần nên UTD đã dừng.".into()
         }
         FetchError::Status(404) => {
-            "Nguồn tải chưa có bản phát hành (HTTP 404, có thể đang cập nhật). Thử lại sau ít phút."
+            "[tool.not_released] Nguồn tải chưa có bản phát hành (HTTP 404, có thể đang cập nhật). Thử lại sau ít phút."
                 .into()
         }
         FetchError::Status(403 | 429) => {
-            "Nguồn tải đang giới hạn lượt tải. Thử lại sau ít phút.".into()
+            "[tool.rate_limited] Nguồn tải đang giới hạn lượt tải. Thử lại sau ít phút.".into()
         }
-        FetchError::Status(code) => format!("Nguồn tải trả lỗi HTTP {code}. Thử lại sau."),
-        FetchError::TooLarge(_) => "File tải về lớn bất thường nên UTD đã dừng.".into(),
-        FetchError::Truncated { .. } => "Kết nối bị ngắt giữa chừng. Thử lại.".into(),
+        FetchError::Status(code) => format!("[tool.http] Nguồn tải trả lỗi HTTP {code}. Thử lại sau."),
+        FetchError::TooLarge(_) => "[tool.too_large] File tải về lớn bất thường nên UTD đã dừng.".into(),
+        FetchError::Truncated { .. } => "[tool.interrupted] Kết nối bị ngắt giữa chừng. Thử lại.".into(),
         FetchError::NotText | FetchError::InvalidUrl | FetchError::InvalidHash => {
-            "Danh sách SHA-256 không đọc được nên UTD đã dừng.".into()
+            "[tool.checksum_unreadable] Danh sách SHA-256 không đọc được nên UTD đã dừng.".into()
         }
         FetchError::HashMismatch { .. } => {
-            "SHA-256 không khớp nên UTD đã xoá file vừa tải. Thử lại sau ít phút.".into()
+            "[tool.checksum_mismatch] SHA-256 không khớp nên UTD đã xoá file vừa tải. Thử lại sau ít phút.".into()
         }
-        FetchError::Timeout => "Nguồn tải phản hồi quá lâu. Kiểm tra mạng rồi thử lại.".into(),
-        FetchError::Network(_) => "Không kết nối được nguồn tải. Kiểm tra mạng rồi thử lại.".into(),
+        FetchError::Timeout => "[tool.timeout] Nguồn tải phản hồi quá lâu. Kiểm tra mạng rồi thử lại.".into(),
+        FetchError::Network(_) => "[tool.connect] Không kết nối được nguồn tải. Kiểm tra mạng rồi thử lại.".into(),
         FetchError::Io(error) => return write_error(&error),
     };
     InstallError::Failed(message)
 }
 
 fn write_error(error: &std::io::Error) -> InstallError {
-    InstallError::Failed(format!("Không ghi được vào thư mục công cụ: {error}"))
+    InstallError::Failed(format!("[tool.write_failed] Không ghi được vào thư mục công cụ: {error}"))
 }
 
 fn check_space(bin: &Path, release: &Release) -> Result<(), InstallError> {
@@ -448,7 +448,7 @@ fn check_space(bin: &Path, release: &Release) -> Result<(), InstallError> {
     };
     if free < release.need_free {
         return Err(InstallError::Failed(format!(
-            "Ổ đĩa còn ít chỗ: cần khoảng {} MB trống để tải {}.",
+            "[tool.disk_full] Ổ đĩa còn ít chỗ: cần khoảng {} MB trống để tải {}.",
             release.need_free / MIB,
             release.tool.name()
         )));
@@ -496,7 +496,7 @@ fn swap_in(pairs: &[(PathBuf, PathBuf)]) -> Result<(), String> {
                 }
                 let name = target.file_name().unwrap_or_default().to_string_lossy();
                 return Err(format!(
-                    "Không thay được {name}: {error}. Bản cũ được giữ nguyên."
+                    "[tool.replace_failed] Không thay được {name}: {error}. Bản cũ được giữ nguyên."
                 ));
             }
         }

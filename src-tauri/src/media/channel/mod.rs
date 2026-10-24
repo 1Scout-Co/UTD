@@ -47,7 +47,7 @@ const MAX_STDERR_BYTES: usize = 64 * 1024;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 const LIST_ATTEMPTS: u32 = 3;
 const LIST_RETRY_DELAY: Duration = Duration::from_secs(3);
-const TIKTOK_REFUSED: &str = "TikTok không trả danh sách của kênh này (kênh không tồn tại hoặc đang chặn). Thử lại sau ít phút.";
+const TIKTOK_REFUSED: &str = "[channel.tiktok_refused] TikTok không trả danh sách của kênh này (kênh không tồn tại hoặc đang chặn). Thử lại sau ít phút.";
 
 /// Lượt liệt kê đang chạy: mã lượt (giao diện đặt) ⇒ (số thứ tự, token huỷ).
 static LISTINGS: LazyLock<Mutex<HashMap<String, (u64, CancellationToken)>>> =
@@ -103,10 +103,10 @@ pub async fn channel_list(
 ) -> Result<(), String> {
     let id_ok = |character: char| character.is_ascii_alphanumeric() || character == '-';
     if listing_id.is_empty() || listing_id.len() > 64 || !listing_id.chars().all(id_ok) {
-        return Err("Mã lượt liệt kê không hợp lệ.".into());
+        return Err("[channel.bad_listing] Mã lượt liệt kê không hợp lệ.".into());
     }
     let listing_url = crate::media_pages::channel_listing_url(&url)
-        .ok_or_else(|| "Đây không phải link kênh TikTok hoặc kênh/playlist YouTube.".to_string())?;
+        .ok_or_else(|| "[channel.not_channel] Đây không phải link kênh TikTok hoặc kênh/playlist YouTube.".to_string())?;
     // Như Phân tích: lần đầu mở app thì chờ yt-dlp/deno đang tự tải.
     let tools = Arc::new(interactive_tools(auto_tools(&app).as_ref()).await?);
     let journal = app.state::<AppState>().journal.clone();
@@ -249,14 +249,14 @@ async fn list_entries(request: &Request<'_>, sink: &impl Sink) -> ListingEvent {
         .kill_on_drop(true);
     let mut child = match command.spawn() {
         Ok(child) => child,
-        Err(error) => return failed(format!("Không chạy được yt-dlp: {error}")),
+        Err(error) => return failed(format!("[media.spawn] Không chạy được yt-dlp: {error}")),
     };
     let stderr = child
         .stderr
         .take()
         .map(|stderr| tokio::spawn(read_stderr(stderr)));
     let Some(stdout) = child.stdout.take() else {
-        return failed("Không đọc được kết quả của yt-dlp.".into());
+        return failed("[channel.bad_output] Không đọc được kết quả của yt-dlp.".into());
     };
     let mut listing = Listing::new(sink, request.journal, request.playlist);
     listing.ready = Some(request.ready);
@@ -413,11 +413,11 @@ impl<'a, S: Sink> Listing<'a, S> {
             Stop::Cancelled | Stop::Gone => (false, None),
             Stop::Stalled => (
                 false,
-                Some("Nguồn không trả thêm video; danh sách có thể chưa đủ.".into()),
+                Some("[channel.partial] Nguồn không trả thêm video; danh sách có thể chưa đủ.".into()),
             ),
             Stop::Full => (
                 false,
-                Some(format!("Chỉ liệt kê {MAX_ENTRIES} video mới nhất.")),
+                Some(format!("[channel.limited] Chỉ liệt kê {MAX_ENTRIES} video mới nhất.")),
             ),
         };
         ListingEvent::Done {
@@ -432,10 +432,10 @@ impl<'a, S: Sink> Listing<'a, S> {
 fn listing_error(stderr: &str) -> String {
     let message = stderr.to_ascii_lowercase();
     if message.contains("account is private") || message.contains("likely either private") {
-        return "Tài khoản riêng tư hoặc mọi video đều riêng tư. UTD chưa dùng cookie đăng nhập nên không xem được.".into();
+        return "[channel.private_all] Tài khoản riêng tư hoặc mọi video đều riêng tư. UTD chưa dùng cookie đăng nhập nên không xem được.".into();
     }
     if message.contains("does not have any videos") {
-        return "Kênh chưa đăng video nào.".into();
+        return "[channel.no_videos] Kênh chưa đăng video nào.".into();
     }
     if message.contains("secondary user id")
         || message.contains("unable to download user webpage")
@@ -444,7 +444,7 @@ fn listing_error(stderr: &str) -> String {
         return TIKTOK_REFUSED.into();
     }
     if message.contains("does not exist") || message.contains("http error 404") {
-        return "Không tìm thấy kênh.".into();
+        return "[channel.not_found] Không tìm thấy kênh.".into();
     }
     probe::classify_stderr(stderr)
 }

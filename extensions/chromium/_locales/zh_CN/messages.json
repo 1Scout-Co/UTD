@@ -13,5 +13,11 @@
   "sendFailed": { "message": "无法将请求发送到 UTD。" },
   "noResponse": { "message": "UTD 无响应。" },
   "notRunning": { "message": "UTD 未运行。请打开 UTD 后重试。" },
-  "notConnected": { "message": "无法连接 UTD。请确认 UTD 正在运行并已启用浏览器集成。" }
+  "notConnected": { "message": "无法连接 UTD。请确认 UTD 正在运行并已启用浏览器集成。" },
+  "menuAll": { "message": "用 UTD 下载所有链接" },
+  "readLinksFailed": { "message": "无法读取此页面上的链接。" },
+  "noLinks": { "message": "此页面上没有可下载的链接。" },
+  "tooManyLinks": { "message": "单次发送的链接过多。" },
+  "openedForChannel": { "message": "已打开 UTD 以下载整个频道。" },
+  "openedForLinks": { "message": "已打开 UTD 以选择链接。" }
 }

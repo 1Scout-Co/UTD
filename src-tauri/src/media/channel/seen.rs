@@ -89,7 +89,7 @@ fn load_map(journal: &Journal, key: &str) -> BTreeMap<String, String> {
 /// Ghi nhớ sau khi đã tạo task. Lỗi chỉ làm lần sau video này hiện là "chưa tải".
 pub fn remember(journal: &Journal, pick: &ChannelPick, task_id: &str) -> Result<(), String> {
     if !valid_key(&pick.key) || !valid_video_id(&pick.video_id) {
-        return Err("Khoá kênh hoặc id video không hợp lệ.".into());
+        return Err("[channel.bad_key] Khoá kênh hoặc id video không hợp lệ.".into());
     }
     let _guard = WRITE
         .lock()

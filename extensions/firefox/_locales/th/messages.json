@@ -13,5 +13,11 @@
   "sendFailed": { "message": "ส่งคำขอไปยัง UTD ไม่ได้" },
   "noResponse": { "message": "UTD ไม่ตอบสนอง" },
   "notRunning": { "message": "UTD ยังไม่ทำงาน เปิด UTD แล้วลองอีกครั้ง" },
-  "notConnected": { "message": "เชื่อมต่อ UTD ไม่ได้ ตรวจสอบว่า UTD ทำงานอยู่และเปิดการเชื่อมต่อเบราว์เซอร์แล้ว" }
+  "notConnected": { "message": "เชื่อมต่อ UTD ไม่ได้ ตรวจสอบว่า UTD ทำงานอยู่และเปิดการเชื่อมต่อเบราว์เซอร์แล้ว" },
+  "menuAll": { "message": "ดาวน์โหลดลิงก์ทั้งหมดด้วย UTD" },
+  "readLinksFailed": { "message": "อ่านลิงก์ในหน้านี้ไม่ได้" },
+  "noLinks": { "message": "ไม่พบลิงก์ที่ดาวน์โหลดได้ในหน้านี้" },
+  "tooManyLinks": { "message": "ลิงก์มากเกินไปสำหรับการส่งครั้งเดียว" },
+  "openedForChannel": { "message": "เปิด UTD เพื่อดาวน์โหลดทั้งช่องแล้ว" },
+  "openedForLinks": { "message": "เปิด UTD เพื่อเลือกลิงก์แล้ว" }
 }

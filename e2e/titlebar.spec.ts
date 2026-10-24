@@ -277,6 +277,8 @@ test.describe('macOS', () => {
     await page.addInitScript(fakeTauri)
     await page.goto('/')
     const app = fake(page)
+    // App vẽ sau khi nạp file dịch (bất đồng bộ): chờ thanh có mặt rồi mới bấm.
+    await expect(page.locator('[data-titlebar]')).toBeVisible()
     await page.mouse.click(300, 20)
     await expect.poll(async () => (await app.calls('plugin:window|start_dragging')).length).toBe(1)
 

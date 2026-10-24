@@ -2,6 +2,7 @@
 mod app_nap;
 mod batch;
 mod browser_integration;
+mod coded;
 mod commands;
 mod events;
 mod files;
@@ -273,6 +274,7 @@ pub fn run() {
             updater::set_update_check,
             language::get_ui_language,
             language::set_ui_language,
+            language::apply_ui_language,
             titlebar::set_caption_buttons,
             titlebar::show_window_menu,
             titlebar::title_bar_double_click,

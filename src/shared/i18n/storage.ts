@@ -14,6 +14,12 @@ export async function savedLanguage(): Promise<string | null> {
   }
 }
 
+/** App desktop: báo Rust ngôn ngữ đang hiện (macOS dựng lại menu app theo ngôn ngữ đó). */
+export function applyNativeLanguage(code: string) {
+  if (!isTauri()) return
+  void invoke("apply_ui_language", { language: code }).catch(() => undefined)
+}
+
 export async function saveLanguage(code: string): Promise<void> {
   if (isTauri()) {
     await invoke("set_ui_language", { language: code })

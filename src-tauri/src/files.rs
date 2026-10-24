@@ -21,35 +21,35 @@ use crate::state::{AppState, RunningTasks};
 
 /// Câu báo lỗi hiện thẳng cho người dùng.
 mod text {
-    pub(super) const NOT_FOUND: &str = "Không tìm thấy download.";
-    pub(super) const RUNNING: &str = "Tạm dừng tải trước đã.";
-    pub(super) const NOT_DONE: &str = "File chưa tải xong.";
-    pub(super) const QUARANTINED: &str = "File đang bị cách ly.";
-    pub(super) const FILE_GONE: &str = "File không còn ở thư mục tải.";
-    pub(super) const FOLDER_GONE: &str = "Thư mục tải không còn nữa.";
-    pub(super) const OUTSIDE: &str = "File nằm ngoài thư mục tải.";
-    pub(super) const EXISTS: &str = "Đã có file trùng tên ở đó.";
-    pub(super) const IN_USE: &str = "File đang mở trong ứng dụng khác.";
-    pub(super) const DENIED: &str = "Không có quyền với file này.";
-    pub(super) const DISK_FULL: &str = "Ổ đích không đủ chỗ.";
-    pub(super) const TOO_LONG: &str = "Đường dẫn quá dài.";
-    pub(super) const COPY_SHORT: &str = "Chép file không trọn vẹn.";
-    pub(super) const FAILED: &str = "Không làm được, thử lại sau.";
-    pub(super) const EMPTY_NAME: &str = "Chưa nhập tên file.";
-    pub(super) const BAD_NAME: &str = "Tên file không hợp lệ.";
-    pub(super) const HIDDEN_CHARS: &str = "Tên có ký tự ẩn hoặc đảo chiều.";
-    pub(super) const SPOOFED: &str = "Tên giả đuôi file, hãy đặt tên khác.";
-    pub(super) const RUNNABLE: &str = "Không đổi sang loại file chạy được.";
-    pub(super) const READ_FAILED: &str = "Không đọc được file.";
-    pub(super) const BLOCKED: &str = "UTD chặn mở file có thể chạy mã.";
-    pub(super) const OPEN_FAILED: &str = "Không mở được.";
-    pub(super) const NO_RECYCLE_BIN: &str = "Ổ này không có Thùng rác, chưa xoá gì.";
-    pub(super) const RECYCLE_FAILED: &str = "Không chuyển được vào Thùng rác.";
-    pub(super) const MEDIA_RENAME: &str = "Đợi tải xong rồi đổi tên.";
-    pub(super) const MEDIA_MOVE: &str = "Đợi tải xong rồi chuyển.";
-    pub(super) const SAVE_FAILED: &str = "Không lưu được thay đổi.";
+    pub(super) const NOT_FOUND: &str = "[file.not_found] Không tìm thấy download.";
+    pub(super) const RUNNING: &str = "[file.running] Tạm dừng tải trước đã.";
+    pub(super) const NOT_DONE: &str = "[file.not_done] File chưa tải xong.";
+    pub(super) const QUARANTINED: &str = "[file.quarantined] File đang bị cách ly.";
+    pub(super) const FILE_GONE: &str = "[file.gone] File không còn ở thư mục tải.";
+    pub(super) const FOLDER_GONE: &str = "[file.folder_gone] Thư mục tải không còn nữa.";
+    pub(super) const OUTSIDE: &str = "[file.outside] File nằm ngoài thư mục tải.";
+    pub(super) const EXISTS: &str = "[file.target_exists] Đã có file trùng tên ở đó.";
+    pub(super) const IN_USE: &str = "[file.in_use] File đang mở trong ứng dụng khác.";
+    pub(super) const DENIED: &str = "[file.denied] Không có quyền với file này.";
+    pub(super) const DISK_FULL: &str = "[file.disk_full] Ổ đích không đủ chỗ.";
+    pub(super) const TOO_LONG: &str = "[file.too_long] Đường dẫn quá dài.";
+    pub(super) const COPY_SHORT: &str = "[file.copy_short] Chép file không trọn vẹn.";
+    pub(super) const FAILED: &str = "[file.failed] Không làm được, thử lại sau.";
+    pub(super) const EMPTY_NAME: &str = "[file.empty_name] Chưa nhập tên file.";
+    pub(super) const BAD_NAME: &str = "[file.bad_name] Tên file không hợp lệ.";
+    pub(super) const HIDDEN_CHARS: &str = "[file.hidden_chars] Tên có ký tự ẩn hoặc đảo chiều.";
+    pub(super) const SPOOFED: &str = "[file.spoofed] Tên giả đuôi file, hãy đặt tên khác.";
+    pub(super) const RUNNABLE: &str = "[file.runnable] Không đổi sang loại file chạy được.";
+    pub(super) const READ_FAILED: &str = "[file.read_failed] Không đọc được file.";
+    pub(super) const BLOCKED: &str = "[file.blocked] UTD chặn mở file có thể chạy mã.";
+    pub(super) const OPEN_FAILED: &str = "[file.open_failed] Không mở được.";
+    pub(super) const NO_RECYCLE_BIN: &str = "[file.no_recycle_bin] Ổ này không có Thùng rác, chưa xoá gì.";
+    pub(super) const RECYCLE_FAILED: &str = "[file.recycle_failed] Không chuyển được vào Thùng rác.";
+    pub(super) const MEDIA_RENAME: &str = "[file.media_rename] Đợi tải xong rồi đổi tên.";
+    pub(super) const MEDIA_MOVE: &str = "[file.media_move] Đợi tải xong rồi chuyển.";
+    pub(super) const SAVE_FAILED: &str = "[file.save_failed] Không lưu được thay đổi.";
     #[cfg(not(any(windows, target_os = "macos")))]
-    pub(super) const WINDOWS_ONLY: &str = "Chỉ có trên Windows.";
+    pub(super) const WINDOWS_ONLY: &str = "[file.windows_only] Chỉ có trên Windows.";
 }
 
 /// Giới hạn một lần hỏi icon (giao diện chỉ hỏi các dòng đang hiện).

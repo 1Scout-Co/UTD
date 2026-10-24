@@ -111,6 +111,20 @@ export function formatTime(time: number): string {
   }).format(time)
 }
 
+/** Số gọn: "1,2 N" (vi), "1.2K" (en) — lượt xem, người theo dõi. */
+export function formatCompact(value: number): string {
+  return numberFormat({ notation: "compact", maximumFractionDigits: 1 }).format(
+    value
+  )
+}
+
+/** Ghép vài mục thành một câu liệt kê theo ngôn ngữ: "a, b và c" / "a, b, and c". */
+export function formatList(items: string[]): string {
+  return new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(
+    items
+  )
+}
+
 /** So sánh tên theo cách xếp chữ của ngôn ngữ đang chọn. */
 export function compareText(left: string, right: string): number {
   return left.localeCompare(right, locale)

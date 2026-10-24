@@ -3,7 +3,7 @@ import { useEffect, useState } from "react"
 import { CheckCircle2, Info, Loader2, Puzzle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { t, tx } from "@/shared/i18n/i18n"
+import { commandErrorText, t, tx } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
 import {
@@ -13,10 +13,6 @@ import {
 } from "../api/downloads"
 import type { BrowserIntegrationStatus } from "../model/types"
 import { MoreInfo, SettingsSection } from "./settings-section"
-
-function messageOf(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
-}
 
 /** Trạng thái native host + một hành động: cài (đăng ký host) rồi mở thư mục tiện ích. */
 function useBrowserIntegration(open: boolean, desktop: boolean) {
@@ -35,7 +31,7 @@ function useBrowserIntegration(open: boolean, desktop: boolean) {
         setError(null)
       })
       .catch((reason: unknown) => {
-        if (!disposed) setError(messageOf(reason))
+        if (!disposed) setError(commandErrorText(reason))
       })
     return () => {
       disposed = true
@@ -51,7 +47,7 @@ function useBrowserIntegration(open: boolean, desktop: boolean) {
       await openExtensionFolder()
       setNotice(t("browser.installed"))
     } catch (reason) {
-      setError(messageOf(reason))
+      setError(commandErrorText(reason))
     } finally {
       setBusy(false)
     }

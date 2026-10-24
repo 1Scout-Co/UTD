@@ -13,5 +13,11 @@
   "sendFailed": { "message": "अनुरोध UTD को नहीं भेजा जा सका।" },
   "noResponse": { "message": "UTD जवाब नहीं दे रहा है।" },
   "notRunning": { "message": "UTD नहीं चल रहा है। UTD खोलें और फिर से कोशिश करें।" },
-  "notConnected": { "message": "UTD से कनेक्ट नहीं हो सका। जाँचें कि UTD चल रहा है और ब्राउज़र एकीकरण चालू है।" }
+  "notConnected": { "message": "UTD से कनेक्ट नहीं हो सका। जाँचें कि UTD चल रहा है और ब्राउज़र एकीकरण चालू है।" },
+  "menuAll": { "message": "सभी लिंक UTD से डाउनलोड करें" },
+  "readLinksFailed": { "message": "इस पेज के लिंक पढ़े नहीं जा सके।" },
+  "noLinks": { "message": "इस पेज पर डाउनलोड करने योग्य कोई लिंक नहीं मिला।" },
+  "tooManyLinks": { "message": "एक बार में भेजने के लिए बहुत ज़्यादा लिंक हैं।" },
+  "openedForChannel": { "message": "पूरा चैनल डाउनलोड करने के लिए UTD खोला गया।" },
+  "openedForLinks": { "message": "लिंक चुनने के लिए UTD खोला गया।" }
 }

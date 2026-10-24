@@ -13,5 +13,11 @@
   "sendFailed": { "message": "تعذّر إرسال الطلب إلى UTD." },
   "noResponse": { "message": "لا يستجيب UTD." },
   "notRunning": { "message": "لا يعمل UTD حاليًا. افتح UTD ثم أعد المحاولة." },
-  "notConnected": { "message": "تعذّر الاتصال بـ UTD. تأكد أن UTD قيد التشغيل وأن التكامل مع المتصفح مفعّل." }
+  "notConnected": { "message": "تعذّر الاتصال بـ UTD. تأكد أن UTD قيد التشغيل وأن التكامل مع المتصفح مفعّل." },
+  "menuAll": { "message": "تنزيل كل الروابط باستخدام UTD" },
+  "readLinksFailed": { "message": "تعذّرت قراءة الروابط في هذه الصفحة." },
+  "noLinks": { "message": "لم يُعثر على روابط قابلة للتنزيل في هذه الصفحة." },
+  "tooManyLinks": { "message": "عدد الروابط كبير جدًا لإرسالها دفعة واحدة." },
+  "openedForChannel": { "message": "تم فتح UTD لتنزيل القناة كاملة." },
+  "openedForLinks": { "message": "تم فتح UTD لاختيار الروابط." }
 }

@@ -24,9 +24,9 @@ fn system_tar() -> Result<PathBuf, String> {
     if tar.is_file() {
         Ok(tar)
     } else if cfg!(windows) {
-        Err("Windows thiếu tar.exe (cần Windows 10 1803 trở lên) nên chưa giải nén được.".into())
+        Err("[tool.no_tar_windows] Windows thiếu tar.exe (cần Windows 10 1803 trở lên) nên chưa giải nén được.".into())
     } else {
-        Err("Máy thiếu /usr/bin/tar nên chưa giải nén được.".into())
+        Err("[tool.no_tar_mac] Máy thiếu /usr/bin/tar nên chưa giải nén được.".into())
     }
 }
 
@@ -49,14 +49,14 @@ pub(crate) async fn extract(
         .kill_on_drop(true);
     let child = command
         .spawn()
-        .map_err(|error| format!("Không chạy được tar: {error}"))?;
+        .map_err(|error| format!("[tool.tar_failed] Không chạy được tar: {error}"))?;
     let output = tokio::select! {
         _ = cancel.cancelled() => return Err("cancelled".into()),
         output = tokio::time::timeout(EXTRACT_TIMEOUT, child.wait_with_output()) => output,
     };
     let output = output
-        .map_err(|_| "Giải nén quá lâu nên UTD đã dừng.".to_string())?
-        .map_err(|error| format!("Không chạy được tar: {error}"))?;
+        .map_err(|_| "[tool.unpack_timeout] Giải nén quá lâu nên UTD đã dừng.".to_string())?
+        .map_err(|error| format!("[tool.tar_failed] Không chạy được tar: {error}"))?;
     if !output.status.success() {
         let detail: String = String::from_utf8_lossy(&output.stderr)
             .lines()
@@ -66,7 +66,7 @@ pub(crate) async fn extract(
             .take(160)
             .collect();
         log::warn!("tar failed: {detail}");
-        return Err("Giải nén gói công cụ lỗi nên UTD đã dừng.".into());
+        return Err("[tool.unpack_failed] Giải nén gói công cụ lỗi nên UTD đã dừng.".into());
     }
     Ok(())
 }

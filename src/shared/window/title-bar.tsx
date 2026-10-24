@@ -3,6 +3,8 @@ import { useRef, useState, type ReactNode } from "react"
 import { Copy, Minus, Square, X } from "lucide-react"
 import { cn } from "cn"
 
+import { t } from "@/shared/i18n/i18n"
+
 import { runCaption, type CaptionButton } from "./api"
 import { desktopPlatform } from "./platform"
 import {
@@ -18,12 +20,13 @@ const CONTROLS: {
   button: CaptionButton
   label: (maximized: boolean) => string
 }[] = [
-  { button: "minimize", label: () => "Thu nhỏ" },
+  { button: "minimize", label: () => t("window.minimize") },
   {
     button: "maximize",
-    label: (maximized) => (maximized ? "Khôi phục" : "Phóng to"),
+    label: (maximized) =>
+      maximized ? t("window.restore") : t("window.maximize"),
   },
-  { button: "close", label: () => "Đóng" },
+  { button: "close", label: () => t("window.close") },
 ]
 
 function CaptionIcon({
@@ -121,7 +124,7 @@ function WindowControls({ maximized }: { maximized: boolean }) {
     <div
       ref={root}
       role="group"
-      aria-label="Điều khiển cửa sổ"
+      aria-label={t("window.controls")}
       className="flex self-stretch no-drag-region"
     >
       {CONTROLS.map(({ button, label }) => (
@@ -161,7 +164,9 @@ export function TitleBar({
   const mouse = useTitleBarMouse(lights)
   const windows = platform === "windows"
   return (
+    // Luôn trái→phải kể cả tiếng Ả Rập: nút cửa sổ ở góc phải như thanh gốc, vị trí báo cho Rust (Snap Layouts).
     <div
+      dir="ltr"
       data-titlebar={platform ?? "web"}
       data-focused={frame.focused}
       data-maximized={frame.maximized}

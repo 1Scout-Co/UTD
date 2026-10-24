@@ -1,20 +1,22 @@
+import { t } from "@/shared/i18n/i18n"
+
 import { MoreInfo, SettingsSection } from "./settings-section"
 
-/** Công cụ UTD tự tải (không đóng gói trong bộ cài): nguồn chính chủ và giấy phép gốc. */
+/** Công cụ UTD tự tải (không đóng gói trong bộ cài): nguồn chính chủ và giấy phép gốc (hàm: chữ theo ngôn ngữ). */
 const TOOL_CREDITS = [
   {
     name: "yt-dlp",
-    license: "Unlicense (bản chạy được gồm thành phần GPLv3+)",
+    license: () => t("about.ytdlpLicense"),
     source: "github.com/yt-dlp/yt-dlp",
   },
   {
     name: "deno",
-    license: "MIT",
+    license: () => "MIT",
     source: "github.com/denoland/deno",
   },
   {
     name: "ffmpeg",
-    license: "GPLv3",
+    license: () => "GPLv3",
     source:
       "Windows: github.com/yt-dlp/FFmpeg-Builds · macOS: ffmpeg.martin-riedl.de",
   },
@@ -24,24 +26,22 @@ const TOOL_CREDITS = [
 export function SettingsAbout({ version }: { version: string | null }) {
   return (
     <SettingsSection
-      title="Giới thiệu"
-      description={`${version ? `UTD ${version}` : "UTD"} · mã nguồn mở Apache-2.0.`}
+      title={t("about.title")}
+      description={t("about.description", {
+        app: version ? `UTD ${version}` : "UTD",
+      })}
     >
-      <MoreInfo label="Công cụ media">
+      <MoreInfo label={t("tools.title")}>
         <ul className="space-y-1.5">
           {TOOL_CREDITS.map((tool) => (
             <li key={tool.name}>
               <span className="font-semibold text-foreground">{tool.name}</span>{" "}
-              · {tool.license} ·{" "}
+              · {tool.license()} ·{" "}
               <code className="break-all">{tool.source}</code>
             </li>
           ))}
         </ul>
-        <p>
-          Bộ cài UTD không kèm các công cụ này. Lần đầu mở app, UTD tải bản chính
-          chủ, kiểm SHA-256 rồi lưu riêng trong thư mục công cụ; giấy phép của
-          ffmpeg được giữ cạnh file chạy.
-        </p>
+        <p>{t("about.toolsNote")}</p>
       </MoreInfo>
     </SettingsSection>
   )

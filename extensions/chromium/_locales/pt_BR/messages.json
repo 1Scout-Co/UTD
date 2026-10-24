@@ -13,5 +13,11 @@
   "sendFailed": { "message": "Não foi possível enviar a solicitação ao UTD." },
   "noResponse": { "message": "O UTD não está respondendo." },
   "notRunning": { "message": "O UTD não está em execução. Abra o UTD e tente novamente." },
-  "notConnected": { "message": "Não foi possível conectar ao UTD. Verifique se o UTD está aberto e se a integração com o navegador está ativada." }
+  "notConnected": { "message": "Não foi possível conectar ao UTD. Verifique se o UTD está aberto e se a integração com o navegador está ativada." },
+  "menuAll": { "message": "Baixar todos os links com o UTD" },
+  "readLinksFailed": { "message": "Não foi possível ler os links desta página." },
+  "noLinks": { "message": "Nenhum link para download encontrado nesta página." },
+  "tooManyLinks": { "message": "Links demais em um único envio." },
+  "openedForChannel": { "message": "O UTD foi aberto para baixar o canal inteiro." },
+  "openedForLinks": { "message": "O UTD foi aberto para escolher os links." }
 }

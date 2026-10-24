@@ -1,16 +1,5 @@
 // Định dạng ngày dùng chung (giây Unix ⇒ chữ), theo giờ máy.
 
-const dayFormatter = new Intl.DateTimeFormat("vi-VN", {
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-})
-
-/** `24/10/2026`. */
-export function formatDay(seconds: number): string {
-  return dayFormatter.format(new Date(seconds * 1000))
-}
-
 /** `2026-10-24`: đặt đầu tên file cho dễ sắp xếp, cũng là giá trị của ô `<input type="date">`. */
 export function isoDay(seconds: number): string {
   const date = new Date(seconds * 1000)

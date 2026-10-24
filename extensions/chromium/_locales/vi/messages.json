@@ -13,5 +13,11 @@
   "sendFailed": { "message": "Không gửi được yêu cầu sang UTD." },
   "noResponse": { "message": "UTD không phản hồi." },
   "notRunning": { "message": "UTD chưa chạy. Mở UTD rồi thử lại." },
-  "notConnected": { "message": "Không kết nối được UTD. Kiểm tra UTD đang chạy và đã bật tích hợp trình duyệt." }
+  "notConnected": { "message": "Không kết nối được UTD. Kiểm tra UTD đang chạy và đã bật tích hợp trình duyệt." },
+  "menuAll": { "message": "Tải tất cả link bằng UTD" },
+  "readLinksFailed": { "message": "Không đọc được link trên trang này." },
+  "noLinks": { "message": "Không thấy link tải được trên trang." },
+  "tooManyLinks": { "message": "Quá nhiều link trong một lần gửi." },
+  "openedForChannel": { "message": "Đã mở UTD để tải cả kênh." },
+  "openedForLinks": { "message": "Đã mở UTD để chọn link." }
 }

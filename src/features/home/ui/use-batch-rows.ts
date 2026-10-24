@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 
+import { formatBytes, formatList } from "@/shared/i18n/format"
+import { t } from "@/shared/i18n/i18n"
+
 import { inspectLink } from "../api/downloads"
 import {
+  MAX_BATCH_LINKS,
   expandPattern,
   groupOf,
   parseLinks,
@@ -9,7 +13,6 @@ import {
   toRow,
   type BatchRow,
 } from "../model/batch-links"
-import { formatBytes } from "../model/download-mapper"
 import type { RemoteFile } from "../model/types"
 import type { SourceMode } from "./batch-dialog-parts"
 
@@ -77,17 +80,27 @@ export function useSourceLinks({ mode, text, pattern }: Source) {
     if (mode === "pattern") {
       if (!pattern.trim()) return { links: [] as string[], note: null }
       const expanded = expandPattern(pattern)
-      if (!expanded.ok) return { links: [] as string[], note: { text: expanded.error, error: true } }
-      const count = patternCount(pattern).toLocaleString("vi-VN")
-      return { links: expanded.links, note: { text: `Mẫu tạo ${count} link.`, error: false } }
+      if (!expanded.ok) {
+        const text = t(`batch.pattern.${expanded.error}`, { max: MAX_BATCH_LINKS })
+        return { links: [] as string[], note: { text, error: true } }
+      }
+      const count = patternCount(pattern)
+      return {
+        links: expanded.links,
+        note: { text: t("batch.patternCount", { count }), error: false },
+      }
     }
     const parsed = parseLinks(text)
     const dropped = [
-      parsed.duplicates ? `${parsed.duplicates} trùng` : "",
-      parsed.junk ? `${parsed.junk} dòng không phải link` : "",
-      parsed.over ? `${parsed.over} vượt 10.000` : "",
+      parsed.duplicates ? t("batch.duplicates", { count: parsed.duplicates }) : "",
+      parsed.junk ? t("batch.junk", { count: parsed.junk }) : "",
+      parsed.over
+        ? t("batch.over", { count: parsed.over, max: MAX_BATCH_LINKS })
+        : "",
     ].filter(Boolean)
-    const note = dropped.length ? { text: `Đã bỏ ${dropped.join(", ")}.`, error: false } : null
+    const note = dropped.length
+      ? { text: t("batch.dropped", { items: formatList(dropped) }), error: false }
+      : null
     return { links: parsed.links, note }
   }, [mode, text, pattern])
 }
@@ -131,5 +144,5 @@ export function summaryOf(rows: BatchRow[]): string {
   const chosen = rows.filter((row) => row.checked)
   const bytes = chosen.reduce((total, row) => total + (row.size ?? 0), 0)
   const size = bytes > 0 ? ` · ${formatBytes(bytes)}` : ""
-  return `Đã chọn ${chosen.length}/${rows.length}${size}`
+  return `${t("batch.selected", { done: chosen.length, total: rows.length })}${size}`
 }

@@ -94,7 +94,7 @@ struct Choice {
 
 fn checked_choice(input: &AddMediaInput) -> Result<Choice, String> {
     if let Some(raw) = &input.quality {
-        let quality = preset::Quality::parse(raw).ok_or("Chất lượng không hợp lệ.")?;
+        let quality = preset::Quality::parse(raw).ok_or("[media.bad_quality] Chất lượng không hợp lệ.")?;
         return Ok(Choice {
             selector: quality.selector(),
             audio_format: quality.audio_format().map(str::to_string),
@@ -102,12 +102,12 @@ fn checked_choice(input: &AddMediaInput) -> Result<Choice, String> {
     }
     let selector = input.selector.trim();
     if selector.is_empty() || selector.len() > 512 || selector.chars().any(char::is_control) {
-        return Err("Bộ chọn định dạng không hợp lệ.".into());
+        return Err("[media.bad_selector] Bộ chọn định dạng không hợp lệ.".into());
     }
     if let Some(format) = &input.audio_format
         && !matches!(format.as_str(), "m4a" | "mp3")
     {
-        return Err("Định dạng âm thanh không hợp lệ.".into());
+        return Err("[media.bad_audio] Định dạng âm thanh không hợp lệ.".into());
     }
     Ok(Choice {
         selector: selector.to_string(),

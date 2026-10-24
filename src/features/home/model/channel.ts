@@ -2,6 +2,7 @@
 // và cách biến mỗi video thành một lệnh `add_media_download`. Không biết giao diện.
 
 import { dayStart, isoDay } from "@/shared/dates"
+import type { MessageKey } from "@/shared/i18n/i18n"
 
 import type { AddMediaPayload, MediaAudioFormat } from "./types"
 
@@ -43,30 +44,49 @@ export type ListingEvent =
   | { kind: "done"; total: number; complete: boolean; error: string | null }
 
 /** Một chất lượng chung cho cả loạt: không phân tích từng video nên selector phải có đường lui. */
+/** `label`: chữ cố định (H.264, M4A…) hoặc khoá dịch `labelKey`; `detail` là khoá dịch. */
 export interface ChannelQuality {
   id: string
-  label: string
-  detail: string
+  label?: string
+  labelKey?: MessageKey
+  detail: MessageKey
   selector: string
   audioFormat?: MediaAudioFormat
 }
 
 export const CHANNEL_QUALITIES: ChannelQuality[] = [
-  { id: "best", label: "Tốt nhất", detail: "Video + âm thanh, cao nhất", selector: "bv*+ba/b" },
+  {
+    id: "best",
+    labelKey: "format.best",
+    detail: "channel.quality.bestDetail",
+    selector: "bv*+ba/b",
+  },
   {
     id: "h264",
     label: "H.264",
-    detail: "Dễ mở trên mọi máy (TikTok tốt nhất thường là H.265)",
+    detail: "channel.quality.h264Detail",
     selector: "bv*[vcodec^=avc]+ba[ext=m4a]/b[vcodec^=avc]/b[vcodec^=h264]/bv*+ba/b",
   },
   {
     id: "small",
-    label: "Nhẹ",
-    detail: "Tối đa 720p, đỡ tốn dung lượng",
+    labelKey: "channel.quality.small",
+    detail: "channel.quality.smallDetail",
     selector: "bv*[height<=720]+ba/b[height<=720]/wv*+ba/w",
   },
-  { id: "m4a", label: "M4A", detail: "Chỉ âm thanh", selector: "ba[ext=m4a]/ba/b", audioFormat: "m4a" },
-  { id: "mp3", label: "MP3", detail: "Chỉ âm thanh, cần ffmpeg", selector: "ba/b", audioFormat: "mp3" },
+  {
+    id: "m4a",
+    label: "M4A",
+    detail: "channel.quality.audioDetail",
+    selector: "ba[ext=m4a]/ba/b",
+    audioFormat: "m4a",
+  },
+  {
+    id: "mp3",
+    label: "MP3",
+    detail: "channel.quality.mp3Detail",
+    selector: "ba/b",
+    audioFormat: "mp3",
+  },
 ]
 
 export type ChannelRange = "all" | "latest" | "dates"

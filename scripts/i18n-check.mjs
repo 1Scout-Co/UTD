@@ -111,10 +111,13 @@ function rustCodes() {
       const path = join(directory, entry.name)
       if (entry.isDirectory()) walk(path)
       else if (entry.name.endsWith(".rs") && !entry.name.endsWith("_tests.rs")) {
-        const code = read(path).split("#[cfg(test)]")[0]
+        // Chỉ cắt khối `#[cfg(test)] mod tests { … }` (ở cuối file); `#[cfg(test)] mod tests;` là một dòng.
+        const code = read(path).split(/#\[cfg\(test\)\]\s*mod \w+\s*\{/)[0]
         for (const [, prefix, name] of code.matchAll(pattern)) {
           if (!prefix && !/^http\.\d+$/.test(name)) codes.add(name)
         }
+        // Lỗi lệnh có mã: "[nhóm.tên] câu…" (src-tauri/src/coded.rs).
+        for (const [, name] of code.matchAll(/"\[([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)\] /g)) codes.add(name)
       }
     }
   }

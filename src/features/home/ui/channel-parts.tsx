@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { formatDay } from "@/shared/dates"
+import { formatCompact, formatDate } from "@/shared/i18n/format"
+import { codeText, t } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
 import {
@@ -18,11 +19,6 @@ import {
   type ChannelSelection,
 } from "../model/channel"
 
-const compact = new Intl.NumberFormat("vi-VN", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-})
-
 function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60)
   const rest = String(Math.round(seconds % 60)).padStart(2, "0")
@@ -33,9 +29,14 @@ function formatDuration(seconds: number): string {
 
 function entryMeta(entry: ChannelEntry): string {
   const parts = [
-    entry.timestamp === null ? null : formatDay(entry.timestamp),
+    entry.timestamp === null ? null : formatDate(entry.timestamp * 1000),
     entry.durationSeconds ? formatDuration(entry.durationSeconds) : null,
-    entry.viewCount === null ? null : `${compact.format(entry.viewCount)} lượt xem`,
+    entry.viewCount === null
+      ? null
+      : t("channel.views", {
+          count: entry.viewCount,
+          views: formatCompact(entry.viewCount),
+        }),
   ]
   return parts.filter(Boolean).join(" · ") || "—"
 }
@@ -58,8 +59,15 @@ export function ChannelCard({
   const total = profile?.videoCount
   const details = [
     head?.handle,
-    total && total > count ? `${count}/${total} video` : `${count} video`,
-    profile?.followers ? `${compact.format(profile.followers)} người theo dõi` : null,
+    total && total > count
+      ? t("channel.videoCountOf", { done: count, total })
+      : t("channel.videoCount", { count }),
+    profile?.followers
+      ? t("channel.followers", {
+          count: profile.followers,
+          followers: formatCompact(profile.followers),
+        })
+      : null,
   ].filter(Boolean)
   return (
     <div className="flex items-center gap-3 rounded-xl bg-muted p-2.5">
@@ -72,7 +80,7 @@ export function ChannelCard({
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold" title={name ?? undefined}>
-          {name ?? "Đang đọc kênh…"}
+          {name ?? t("channel.reading")}
         </div>
         <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
           {loading ? <Loader2 className="size-3 animate-spin" /> : null}
@@ -82,18 +90,15 @@ export function ChannelCard({
       {loading ? (
         <Button type="button" variant="outline" size="sm" onClick={onStop}>
           <Square />
-          Dừng
+          {t("channel.stop")}
         </Button>
       ) : null}
     </div>
   )
 }
 
-const RANGES: { id: ChannelRange; label: string }[] = [
-  { id: "all", label: "Tất cả" },
-  { id: "latest", label: "Mới nhất" },
-  { id: "dates", label: "Theo ngày" },
-]
+// Nhãn: t(`channel.range.${id}`).
+const RANGES: ChannelRange[] = ["all", "latest", "dates"]
 
 /** Lọc: tất cả / N video mới nhất / khoảng ngày; ẩn video đã tải. */
 export function FilterBar({
@@ -111,25 +116,25 @@ export function FilterBar({
       <div className="flex rounded-lg bg-muted p-0.5">
         {RANGES.map((range) => (
           <button
-            key={range.id}
+            key={range}
             type="button"
-            aria-pressed={filter.range === range.id}
-            onClick={() => set({ range: range.id })}
+            aria-pressed={filter.range === range}
+            onClick={() => set({ range })}
             className={cn(
               "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-              filter.range === range.id
+              filter.range === range
                 ? "bg-card shadow-soft"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {range.label}
+            {t(`channel.range.${range}`)}
           </button>
         ))}
       </div>
       {filter.range === "latest" ? (
         <Input
           type="number"
-          aria-label="Số video mới nhất"
+          aria-label={t("channel.latestCount")}
           min={1}
           value={filter.latest}
           onChange={(event) => set({ latest: Number(event.target.value) })}
@@ -140,7 +145,7 @@ export function FilterBar({
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Input
             type="date"
-            aria-label="Từ ngày"
+            aria-label={t("channel.fromDate")}
             value={filter.from}
             onChange={(event) => set({ from: event.target.value })}
             className="h-8 w-36"
@@ -148,7 +153,7 @@ export function FilterBar({
           –
           <Input
             type="date"
-            aria-label="Đến ngày"
+            aria-label={t("channel.toDate")}
             value={filter.to}
             onChange={(event) => set({ to: event.target.value })}
             className="h-8 w-36"
@@ -156,14 +161,16 @@ export function FilterBar({
         </span>
       ) : null}
       {downloaded > 0 ? (
-        <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+        <label className="ms-auto flex items-center gap-2 text-xs text-muted-foreground">
           <Switch
             size="sm"
             checked={filter.onlyNew}
             onCheckedChange={(checked) => set({ onlyNew: checked })}
           />
-          Chỉ video mới
-          <span className="tabular-nums">(đã tải {downloaded})</span>
+          {t("channel.onlyNew")}
+          <span className="tabular-nums">
+            {t("channel.downloadedCount", { count: downloaded })}
+          </span>
         </label>
       ) : null}
     </div>
@@ -181,7 +188,7 @@ export function EntryList({
   onToggle: (id: string) => void
 }) {
   return (
-    <ul aria-label="Video của kênh" className="-mx-1 max-h-80 space-y-0.5 overflow-y-auto px-1">
+    <ul aria-label={t("channel.videos")} className="-mx-1 max-h-80 space-y-0.5 overflow-y-auto px-1">
       {entries.map((entry) => (
         <li
           key={entry.id}
@@ -222,11 +229,11 @@ export function EntryList({
             {entry.blocked ? (
               <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                 <Lock className="size-3" />
-                {entry.blocked}
+                {codeText("channel.blocked", entry.blocked)}
               </span>
             ) : entry.downloaded ? (
               <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground">
-                Đã tải
+                {t("channel.downloaded")}
               </span>
             ) : null}
           </label>
@@ -245,12 +252,12 @@ export function QualityPicker({
   onChange: (id: string) => void
 }) {
   return (
-    <div role="group" aria-label="Chất lượng" className="flex flex-wrap items-center gap-1.5">
+    <div role="group" aria-label={t("channel.quality.label")} className="flex flex-wrap items-center gap-1.5">
       {CHANNEL_QUALITIES.map((quality) => (
         <button
           key={quality.id}
           type="button"
-          title={quality.detail}
+          title={t(quality.detail)}
           aria-pressed={value === quality.id}
           onClick={() => onChange(quality.id)}
           className={cn(
@@ -260,7 +267,7 @@ export function QualityPicker({
               : "bg-muted text-muted-foreground hover:text-foreground",
           )}
         >
-          {quality.label}
+          {quality.labelKey ? t(quality.labelKey) : quality.label}
         </button>
       ))}
     </div>

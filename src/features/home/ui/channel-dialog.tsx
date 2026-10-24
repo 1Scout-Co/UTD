@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
+import { commandErrorText, t } from "@/shared/i18n/i18n"
 
 import {
   CHANNEL_QUALITIES,
@@ -77,9 +78,9 @@ export function ChannelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-variant="soniox" className="sm:max-w-[680px]">
         <DialogHeader>
-          <DialogTitle>Tải cả kênh</DialogTitle>
+          <DialogTitle>{t("channel.title")}</DialogTitle>
           <DialogDescription className="sr-only">
-            Liệt kê video của kênh, chọn video và chất lượng rồi tải về.
+            {t("channel.description")}
           </DialogDescription>
         </DialogHeader>
 
@@ -94,7 +95,7 @@ export function ChannelDialog({
             />
           ) : null}
           {listing.profile?.private ? (
-            <Notice text="Tài khoản riêng tư: UTD chưa dùng cookie đăng nhập nên không xem được video." />
+            <Notice text={t("channel.private")} />
           ) : null}
 
           {entries.length > 0 ? (
@@ -102,14 +103,14 @@ export function ChannelDialog({
               <FilterBar filter={filter} downloaded={downloaded} onChange={setFilter} />
               <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span className="tabular-nums">
-                  Chọn {picked.length}/{selectable}
+                  {t("channel.picked", { done: picked.length, total: selectable })}
                 </span>
                 <span className="flex gap-1">
                   <Button type="button" variant="ghost" size="xs" onClick={() => setSelection(selectAll(visible))}>
-                    Chọn tất cả
+                    {t("channel.selectAll")}
                   </Button>
                   <Button type="button" variant="ghost" size="xs" onClick={() => setSelection(SELECT_NONE)}>
-                    Bỏ chọn
+                    {t("channel.selectNone")}
                   </Button>
                 </span>
               </div>
@@ -120,7 +121,9 @@ export function ChannelDialog({
                   onToggle={(id) => setSelection((previous) => toggleEntry(previous, id))}
                 />
               ) : (
-                <p className="py-6 text-center text-sm text-muted-foreground">Không có video khớp bộ lọc.</p>
+                <p className="py-6 text-center text-sm text-muted-foreground">
+                  {t("channel.noMatch")}
+                </p>
               )}
             </>
           ) : loading && desktop ? (
@@ -130,7 +133,7 @@ export function ChannelDialog({
           <StatusMessage
             desktop={desktop}
             status={status}
-            error={listing.error}
+            error={listing.error ? commandErrorText(listing.error) : null}
             empty={entries.length === 0}
             onRetry={listing.retry}
           />
@@ -143,7 +146,7 @@ export function ChannelDialog({
                   <Switch size="sm" checked={ownFolder} onCheckedChange={setOwnFolder} />
                   <FolderOpen className="size-3.5 shrink-0" />
                   <span className="max-w-48 truncate" title={folder}>
-                    Thư mục {folder}
+                    {t("channel.folder", { folder })}
                   </span>
                 </label>
               ) : null}
@@ -152,11 +155,11 @@ export function ChannelDialog({
 
           <div className="flex items-center justify-end gap-2">
             <Button variant="ghost" type="button" onClick={() => onOpenChange(false)}>
-              Huỷ
+              {t("app.cancel")}
             </Button>
             <Button data-primary type="button" disabled={!desktop || picked.length === 0} onClick={start}>
               <Download />
-              Tải {picked.length} video
+              {t("channel.download", { count: picked.length })}
             </Button>
           </div>
         </div>
@@ -189,22 +192,26 @@ function StatusMessage({
   onRetry: () => void
 }) {
   if (!desktop) {
-    return <Alert text="Mở app UTD để liệt kê và tải cả kênh." />
+    return <Alert text={t("channel.desktopOnly")} />
   }
   if (status === "error") {
     return (
       <div className="space-y-2">
-        <Alert text={error ?? "Không đọc được kênh này."} />
+        <Alert text={error ?? t("channel.readFailed")} />
         <Button type="button" variant="outline" size="sm" onClick={onRetry}>
           <RotateCw />
-          Thử lại
+          {t("app.retry")}
         </Button>
       </div>
     )
   }
   if (error) return <Notice text={error} />
   if (empty && status !== "loading") {
-    return <p className="py-6 text-center text-sm text-muted-foreground">Kênh chưa có video công khai nào.</p>
+    return (
+      <p className="py-6 text-center text-sm text-muted-foreground">
+        {t("channel.empty")}
+      </p>
+    )
   }
   return null
 }
@@ -221,7 +228,7 @@ function Alert({ text }: { text: string }) {
 function ListSkeleton() {
   return (
     <div role="status" className="space-y-1.5">
-      <span className="sr-only">Đang liệt kê video…</span>
+      <span className="sr-only">{t("channel.listing")}</span>
       {[0, 1, 2, 3].map((index) => (
         <div key={index} className="flex items-center gap-3 px-2 py-1.5">
           <div className="size-4 animate-pulse rounded bg-muted" />

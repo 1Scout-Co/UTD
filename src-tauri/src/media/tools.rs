@@ -118,7 +118,7 @@ pub fn resolve() -> Result<MediaTools, String> {
     let _lookup = lookup_lock();
     let places = Places::current();
     let (yt_dlp, yt_dlp_version) = pick_yt_dlp(&places)
-        .ok_or_else(|| "Chưa có yt-dlp. Mở Cài đặt → Công cụ media để tải yt-dlp.".to_string())?;
+        .ok_or_else(|| "[tool.ytdlp_needed] Chưa có yt-dlp. Mở Cài đặt → Công cụ media để tải yt-dlp.".to_string())?;
     let ffmpeg = pick_ffmpeg(&places).map(|(candidate, _)| candidate.path);
     let deno = pick_deno(&places).map(|(candidate, _)| candidate.path);
     Ok(MediaTools {

@@ -90,7 +90,7 @@ function mockDesktop(scenario: Scenario) {
     ...extra,
   })
   const first = [entry(5, '2026-10-20'), entry(4, '2026-10-12', { downloaded: true }), entry(3, '2026-10-05')]
-  const rest = [entry(2, '2026-09-28', { blocked: 'Riêng tư' }), entry(1, '2026-09-01')]
+  const rest = [entry(2, '2026-09-28', { blocked: 'private' }), entry(1, '2026-09-01')]
   const later = (ms: number, run: () => void) => setTimeout(run, ms)
   // `hold()`: lệnh thêm video chờ tới `release()` (kênh lớn gửi lâu, như app thật).
   let holding = false
@@ -283,7 +283,7 @@ test('channel-model: lọc mới nhất N / khoảng ngày / chỉ video mới, 
     video('a', '2026-10-20'),
     video('b', '2026-10-12', { downloaded: true }),
     video('c', null),
-    video('d', '2026-10-05', { blocked: 'Riêng tư' }),
+    video('d', '2026-10-05', { blocked: 'private' }),
   ]
   const ids = (list: ChannelEntry[]) => list.map((entry) => entry.id)
   expect(ids(visibleEntries(entries, DEFAULT_FILTER))).toEqual(['pinned', 'a', 'c', 'd'])

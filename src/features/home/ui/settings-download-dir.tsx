@@ -3,7 +3,7 @@ import { useState } from "react"
 import { FolderOpen, Info, Loader2, RotateCcw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { t } from "@/shared/i18n/i18n"
+import { commandErrorText, t } from "@/shared/i18n/i18n"
 
 import {
   pickFolder,
@@ -12,10 +12,6 @@ import {
 } from "../api/downloads"
 
 type Busy = "pick" | "reset" | null
-
-function messageOf(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
-}
 
 /** Đổi / bỏ thư mục mặc định; báo lại thư mục mới qua `onChange`. */
 function useDefaultDir(dir: string, onChange: (dir: string) => void) {
@@ -37,7 +33,7 @@ function useDefaultDir(dir: string, onChange: (dir: string) => void) {
         setSaved(true)
       }
     } catch (reason) {
-      setError(messageOf(reason))
+      setError(commandErrorText(reason))
     } finally {
       setBusy(null)
     }

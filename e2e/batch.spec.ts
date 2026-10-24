@@ -58,7 +58,7 @@ test('batch-links: mẫu kiểu IDM [001-120], [a-z], chặn mẫu quá lớn', 
   expect(patternCount('https://site.com/[1-100000].jpg')).toBeGreaterThan(10_000)
   expect(expandPattern('https://site.com/[1-100000].jpg')).toEqual({
     ok: false,
-    error: 'Mẫu quá lớn: tối đa 10.000 link.',
+    error: 'tooBig',
   })
   expect(patternCount('https://site.com/[0001-9999]/[a-z].jpg')).toBeGreaterThan(10_000)
   expect(expandPattern('https://site.com/a.jpg').ok).toBe(false)
@@ -78,7 +78,7 @@ test('S-05: hộp Thêm hàng loạt mở bằng nút và Ctrl+B, đếm link đ
     .getByLabel('Danh sách link')
     .fill(['https://example.com/a.zip', 'không phải link', 'https://example.com/a.zip', 'https://example.com/b.jpg', VIDEO].join('\n'))
   await expect(page.locator('[data-s="S-07"]')).toBeVisible()
-  await expect(dialog.getByText('Đã bỏ 1 trùng, 1 dòng không phải link.')).toBeVisible()
+  await expect(dialog.getByText('Đã bỏ 1 trùng và 1 dòng không phải link.')).toBeVisible()
   await expect(dialog.getByText('Đã chọn 3/3')).toBeVisible()
   await expect(dialog.getByRole('cell', { name: 'a.zip', exact: true })).toBeVisible()
   await expect(dialog.getByRole('group', { name: 'Chất lượng video' })).toBeVisible()

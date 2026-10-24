@@ -62,7 +62,7 @@ pub async fn add_batch_downloads(app: AppHandle, input: BatchInput) -> Result<Ba
 
 fn add_batch(app: &AppHandle, input: BatchInput) -> Result<BatchResult, String> {
     if input.urls.is_empty() || input.urls.len() > MAX_BATCH_ITEMS {
-        return Err("Danh sách link không hợp lệ.".into());
+        return Err("[batch.invalid] Danh sách link không hợp lệ.".into());
     }
     let quality = input.quality.unwrap_or_else(|| "best".into());
     let state = app.state::<AppState>();

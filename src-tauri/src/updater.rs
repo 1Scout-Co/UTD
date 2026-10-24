@@ -28,10 +28,10 @@ const REPORT_EVERY: Duration = Duration::from_millis(250);
 const BACKUPS_KEPT: usize = 3;
 const NOTES_MAX_CHARS: usize = 1500;
 
-const DISABLED: &str = "Bản này chưa bật tự cập nhật.";
-const LATEST: &str = "Bạn đang dùng bản mới nhất.";
-const SAVE_FAILED: &str = "Không lưu được cài đặt.";
-const BAD_SIGNATURE: &str = "Gói cập nhật sai chữ ký nên đã bị từ chối. Bạn vẫn dùng bản hiện tại.";
+const DISABLED: &str = "[update.disabled] Bản này chưa bật tự cập nhật.";
+const LATEST: &str = "[update.latest] Bạn đang dùng bản mới nhất.";
+const SAVE_FAILED: &str = "[settings.save_failed] Không lưu được cài đặt.";
+const BAD_SIGNATURE: &str = "[update.bad_signature] Gói cập nhật sai chữ ký nên đã bị từ chối. Bạn vẫn dùng bản hiện tại.";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,7 +132,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         .await
         .is_ok_and(|status| status.installing.is_some());
     if tool_busy {
-        return Err("Đang tải công cụ media. Chờ xong rồi cập nhật.".into());
+        return Err("[update.tools_busy] Đang tải công cụ media. Chờ xong rồi cập nhật.".into());
     }
     // Giữ bản mới trong slot (không `take`): mở lại Cài đặt giữa chừng vẫn thấy thẻ bản mới và tiến độ;
     // cài lỗi thì vẫn bấm Cập nhật lại được.
@@ -186,7 +186,7 @@ struct Installing<'a>(&'a AtomicBool);
 impl<'a> Installing<'a> {
     fn begin(flag: &'a AtomicBool) -> Result<Self, String> {
         flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| "Đang cập nhật. Chờ một chút.".to_string())?;
+            .map_err(|_| "[update.busy] Đang cập nhật. Chờ một chút.".to_string())?;
         Ok(Self(flag))
     }
 }
@@ -328,20 +328,20 @@ fn friendly(error: &UpdaterError) -> String {
         other => log::warn!("Updater error: {other}"),
     }
     let message = match error {
-        UpdaterError::ReleaseNotFound => "Chưa có bản phát hành nào trên GitHub. Thử lại sau.",
+        UpdaterError::ReleaseNotFound => "[update.no_release] Chưa có bản phát hành nào trên GitHub. Thử lại sau.",
         UpdaterError::Reqwest(inner) if inner.is_timeout() => {
-            "Máy chủ cập nhật không trả lời. Thử lại sau."
+            "[update.server] Máy chủ cập nhật không trả lời. Thử lại sau."
         }
-        UpdaterError::Reqwest(_) => "Không kết nối được GitHub. Kiểm tra mạng rồi thử lại.",
-        UpdaterError::Network(_) => "Không tải được gói cập nhật. Thử lại sau.",
+        UpdaterError::Reqwest(_) => "[update.connect] Không kết nối được GitHub. Kiểm tra mạng rồi thử lại.",
+        UpdaterError::Network(_) => "[update.download] Không tải được gói cập nhật. Thử lại sau.",
         UpdaterError::Serialization(_) | UpdaterError::Semver(_) | UpdaterError::UrlParse(_) => {
-            "Thông tin bản mới bị lỗi. Thử lại sau."
+            "[update.bad_info] Thông tin bản mới bị lỗi. Thử lại sau."
         }
         UpdaterError::TargetNotFound(_) | UpdaterError::TargetsNotFound(_) => {
             if cfg!(target_os = "macos") {
-                "Bản mới chưa có gói cho macOS."
+                "[update.no_mac] Bản mới chưa có gói cho macOS."
             } else {
-                "Bản mới chưa có gói cho Windows 64-bit."
+                "[update.no_windows] Bản mới chưa có gói cho Windows 64-bit."
             }
         }
         UpdaterError::Minisign(_)
@@ -353,9 +353,9 @@ fn friendly(error: &UpdaterError) -> String {
         UpdaterError::Io(_)
         | UpdaterError::InvalidUpdaterFormat
         | UpdaterError::TempDirNotFound => {
-            "Không chạy được bộ cài bản mới. Bạn vẫn dùng bản hiện tại."
+            "[update.installer] Không chạy được bộ cài bản mới. Bạn vẫn dùng bản hiện tại."
         }
-        _ => "Không cập nhật được. Thử lại sau.",
+        _ => "[update.failed] Không cập nhật được. Thử lại sau.",
     };
     message.to_string()
 }

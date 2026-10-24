@@ -188,17 +188,19 @@ fn thumbnail_of(value: &Value) -> Option<String> {
     text(picked, "url").map(str::to_string)
 }
 
+/// Lý do không tải được, dạng mã ổn định (`private`, `premium`, `members`, `login`, `live`, `upcoming`):
+/// giao diện hiện nhãn theo ngôn ngữ (`channel.blocked.<mã>`).
 fn blocked_reason(value: &Value) -> Option<String> {
     let reason = match text(value, "availability") {
-        Some("private") => Some("Riêng tư"),
-        Some("premium_only") => Some("Cần Premium"),
-        Some("subscriber_only") => Some("Chỉ hội viên"),
-        Some("needs_auth") => Some("Cần đăng nhập"),
+        Some("private") => Some("private"),
+        Some("premium_only") => Some("premium"),
+        Some("subscriber_only") => Some("members"),
+        Some("needs_auth") => Some("login"),
         _ => None,
     };
     let live = match text(value, "live_status") {
-        Some("is_live") => Some("Đang phát trực tiếp"),
-        Some("is_upcoming") => Some("Sắp phát"),
+        Some("is_live") => Some("live"),
+        Some("is_upcoming") => Some("upcoming"),
         _ => None,
     };
     reason.or(live).map(str::to_string)
@@ -281,8 +283,8 @@ mod tests {
             Some("https://i.ytimg.com/vi/abcDEF12345/hq720.jpg?w=360"),
             "ảnh hẹp nhất còn ≥ 160 px"
         );
-        assert_eq!(entries[1].blocked.as_deref(), Some("Chỉ hội viên"));
-        assert_eq!(entries[2].blocked.as_deref(), Some("Sắp phát"));
+        assert_eq!(entries[1].blocked.as_deref(), Some("members"));
+        assert_eq!(entries[2].blocked.as_deref(), Some("upcoming"));
         assert_eq!(
             entries[2].timestamp,
             Some(1_791_590_400),

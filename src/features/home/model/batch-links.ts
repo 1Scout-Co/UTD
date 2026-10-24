@@ -6,7 +6,7 @@ import { fileNameFromUrl } from "./download-mapper"
 import { isMediaPage } from "./media-pages"
 
 /** Trần một lần thêm, bằng `MAX_BATCH_ITEMS` của app. */
-const MAX_BATCH_LINKS = 10_000
+export const MAX_BATCH_LINKS = 10_000
 const MAX_URL_LENGTH = 8192
 
 /** Link http(s) dùng được (như `validate_url` của engine: không kèm tên/mật khẩu); trả dạng chuẩn. */
@@ -113,18 +113,19 @@ function valueAt(range: PatternRange, index: number): string {
   return range.width ? String(value).padStart(range.width, "0") : String(value)
 }
 
+/** Lỗi của mẫu, dạng mã: giao diện dịch bằng t(`batch.pattern.${error}`). */
+export type PatternError = "noRange" | "tooBig" | "notHttp"
+
 export type PatternResult =
   | { ok: true; links: string[] }
-  | { ok: false; error: string }
+  | { ok: false; error: PatternError }
 
 /** Mở mẫu thành danh sách link theo thứ tự (ngoặc đầu đổi chậm nhất). */
 export function expandPattern(pattern: string): PatternResult {
   const { parts, ranges } = rangesOf(pattern.trim())
   const count = patternCount(pattern)
-  if (count === 0) return { ok: false, error: "Thêm [001-120] hoặc [a-z] vào link." }
-  if (count > MAX_BATCH_LINKS) {
-    return { ok: false, error: `Mẫu quá lớn: tối đa ${MAX_BATCH_LINKS.toLocaleString("vi-VN")} link.` }
-  }
+  if (count === 0) return { ok: false, error: "noRange" }
+  if (count > MAX_BATCH_LINKS) return { ok: false, error: "tooBig" }
   const links: string[] = []
   for (let index = 0; index < count; index += 1) {
     let rest = index
@@ -135,7 +136,7 @@ export function expandPattern(pattern: string): PatternResult {
       rest = Math.floor(rest / sizeOf(range))
     }
     const link = normalizeLink(parts.map((part, at) => part + (values[at] ?? "")).join(""))
-    if (!link) return { ok: false, error: "Mẫu phải là link http hoặc https." }
+    if (!link) return { ok: false, error: "notHttp" }
     links.push(link)
   }
   return { ok: true, links }
@@ -183,9 +184,12 @@ export function toRow(url: string, fromBrowser = false): BatchRow {
   }
 }
 
-/** Nhóm của bộ lọc nhanh: "Video" cho trang video, đuôi file, hoặc "Khác". */
+/**
+ * Nhóm của bộ lọc nhanh: đuôi file, hoặc nhóm đặt sẵn `:video` (trang video), `:page` (trang web), `:other`
+ * (dấu `:` để không trùng đuôi file). Tên hiện: `groupLabel` ở giao diện.
+ */
 export function groupOf(row: BatchRow): string {
-  if (row.kind === "media") return "Video"
-  if (row.kind === "page") return "Trang web"
-  return linkExtension(row.url) || "Khác"
+  if (row.kind === "media") return ":video"
+  if (row.kind === "page") return ":page"
+  return linkExtension(row.url) || ":other"
 }
