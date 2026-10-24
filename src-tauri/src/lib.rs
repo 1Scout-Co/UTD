@@ -168,8 +168,6 @@ pub fn run() {
                 },
             )?);
             let running = Arc::new(RunningTasks::default());
-            #[cfg(target_os = "macos")]
-            app_nap::watch(running.clone());
             let ipc_config = ipc::create_config();
             ipc::write_config(&directory, &ipc_config).map_err(std::io::Error::other)?;
             // Manifest native host cũ trỏ vào thư mục dữ liệu cũ: đăng ký lại ở chỗ mới.
@@ -199,7 +197,13 @@ pub fn run() {
                 directory.clone(),
             );
             // Công cụ media tự tải lần đầu / tự cập nhật (cần journal để nhớ công tắc và lần kiểm).
-            app.manage(media::start_auto_tools(app.handle(), journal.clone()));
+            let auto = media::start_auto_tools(app.handle(), journal.clone());
+            #[cfg(target_os = "macos")]
+            {
+                let (running, auto) = (running.clone(), auto.clone());
+                app_nap::watch(move || !running.is_empty() || auto.installs_missing());
+            }
+            app.manage(auto);
             app.manage(AppState {
                 engine,
                 journal,

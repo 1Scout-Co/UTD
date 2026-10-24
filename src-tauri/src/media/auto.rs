@@ -205,6 +205,14 @@ impl Auto {
             && !state.failed.contains(&tool)
     }
 
+    /// Đang tải công cụ còn thiếu (lần đầu mở app, thử lại sau lỗi) — không tính cập nhật nền của bản đã
+    /// dùng được. Task media đang chờ công cụ nằm trong hàng mà không chạy (`holds_media`), nên macOS
+    /// cần biết lúc này app vẫn đang làm việc người dùng chờ (`app_nap`).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn installs_missing(&self) -> bool {
+        self.state().active.is_some()
+    }
+
     /// Hàng đợi chung chưa chạy task media lúc công cụ nó cần còn đang tự tải: task vẫn "Đang chờ lượt"
     /// mà không giữ chỗ chạy (file HTTP phía sau chạy trước). Như `wait_for` của runner: công cụ bắt buộc
     /// (yt-dlp; ffmpeg khi `audio`) chờ qua cả các lần thử lại sau lỗi, công cụ phụ (deno; ffmpeg khi tải
@@ -852,6 +860,23 @@ mod tests {
         let probe = auto.wait_for(&[Tool::YtDlp], &[], 1, &never);
         assert!(tokio::time::timeout(Duration::from_millis(50), probe).await.is_err());
         assert!(!auto.state().paused);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// macOS giữ app khỏi App Nap lúc tự tải công cụ còn thiếu (task media chờ trong hàng không nằm trong
+    /// `RunningTasks`); cập nhật nền yt-dlp thì không.
+    #[tokio::test]
+    async fn installing_a_missing_tool_counts_as_work_the_user_waits_for() {
+        let fake = Fake::new(None, vec![]);
+        let (auto, dir) = auto_with(&fake);
+        assert!(!auto.installs_missing());
+        auto.update(|state| state.updating = Some(Tool::YtDlp));
+        assert!(!auto.installs_missing(), "cập nhật nền: không giữ");
+        auto.update(|state| {
+            state.updating = None;
+            state.active = Some(Tool::Ffmpeg);
+        });
+        assert!(auto.installs_missing());
         let _ = std::fs::remove_dir_all(dir);
     }
 
