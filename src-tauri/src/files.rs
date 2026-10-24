@@ -267,7 +267,11 @@ fn delete_task(journal: &Journal, data: &Path, task_id: &str) -> Result<(), Stri
         shell::with_com(|| shell::recycle(&doomed))?;
     }
     match journal.delete_task(task_id) {
-        Ok(()) | Err(utd_engine::Error::NotFound(_)) => Ok(()),
+        Ok(()) | Err(utd_engine::Error::NotFound(_)) => {
+            let downloaded = task.status == TaskStatus::Completed;
+            crate::media::channel::forget(journal, task_id, downloaded);
+            Ok(())
+        }
         Err(_) => Err(text::SAVE_FAILED.into()),
     }
 }

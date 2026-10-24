@@ -26,7 +26,9 @@ use utd_engine::Journal;
 
 use entries::{ChannelEntry, ChannelHead};
 use profile::ChannelProfile;
-pub use seen::{ChannelPick, remember};
+pub use seen::{ChannelPick, forget, remember};
+#[cfg(test)]
+pub(crate) use seen::is_downloaded;
 
 use crate::media::{auto_tools, interactive_tools, js_runtime_args, probe, tokio_command, tools};
 use crate::state::AppState;

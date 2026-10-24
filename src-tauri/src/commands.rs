@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use utd_engine::{
     DownloadControl, DownloadEngine, DownloadRequest, DownloadTask, Journal, RemoteFile, TaskKind,
+    TaskStatus,
 };
 
 use crate::events::{emit_engine_event, BridgeError, ERROR_EVENT};
@@ -161,6 +162,8 @@ fn remove_task(journal: &Journal, task_id: &str, delete_files: bool) -> Result<(
     journal
         .delete_task(task_id)
         .map_err(|error| error.to_string())?;
+    // Đã tải xong thì vẫn tính "Đã tải" (như lúc chưa ghép), kể cả khi xoá file kèm theo.
+    crate::media::channel::forget(journal, task_id, task.status == TaskStatus::Completed);
     if delete_files {
         let target = Path::new(&task.dest_dir).join(&task.file_name);
         let _ = std::fs::remove_file(target);
@@ -748,6 +751,38 @@ mod tests {
         );
         assert!(journal.load_task(&media.id).unwrap().is_none());
         assert!(journal.list_children(&media.id).unwrap().is_empty());
+        drop(journal);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Tải cả kênh nhớ video lúc xếp hàng: xoá task đang chờ khỏi danh sách (ngưng tải kênh) thì lần sau
+    /// video được chọn lại; task đã tải xong bị xoá khỏi danh sách vẫn là "Đã tải".
+    #[test]
+    fn removing_a_queued_channel_video_offers_it_again() {
+        let root = scratch();
+        let journal = Journal::open(root.join("data").join("utd.db")).unwrap();
+        let dir = text(&root);
+        let key = "tiktok.com:MS4wLjABAAAA";
+        let mut ids = Vec::new();
+        for (video, status) in [("v1", TaskStatus::Queued), ("v2", TaskStatus::Completed)] {
+            let mut task = DownloadTask::new("https://www.tiktok.com/@a/video/1", "a.mp4", &*dir, 1)
+                .unwrap()
+                .with_kind(TaskKind::Media);
+            task.status = status;
+            task.hash_state = utd_engine::HashState::Unavailable;
+            journal.save_task(&task).unwrap();
+            let pick = crate::media::channel::ChannelPick {
+                key: key.into(),
+                video_id: video.into(),
+            };
+            crate::media::channel::remember(&journal, &pick, &task.id).unwrap();
+            ids.push(task.id);
+        }
+        for id in &ids {
+            remove_task(&journal, id, false).unwrap();
+        }
+        assert!(!crate::media::channel::is_downloaded(&journal, key, "v1"), "chưa tải ⇒ chọn lại");
+        assert!(crate::media::channel::is_downloaded(&journal, key, "v2"), "đã tải xong ⇒ vẫn nhớ");
         drop(journal);
         let _ = std::fs::remove_dir_all(&root);
     }

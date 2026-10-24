@@ -474,6 +474,13 @@ impl Journal {
             .map_err(Error::from)
     }
 
+    /// Bỏ một khoá cài đặt (không có thì thôi).
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
     pub fn save_media_job(&self, job: &MediaJob) -> Result<()> {
         job.validate()?;
         let conn = self.conn()?;

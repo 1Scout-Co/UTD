@@ -3,8 +3,10 @@
 //! kênh TikTok dài ~80 (`tiktok.com:<secUid 55 ký tự>`) ⇒ khoá là `channel.seen.<băm FNV-1a 64 bit>`,
 //! giá trị JSON `{ "key": khoá kênh, "ids": { id video: id task } }` (khác `key` ⇒ coi như trống).
 //!
-//! Video tính là "đã có" khi task của nó còn trong danh sách và chưa lỗi, hoặc đã bị bỏ khỏi danh sách
-//! (bỏ khỏi danh sách vẫn giữ file). Task lỗi thì lần sau được chọn lại.
+//! Video tính là "đã có" khi task của nó còn trong danh sách và chưa lỗi, hoặc đã tải xong rồi mới bị bỏ
+//! khỏi danh sách (vẫn giữ file). Task lỗi thì lần sau được chọn lại. Video được nhớ ngay lúc xếp hàng
+//! (tải cả kênh gửi hết vào hàng đợi chung), nên bỏ khỏi danh sách task chưa xong (vd xoá các task đang
+//! chờ để ngưng tải kênh) thì quên video đó (`forget`): khoá ngược `channel.task.<id task>` = khoá kênh.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Mutex;
@@ -13,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use utd_engine::{Journal, TaskStatus};
 
 const PREFIX: &str = "channel.seen.";
+const TASK_PREFIX: &str = "channel.task.";
 /// Một kênh nhớ tối đa chừng này id (bỏ id nhỏ nhất ⇒ thường là video cũ nhất).
 const MAX_IDS: usize = 20_000;
 
@@ -55,6 +58,23 @@ fn setting_key(key: &str) -> String {
     format!("{PREFIX}{hash:016x}")
 }
 
+/// Khoá ngược task → kênh; id task quá dài (không phải uuid) thì không có.
+fn task_key(task_id: &str) -> Option<String> {
+    let key = format!("{TASK_PREFIX}{task_id}");
+    (key.len() <= 64).then_some(key)
+}
+
+fn save_map(journal: &Journal, key: &str, ids: BTreeMap<String, String>) -> Result<(), String> {
+    let stored = Stored {
+        key: key.to_string(),
+        ids,
+    };
+    let value = serde_json::to_string(&stored).map_err(|error| error.to_string())?;
+    journal
+        .set_setting(&setting_key(key), &value)
+        .map_err(|error| error.to_string())
+}
+
 fn load_map(journal: &Journal, key: &str) -> BTreeMap<String, String> {
     journal
         .get_setting(&setting_key(key))
@@ -79,14 +99,39 @@ pub fn remember(journal: &Journal, pick: &ChannelPick, task_id: &str) -> Result<
     while ids.len() > MAX_IDS {
         ids.pop_first();
     }
-    let stored = Stored {
-        key: pick.key.clone(),
-        ids,
+    save_map(journal, &pick.key, ids)?;
+    match task_key(task_id) {
+        Some(reverse) => journal
+            .set_setting(&reverse, &pick.key)
+            .map_err(|error| error.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// Task vừa bị bỏ khỏi danh sách. `downloaded` (task đã tải xong, file còn đó) ⇒ vẫn nhớ video; chưa
+/// xong (đang chờ, dừng, lỗi) ⇒ quên, lần sau "Chỉ video mới" chọn lại. Task không thuộc kênh nào: thôi.
+pub fn forget(journal: &Journal, task_id: &str, downloaded: bool) {
+    let Some(reverse) = task_key(task_id) else {
+        return;
     };
-    let value = serde_json::to_string(&stored).map_err(|error| error.to_string())?;
-    journal
-        .set_setting(&setting_key(&pick.key), &value)
-        .map_err(|error| error.to_string())
+    let Some(key) = journal.get_setting(&reverse).ok().flatten() else {
+        return;
+    };
+    if !downloaded {
+        let _guard = WRITE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = load_map(journal, &key);
+        let before = ids.len();
+        ids.retain(|_, task| task != task_id);
+        if ids.len() != before
+            && let Err(error) = save_map(journal, &key, ids)
+        {
+            log::warn!("channel: không quên được video của task bị bỏ ({error})");
+            return;
+        }
+    }
+    let _ = journal.delete_setting(&reverse);
 }
 
 /// Ảnh chụp các video đã có của một kênh, đọc một lần lúc bắt đầu liệt kê.
@@ -117,6 +162,12 @@ impl Downloaded {
             .get(video_id)
             .is_some_and(|task_id| !self.failed_tasks.contains(task_id))
     }
+}
+
+/// Bài thử ngoài mô-đun (lệnh xoá task): video của kênh còn tính là "đã có" không.
+#[cfg(test)]
+pub(crate) fn is_downloaded(journal: &Journal, key: &str, video_id: &str) -> bool {
+    Downloaded::load(journal, key).contains(video_id)
 }
 
 #[cfg(test)]
@@ -157,6 +208,7 @@ mod tests {
         let failed = task(journal, TaskStatus::Failed);
         remember(journal, &pick("v1"), &done).unwrap();
         remember(journal, &pick("v2"), &failed).unwrap();
+        // Task đã xong rồi bị bỏ khỏi danh sách: journal không còn task, `forget` giữ video.
         remember(journal, &pick("v3"), "task-removed-from-list").unwrap();
 
         let seen = Downloaded::load(journal, KEY);
@@ -165,6 +217,31 @@ mod tests {
         assert!(seen.contains("v3"), "bỏ khỏi danh sách vẫn giữ file");
         assert!(!seen.contains("v4"));
         assert!(!Downloaded::load(journal, "youtube.com:UC1").contains("v1"));
+    }
+
+    /// Tải cả kênh nhớ video lúc xếp hàng: bỏ task chưa tải xong khỏi danh sách (ngưng tải kênh) thì video
+    /// được chọn lại lần sau; task đã xong bị bỏ khỏi danh sách vẫn là "Đã tải".
+    #[test]
+    fn removing_an_unfinished_task_forgets_its_video() {
+        let scratch = Scratch::new();
+        let journal = scratch.journal();
+        let done = task(journal, TaskStatus::Completed);
+        let waiting = task(journal, TaskStatus::Queued);
+        remember(journal, &pick("v1"), &done).unwrap();
+        remember(journal, &pick("v2"), &waiting).unwrap();
+        assert!(Downloaded::load(journal, KEY).contains("v2"), "đang chờ: không chọn trùng");
+
+        journal.delete_task(&waiting).unwrap();
+        forget(journal, &waiting, false);
+        journal.delete_task(&done).unwrap();
+        forget(journal, &done, true);
+        let seen = Downloaded::load(journal, KEY);
+        assert!(!seen.contains("v2"), "chưa tải xong ⇒ lần sau chọn lại");
+        assert!(seen.contains("v1"), "đã tải xong ⇒ vẫn giữ file");
+        assert_eq!(journal.get_setting(&task_key(&waiting).unwrap()).unwrap(), None);
+        assert_eq!(journal.get_setting(&task_key(&done).unwrap()).unwrap(), None);
+        forget(journal, "task-ngoai-kenh", false);
+        assert!(Downloaded::load(journal, KEY).contains("v1"));
     }
 
     #[test]

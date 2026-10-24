@@ -120,7 +120,9 @@ tự từng trang, app chỉ chạy một lượt mỗi hộp).
   - `seen.rs`: nhớ id đã tải trong bảng `settings` của journal, khoá `channel.seen.<khoá kênh>` = JSON
     `{id video: id task}` (tối đa 20 000 id/kênh). **Không thêm bảng/migration** để khỏi đụng phiên khác.
     Video tính "đã có" khi task còn và chưa lỗi, hoặc task đã bị bỏ khỏi danh sách; task lỗi ⇒ lần sau
-    được chọn lại.
+    được chọn lại. Sau khi ghép (cả kênh vào hàng đợi chung ngay, video được nhớ lúc xếp hàng): bỏ khỏi
+    danh sách task **chưa tải xong** (vd xoá các task đang chờ để ngưng tải kênh) ⇒ `seen::forget` quên
+    video đó (khoá ngược `channel.task.<id task>` = khoá kênh, xoá khi task bị bỏ); task đã xong vẫn nhớ.
 - `add_media_download` (`AddMediaInput`) thêm 2 trường tuỳ chọn: `subfolder` (làm sạch bằng `safe_base`,
   một tầng) và `channel {key, videoId}` (ghi nhớ sau khi tạo task). Lệnh cũ gọi không có hai trường này
   vẫn y như trước.
