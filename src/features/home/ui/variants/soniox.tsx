@@ -36,6 +36,8 @@ export type SonioxProps = HomeScreenProps &
     onUpdates?: () => void
     /** Thẻ trạng thái nhỏ trên thẻ ổ đĩa (vd app đang tự tải công cụ media). */
     sideStatus?: React.ReactNode
+    /** Mở hộp Thêm hàng loạt (nút "Hàng loạt" cạnh "Thêm URL"). */
+    onBatch?: () => void
   }
 
 /** Mục Cài đặt ở chân thanh bên; có bản mới thì kèm nhãn "Mới" và bấm vào mở thẳng mục Cập nhật. */
@@ -275,6 +277,7 @@ function DownloadsView({
   onQueryChange,
   onClear,
   onAdd,
+  onBatch,
   linkOf,
   onTaskUpdate,
   onTaskRemoved,
@@ -285,6 +288,7 @@ function DownloadsView({
   onFilterChange: (filter: DownloadFilter) => void
   onQueryChange: (query: string) => void
   onClear: () => void
+  onBatch?: () => void
 } & Pick<
   HomeScreenProps,
   "items" | "onAdd" | "onPause" | "onResume" | "onRemove" | "onDiagnose"
@@ -302,6 +306,7 @@ function DownloadsView({
         onFilterChange={onFilterChange}
         onQueryChange={onQueryChange}
         onAdd={onAdd}
+        onBatch={onBatch}
       />
       <SonioxTable
         items={items}

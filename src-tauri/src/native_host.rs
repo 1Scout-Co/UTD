@@ -3,17 +3,73 @@ use std::io::{BufRead, Read, Write};
 use serde::{Deserialize, Serialize};
 
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_URL_BYTES: usize = 8192;
 
+/// `type`: `download` (một link) hoặc `batch` (lô link "Tải tất cả link bằng UTD", trong `urls`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HostRequest {
     version: u32,
     #[serde(rename = "type")]
     kind: String,
+    #[serde(default)]
     url: String,
     #[serde(rename = "pageUrl")]
     page_url: Option<String>,
     suggested_name: Option<String>,
+    #[serde(default)]
+    urls: Vec<String>,
+}
+
+fn is_web_url(value: &str) -> bool {
+    value.len() <= MAX_URL_BYTES && (value.starts_with("http://") || value.starts_with("https://"))
+}
+
+/// Tin nhắn từ trình duyệt ⇒ dòng JSON gửi qua pipe (chưa kèm token). App kiểm lại lần nữa (`ipc.rs`).
+fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
+    if request.version != 1 {
+        return Err("Yêu cầu từ trình duyệt không hợp lệ.".into());
+    }
+    // Trang đang mở (để UTD mở đúng luồng media); bỏ qua nếu lạ thay vì từ chối cả yêu cầu.
+    let page_url = request.page_url.as_deref().map(str::trim).filter(|page| is_web_url(page));
+    match request.kind.as_str() {
+        "download" => {
+            let url = request.url.trim();
+            if !is_web_url(url) {
+                return Err("Chỉ hỗ trợ URL HTTP/HTTPS.".into());
+            }
+            let suggested_name = request
+                .suggested_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty() && name.chars().count() <= 180);
+            Ok(serde_json::json!({
+                "url": url,
+                "suggestedName": suggested_name,
+                "pageUrl": page_url,
+            }))
+        }
+        "batch" => {
+            if request.urls.len() > crate::batch::MAX_LINKS {
+                return Err("Quá nhiều link trong một lần gửi.".into());
+            }
+            let urls: Vec<&str> = request
+                .urls
+                .iter()
+                .map(|url| url.trim())
+                .filter(|url| is_web_url(url))
+                .collect();
+            if urls.is_empty() {
+                return Err("Trang này không có link tải được.".into());
+            }
+            Ok(serde_json::json!({
+                "url": page_url.unwrap_or(""),
+                "pageUrl": page_url,
+                "batch": urls,
+            }))
+        }
+        _ => Err("Yêu cầu từ trình duyệt không hợp lệ.".into()),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -61,34 +117,11 @@ pub fn run() -> i32 {
 
 fn forward() -> Result<HostResponse, String> {
     let request = read_request()?;
-    if request.version != 1 || request.kind != "download" {
-        return Err("Yêu cầu từ trình duyệt không hợp lệ.".into());
-    }
-    let url = request.url.trim();
-    if url.len() > 8192
-        || !(url.starts_with("http://") || url.starts_with("https://"))
-    {
-        return Err("Chỉ hỗ trợ URL HTTP/HTTPS.".into());
-    }
-    let suggested_name = request
-        .suggested_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty() && name.chars().count() <= 180);
-    // Trang đang mở (để UTD mở đúng luồng media); bỏ qua nếu lạ thay vì từ chối cả yêu cầu.
-    let page_url = request
-        .page_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|page| page.len() <= 8192 && (page.starts_with("http://") || page.starts_with("https://")));
+    let mut payload = pipe_payload(&request)?;
 
+    // Windows (named pipe) và macOS (Unix socket) gửi cùng một dòng JSON: mọi loại tin nhắn đi chung đường.
     let (config, path) = crate::ipc::read_config()?;
-    let payload = serde_json::json!({
-        "token": config.token,
-        "url": url,
-        "suggestedName": suggested_name,
-        "pageUrl": page_url,
-    });
+    payload["token"] = serde_json::Value::String(config.token.clone());
     let payload = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
     let response = exchange(connect(&config, &path)?, &payload)?;
     if response.ok {
@@ -245,5 +278,47 @@ mod tests {
         assert_eq!(app.sent, b"{\"url\":\"https://x\"}\n");
         assert_eq!(exchange(&mut peer(""), "{}").unwrap_err(), "UTD không phản hồi.");
         assert_eq!(exchange(&mut peer("rac\n"), "{}").unwrap_err(), "UTD trả về dữ liệu lạ.");
+    }
+
+    fn message(value: serde_json::Value) -> HostRequest {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn single_links_keep_the_old_message_shape() {
+        let payload = pipe_payload(&message(serde_json::json!({
+            "version": 1, "type": "download", "url": " https://example.com/a.zip ",
+            "pageUrl": "javascript:x", "suggestedName": "  ",
+        })))
+        .unwrap();
+        assert_eq!(
+            payload,
+            serde_json::json!({ "url": "https://example.com/a.zip", "suggestedName": null, "pageUrl": null })
+        );
+        let bad = message(serde_json::json!({ "version": 1, "type": "download", "url": "file:///c:/x" }));
+        assert!(pipe_payload(&bad).is_err());
+        let old = message(serde_json::json!({ "version": 2, "type": "download", "url": "https://a.b/c" }));
+        assert!(pipe_payload(&old).is_err());
+    }
+
+    #[test]
+    fn batches_are_checked_and_capped() {
+        let payload = pipe_payload(&message(serde_json::json!({
+            "version": 1, "type": "batch", "pageUrl": "https://example.com/gallery",
+            "urls": ["https://example.com/1.jpg", "data:image/png;base64,AA", " https://example.com/2.zip "],
+        })))
+        .unwrap();
+        assert_eq!(payload["batch"], serde_json::json!(["https://example.com/1.jpg", "https://example.com/2.zip"]));
+        assert_eq!(payload["url"], "https://example.com/gallery");
+
+        let junk = message(serde_json::json!({ "version": 1, "type": "batch", "urls": ["blob:x"] }));
+        assert!(pipe_payload(&junk).is_err());
+        let many: Vec<String> = (0..=crate::batch::MAX_LINKS)
+            .map(|index| format!("https://example.com/{index}.jpg"))
+            .collect();
+        let flood = message(serde_json::json!({ "version": 1, "type": "batch", "urls": many }));
+        assert!(pipe_payload(&flood).is_err());
+        let unknown = message(serde_json::json!({ "version": 1, "type": "exec", "url": "https://a.b" }));
+        assert!(pipe_payload(&unknown).is_err());
     }
 }

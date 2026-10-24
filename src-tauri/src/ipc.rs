@@ -20,7 +20,13 @@ struct PipeRequest {
     suggested_name: Option<String>,
     /// Trang đang mở khi chuột phải; native host cũ không gửi trường này.
     page_url: Option<String>,
+    /// Lô link ("Tải tất cả link bằng UTD"): mở hộp Thêm hàng loạt, `url` khi đó là trang đang mở.
+    #[serde(default)]
+    batch: Option<Vec<String>>,
 }
+
+/// Một dòng yêu cầu tối đa chừng này byte: lô `batch::MAX_LINKS` link (native host đã giới hạn 1 MiB).
+const MAX_REQUEST_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Việc làm với một yêu cầu qua pipe. Token và giới hạn kiểm trước, rồi mới xem có phải trang video.
 #[derive(Debug, PartialEq)]
@@ -28,12 +34,19 @@ enum Route {
     Reject(&'static str),
     /// Trang video: không tạo task HTTP (chỉ được trang HTML), mở hộp Tải media trong UTD.
     Media,
+    /// Lô link đã kiểm: mở hộp Thêm hàng loạt, chưa tạo task nào.
+    Batch(Vec<String>),
     Download,
 }
 
 fn route(request: &PipeRequest, token: &str) -> Route {
     if !secure_eq(&request.token, token) {
         Route::Reject("Token IPC không hợp lệ.")
+    } else if let Some(links) = &request.batch {
+        match crate::batch::clean_links(links) {
+            Ok(links) => Route::Batch(links),
+            Err(message) => Route::Reject(message),
+        }
     } else if request.url.len() > 8192 {
         Route::Reject("URL quá dài.")
     } else if crate::media_pages::is_media_page(&request.url) {
@@ -187,12 +200,12 @@ pub fn socket_path(directory: &Path) -> PathBuf {
 pub fn spawn_server(
     app: tauri::AppHandle,
     engine: Arc<utd_engine::DownloadEngine>,
-    running: Arc<crate::state::RunningTasks>,
+    queue: Arc<crate::queue::DownloadQueue>,
     config: IpcConfig,
     directory: PathBuf,
 ) {
     tauri::async_runtime::spawn(async move {
-        accept_loop(app, engine, running, config, directory).await;
+        accept_loop(app, engine, queue, config, directory).await;
     });
 }
 
@@ -200,7 +213,7 @@ pub fn spawn_server(
 async fn accept_loop(
     app: tauri::AppHandle,
     engine: Arc<utd_engine::DownloadEngine>,
-    running: Arc<crate::state::RunningTasks>,
+    queue: Arc<crate::queue::DownloadQueue>,
     config: IpcConfig,
     directory: PathBuf,
 ) {
@@ -222,10 +235,10 @@ async fn accept_loop(
         };
         let app = app.clone();
         let engine = engine.clone();
-        let running = running.clone();
+        let queue = queue.clone();
         let token = config.token.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = handle_connection(stream, app, engine, running, &token).await {
+            if let Err(error) = handle_connection(stream, app, engine, queue, &token).await {
                 log::warn!("IPC request rejected: {error}");
             }
         });
@@ -249,7 +262,7 @@ fn bind_private(path: &Path) -> std::io::Result<tokio::net::UnixListener> {
 async fn accept_loop(
     app: tauri::AppHandle,
     engine: Arc<utd_engine::DownloadEngine>,
-    running: Arc<crate::state::RunningTasks>,
+    queue: Arc<crate::queue::DownloadQueue>,
     config: IpcConfig,
     _directory: PathBuf,
 ) {
@@ -274,10 +287,10 @@ async fn accept_loop(
         }
         let app = app.clone();
         let engine = engine.clone();
-        let running = running.clone();
+        let queue = queue.clone();
         let token = config.token.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = handle_connection(server, app, engine, running, &token).await {
+            if let Err(error) = handle_connection(server, app, engine, queue, &token).await {
                 log::warn!("IPC request rejected: {error}");
             }
         });
@@ -289,7 +302,7 @@ async fn handle_connection<S>(
     mut server: S,
     app: tauri::AppHandle,
     engine: Arc<utd_engine::DownloadEngine>,
-    running: Arc<crate::state::RunningTasks>,
+    queue: Arc<crate::queue::DownloadQueue>,
     token: &str,
 ) -> Result<(), String>
 where
@@ -299,7 +312,7 @@ where
 
     let mut line = String::new();
     {
-        let mut reader = BufReader::new((&mut server).take(64 * 1024));
+        let mut reader = BufReader::new((&mut server).take(MAX_REQUEST_BYTES));
         let read = tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
             .await
             .map_err(|_| "IPC timeout".to_string())?
@@ -321,6 +334,14 @@ where
             crate::media_pages::open_media_flow(&app, media);
             PipeResponse::note(crate::media_pages::MEDIA_PAGE_NOTE)
         }
+        Route::Batch(urls) => {
+            let batch = crate::events::BatchRequest {
+                urls,
+                page_url: crate::media_pages::clean_page_url(request.page_url),
+            };
+            crate::batch::open_batch_flow(&app, batch);
+            PipeResponse::note(crate::batch::BATCH_NOTE)
+        }
         Route::Download => {
             let input = crate::commands::AddDownloadInput {
                 url: request.url,
@@ -328,8 +349,9 @@ where
                 file_name: request.suggested_name,
                 connections: None,
                 expected_sha256: None,
+                later: false,
             };
-            match crate::commands::enqueue_download(app, engine, running, input) {
+            match crate::commands::enqueue_download(app, engine, queue, input) {
                 Ok(task) => PipeResponse::ok(task.id),
                 Err(message) => PipeResponse::error(message),
             }
@@ -394,6 +416,34 @@ mod tests {
         );
         let long = format!("{watch}&x={}", "a".repeat(8192));
         assert_eq!(route(&request(TOKEN, &long), TOKEN), Route::Reject("URL quá dài."));
+    }
+
+    #[test]
+    fn a_batch_opens_the_batch_dialog_after_the_token_check() {
+        let batch = |token: &str, links: &[&str]| -> PipeRequest {
+            serde_json::from_value(serde_json::json!({
+                "token": token,
+                "url": "https://example.com/gallery",
+                "pageUrl": "https://example.com/gallery",
+                "batch": links,
+            }))
+            .unwrap()
+        };
+        let links = ["https://example.com/a.jpg", "javascript:x", "https://example.com/a.jpg"];
+        assert_eq!(
+            route(&batch(TOKEN, &links), TOKEN),
+            Route::Batch(vec!["https://example.com/a.jpg".into()])
+        );
+        let wrong = "f".repeat(TOKEN.len());
+        assert_eq!(
+            route(&batch(&wrong, &links), TOKEN),
+            Route::Reject("Token IPC không hợp lệ.")
+        );
+        assert_eq!(
+            route(&batch(TOKEN, &["mailto:x@example.com"]), TOKEN),
+            Route::Reject("Không có link hợp lệ.")
+        );
+        assert_eq!(request(TOKEN, "https://youtu.be/x").batch, None, "native host cũ");
     }
 
     #[test]

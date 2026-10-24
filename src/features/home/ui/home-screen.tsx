@@ -26,10 +26,12 @@ import type {
   StorageInfo,
 } from "../model/types"
 import { AddDownloadDialog } from "./add-download-dialog"
+import { BatchDialog } from "./batch-dialog"
 import { DoctorDialog } from "./doctor-dialog"
 import { MediaPickerDialog, useMediaRequests } from "./media-picker-dialog"
 import { SettingsDialog } from "./settings-dialog"
 import { ToolsAutoCard } from "./tools-auto"
+import { useBatchFlow } from "./use-batch-flow"
 import { useUpdateAvailable } from "./use-update-available"
 import { Soniox } from "./variants/soniox"
 
@@ -150,6 +152,20 @@ export function HomeScreen() {
         free: demoStats.storageFree,
         usedPercent: demoStats.storageUsed,
       }
+
+  const closeDialogs = useCallback(() => {
+    setAddOpen(false)
+    setMediaOpen(false)
+    setSettingsOpen(false)
+  }, [])
+  const batch = useBatchFlow(desktop, closeDialogs)
+  // Task vừa thêm theo lô: lên đầu danh sách (thứ tự chạy do hàng đợi ở app quyết).
+  const addTasks = (added: EngineTask[]) => {
+    const ids = new Set(added.map((task) => task.id))
+    setTasks((previous) => [...added, ...previous.filter((task) => !ids.has(task.id))])
+    if (added.length) setScreenState("data")
+    refreshStorage()
+  }
 
   const openMediaWith = useCallback((url: string) => {
     setAddOpen(false)
@@ -304,6 +320,17 @@ export function HomeScreen() {
           )
         }
         onTaskRemoved={dropTask}
+        onBatch={batch.openEmpty}
+      />
+      <BatchDialog
+        key={batch.key}
+        open={batch.open}
+        onOpenChange={batch.setOpen}
+        desktop={desktop}
+        defaultDir={defaultDir}
+        initialUrls={batch.urls}
+        fromBrowser={batch.fromBrowser}
+        onAdded={addTasks}
       />
       <AddDownloadDialog
         open={addOpen}
@@ -314,6 +341,7 @@ export function HomeScreen() {
         error={addError}
         onSubmit={submitAdd}
         onMedia={openMediaWith}
+        onBatch={batch.openWith}
       />
       <MediaPickerDialog
         key={mediaRequest?.key ?? 0}

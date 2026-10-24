@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 
+import { parseLinks } from "../model/batch-links"
 import { fileNameFromUrl } from "../model/download-mapper"
 import { isMediaPage } from "../model/media-pages"
 import type { AddDownloadPayload } from "../model/types"
@@ -93,6 +94,7 @@ export function AddDownloadDialog({
   error,
   onSubmit,
   onMedia,
+  onBatch,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -103,6 +105,8 @@ export function AddDownloadDialog({
   onSubmit: (payload: AddDownloadPayload) => void | Promise<void>
   /** Link trang video: đóng hộp này, mở hộp Tải media với link đó. */
   onMedia: (url: string) => void
+  /** Dán nhiều link một lúc: đóng hộp này, mở hộp Thêm hàng loạt với các link đó. */
+  onBatch?: (urls: string[]) => void
 }) {
   const [url, setUrl] = useState("")
   const [fileName, setFileName] = useState("")
@@ -128,6 +132,15 @@ export function AddDownloadDialog({
     setLocalError(null)
     setUrl(value)
     if (!nameTouched) setFileName(fileNameFromUrl(value))
+  }
+
+  // Chữ dán có từ 2 link trở lên ⇒ hộp Thêm hàng loạt (ô một dòng làm mất dấu xuống dòng).
+  const toBatch = (text: string) => {
+    const links = parseLinks(text).links
+    if (links.length < 2 || !onBatch) return false
+    setUrl("")
+    onBatch(links)
+    return true
   }
 
   const close = () => {
@@ -189,6 +202,10 @@ export function AddDownloadDialog({
                 aria-label="URL cần tải"
                 value={url}
                 onChange={(event) => updateUrl(event.target.value)}
+                onPaste={(event) => {
+                  const text = event.clipboardData.getData("text")
+                  if (/\n/.test(text) && toBatch(text)) event.preventDefault()
+                }}
                 placeholder="https://example.com/file.iso"
                 disabled={busy}
                 autoComplete="off"
@@ -201,7 +218,7 @@ export function AddDownloadDialog({
                 onClick={() => {
                   void navigator.clipboard
                     ?.readText()
-                    .then(updateUrl)
+                    .then((text) => toBatch(text) || updateUrl(text.trim()))
                     .catch(() => undefined)
                 }}
               >

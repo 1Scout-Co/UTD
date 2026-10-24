@@ -3,12 +3,16 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 
 import type {
+  AddBatchPayload,
   AddDownloadPayload,
   AddMediaPayload,
+  BatchResult,
   BrowserIntegrationStatus,
   EngineProgress,
   EngineTask,
   MediaProbe,
+  QueueSettings,
+  RemoteFile,
   StorageInfo,
 } from "../model/types"
 
@@ -145,4 +149,43 @@ export async function subscribeMediaRequest(
 /** Link trình duyệt gửi tới lúc giao diện chưa kịp nghe (UTD vừa mở); gọi một lần sau khi đã nghe. */
 export async function takeMediaRequest(): Promise<MediaRequest | null> {
   return invoke<MediaRequest | null>("take_media_request")
+}
+
+/** Tạo cả lô rồi xếp hàng đợi một lần (giữ thứ tự); link trang video dùng chất lượng chung. */
+export async function addBatchDownloads(
+  payload: AddBatchPayload,
+): Promise<BatchResult> {
+  return invoke<BatchResult>("add_batch_downloads", { input: payload })
+}
+
+/** Tên + kích thước một link, chưa tạo task (bảng xem trước của hộp Thêm hàng loạt). */
+export async function inspectLink(url: string): Promise<RemoteFile> {
+  return invoke<RemoteFile>("inspect_link", { url })
+}
+
+export async function queueSettings(): Promise<QueueSettings> {
+  return invoke<QueueSettings>("queue_settings")
+}
+
+export async function setQueueLimit(limit: number): Promise<QueueSettings> {
+  return invoke<QueueSettings>("set_queue_limit", { limit })
+}
+
+/** Lô link gửi từ trình duyệt ("Tải tất cả link bằng UTD"). */
+export interface BatchRequest {
+  urls: string[]
+  pageUrl?: string
+}
+
+export async function subscribeBatchRequest(
+  onRequest: (request: BatchRequest) => void,
+): Promise<UnlistenFn> {
+  return listen<BatchRequest>("utd://batch-request", (event) =>
+    onRequest(event.payload),
+  )
+}
+
+/** Lô trình duyệt gửi tới lúc giao diện chưa kịp nghe; gọi một lần sau khi đã nghe. */
+export async function takeBatchRequest(): Promise<BatchRequest | null> {
+  return invoke<BatchRequest | null>("take_batch_request")
 }

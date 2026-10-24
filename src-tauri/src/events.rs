@@ -22,6 +22,18 @@ pub struct MediaRequest {
     pub page_url: Option<String>,
 }
 
+/// Lô link gửi từ trình duyệt ("Tải tất cả link bằng UTD"): giao diện mở hộp Thêm hàng loạt (batch.rs).
+pub const BATCH_REQUEST_EVENT: &str = "utd://batch-request";
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchRequest {
+    /// Đã kiểm (`batch::clean_links`): http/https, không trùng, giữ thứ tự trên trang.
+    pub urls: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeError {

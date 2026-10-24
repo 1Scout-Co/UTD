@@ -14,6 +14,7 @@ use crate::media::auto::{self, Auto, Wait};
 use crate::media::finish::{
     clamp, emit_progress, emit_task, error, fail, finalize, pause, set_status,
 };
+use crate::media::preset::{self, Settled};
 use crate::media::sources::Tool;
 use crate::media::{fast, ffmpeg_location, js_runtime_args, tokio_command, tools};
 use crate::state::AppState;
@@ -130,6 +131,19 @@ async fn attempt(
     };
     let elapsed = started.elapsed().as_millis();
     log::info!("media.timing task={task_id} tools ms={elapsed}");
+    // Lô link (chất lượng chung): Phân tích lúc tới lượt, lấy selector thật và tên theo tiêu đề.
+    // yt-dlp lỗi kiểu extractor lúc Phân tích ⇒ như lúc tải: kiểm bản mới, có thì chạy lại một lần.
+    let job = match preset::settle(&app, &journal, &mut task, job, &tools, &cancel).await? {
+        Settled::Ready(job) => job,
+        Settled::Stopped => return Ok(Attempt::Done),
+        Settled::Outdated(message) => {
+            if allow_update && refresh(&app, &journal, &mut task, &tools).await? {
+                return Ok(Attempt::Outdated);
+            }
+            preset::probe_failed(&app, &journal, &mut task, &message)?;
+            return Ok(Attempt::Done);
+        }
+    };
     if job.audio_format.is_some() && tools.ffmpeg.is_none() {
         fail(
             &app,
