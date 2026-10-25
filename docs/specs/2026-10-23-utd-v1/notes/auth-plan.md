@@ -1,7 +1,7 @@
 # Kế hoạch: tải video và tài liệu cần đăng nhập
 
-Ngày 2026-10-25 · Nhánh `claude/auth-plan-6b2e91` (trên `main` bd1ef9c) · **Chờ chủ dự án duyệt.** Phiên này chưa
-viết code tính năng; các thử nghiệm nhỏ nằm ở `auth-thu/` (ghi rõ THỬ).
+Ngày 2026-10-25 · Nhánh `claude/auth-plan-6b2e91` (trên `main` bd1ef9c) · **Đã duyệt 2026-10-25:** chủ dự án chọn mọi
+đề xuất ở §10 (Q1–Q10). Đang làm GĐ0. Các thử nghiệm nhỏ nằm ở `auth-thu/` (ghi rõ THỬ).
 
 ## 0. Tóm tắt
 
@@ -373,6 +373,38 @@ Hộp hỏi quyền là của trình duyệt, tự theo ngôn ngữ trình duy�
 | 2 — Mở rộng | Bộ đổi link: Drive `/file/d/<id>/view` → link tải, trang xác nhận file lớn, Google Docs `export`; OneDrive/SharePoint `?download=1`; Dropbox `dl=1`. Hàng loạt + tải cả kênh dùng chung grant; macOS FIFO; Firefox container/FPI; huy hiệu đẩy từ app qua `connectNative` (tuỳ chọn) | Thử thật OneDrive/Dropbox/Facebook/Instagram/TikTok riêng với tài khoản thử của chủ dự án; Mac mini |
 | 3 — Tuỳ chọn | Takeover (AC-15, §4.4); nhập cookies.txt (Q4) | Theo Q4/Q5 |
 
+#### Kết quả GĐ0 (2026-10-25, nhánh này)
+
+- **yt-dlp:** mọi lệnh đi qua `media::yt_dlp_command`: `--ignore-config` luôn có, `--no-plugin-dirs` khi bản
+  yt-dlp ≥ 2025.03.21.
+  - Đã thử với bản thật: 2025.02.19 báo "no such option", 2025.03.21 nhận cờ.
+  - Lưu ý khi thử: `--version` thoát trước khi kiểm cờ, nên không dùng được để dò.
+  - Thay 5 chỗ gọi: `probe`, `resolve`, `runner`, `channel/mod`, `channel/profile`.
+  - Phân tích YouTube thật (09OGSRptb0M, yt-dlp 2026.10.21 + deno): cùng 50 định dạng / 34 luồng hình khi có và
+    khi không có cờ.
+- **Pipe IPC Windows** (`src-tauri/src/ipc/pipe_acl.rs`):
+  - DACL `D:P(A;;GA;;;<SID người dùng>)`. Test đọc lại DACL thấy đúng một quyền.
+  - Instance đầu `first_pipe_instance`: tên đã có thì lỗi. Có test.
+  - `reject_remote_clients`.
+  - Luôn tạo instance kế tiếp trước khi trao instance vừa nối, nên tên pipe không lúc nào trống.
+  - Không dựng được DACL thì tắt hẳn kênh IPC thay vì mở pipe quyền mặc định.
+  - Thử thật (`auth-thu/pipe-e2e.py`): app debug với `UTD_DATA_DIR` riêng nhận 4/4 tin native liên tiếp; token
+    sai bị từ chối.
+  - Crate `windows` bật thêm `Win32_Security`, `Win32_Security_Authorization`, `Win32_System_Threading` (không
+    thêm thư viện mới).
+- **Extension:** `runtime.onMessage` chỉ nhận từ popup của chính tiện ích (id + không có tab + URL
+  `popup.html`). Thử thật (`auth-thu/ext-sender.cjs`): popup thật được nhận, tab mở `popup.html` bị bỏ.
+- **Khung cookie mồi:**
+  - `files_containing` (`crates/utd-engine/tests/kit`) quét mọi file kể cả `utd.db-wal`.
+  - `tests/secrets.rs`: header bí mật từ nguồn ngoài không tới máy chủ, không xuống đĩa. Có bài tự kiểm để chắc
+    bộ quét thấy bí mật trong WAL.
+  - `native_host`: câu lỗi ghi vào `native-host.log` không lặp lại nội dung tin nhắn.
+  - Test log của luồng cookie thật (T-L1) làm ở GĐ1 cùng code đăng nhập.
+- **Kiểm:**
+  - Windows: `cargo test -p app --lib` (209, 1 bỏ qua có sẵn), `cargo test -p utd-engine` (mọi bộ),
+    `cargo clippy` 3 crate `-D warnings`, `pnpm lint`.
+  - macOS chưa chạy. Phần chỉ-Windows đều gắn `#[cfg(windows)]`; phần còn lại là code chung.
+
 ### 9.2 File sẽ sửa (GĐ0–1)
 
 - **Extension:** `extensions/{chromium,firefox}/`
@@ -472,7 +504,10 @@ Rủi ro:
 - **R8 — Ghép nhánh:** đụng `ipc.rs`, `media/*`, `engine/{transport,model,db}.rs` cùng phiên khôi phục và phiên màn
   chi tiết (Phụ lục B). GĐ1 nên bắt đầu sau khi hai nhánh đó vào main.
 
-Câu cần chủ dự án quyết:
+Câu cần chủ dự án quyết. **Đã quyết 2026-10-25: theo đề xuất ở cả 10 câu** (nhớ theo trang; công tắc chung mặc
+định Bật; giữ cookie tới khi tắt app; không làm cookies.txt và `--cookies-from-browser`; takeover xin quyền theo
+trang; chủ dự án tự đăng nhập lúc thử thật; xoá query của task cần đăng nhập khi xong; bản phát hành chỉ nhận ID
+store; sửa SPEC khi bắt đầu GĐ1; có danh sách miền nhạy cảm ở GĐ1).
 1. **Q1 — Nhớ theo trang hay hỏi mỗi lần?**
    - Đề xuất: **nhớ theo trang**, dùng quyền theo trang của trình duyệt, tắt được trong popup. Chỉ cookie không bao
      giờ được lưu.

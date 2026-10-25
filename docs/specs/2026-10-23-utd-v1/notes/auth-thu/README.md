@@ -12,6 +12,8 @@ Rust/Playwright trong repo; xoá thư mục này sau đó.
 | (lệnh tay) | Cookie mồi `UTDCANARYq8Zr41xK` qua pipe rồi quét `%TEMP%`, `~/.cache/yt-dlp` | 172 file mới trong `%TEMP%`, 0 file chứa giá trị mồi; không sót thư mục `_MEI*` |
 | (lệnh tay) | `yt-dlp.conf` cạnh exe chứa `--print-traffic` | stdout có dòng `Cookie: canary=…`; thêm `--ignore-config` thì không còn |
 | `ext-cookies.cjs` + `ext-a/b/c` | `chrome.cookies.getAll` với quyền host / chỉ `activeTab` / quyền tuỳ chọn chưa cấp; `permissions.request` ngoài cú bấm | Có quyền host: trả cả cookie HttpOnly, `sameSite`, đúng path. Chỉ `activeTab`: rỗng. Chưa cấp: `chrome.cookies` không tồn tại. `permissions.request` không có cú bấm: "This function must be called during a user gesture" |
+| `ext-sender.cjs` (GĐ0) | `background.js` chỉ nhận lệnh từ popup thật. Bản chép tạm của extension bỏ `key` và `nativeMessaging` nên không chạm native host thật | Tab mở `popup.html`: bị bỏ (`undefined`). Popup thật (`action.openPopup()` + CDP): được nhận |
+| `pipe-e2e.py` (GĐ0) | App debug chạy với `UTD_DATA_DIR` riêng; gửi tin nhắn native liên tiếp qua pipe IPC đã đặt DACL + "first instance" | 4/4 tin `batch` được nhận; nối thẳng pipe với token sai bị từ chối; sau đó vẫn nhận tiếp |
 | `ext-domain.cjs` + `ext-d/e` | Quyền `http://drive.utd.test/*` so với `http://*.utd.test/*` khi trang đặt cookie `Domain=utd.test` | Quyền một host: **chỉ thấy cookie riêng host, mất cookie cả miền**. Quyền `*.utd.test`: thấy cả hai, và thấy cookie miền khi đọc cho `usercontent.utd.test` |
 
 Chạy lại: chép thư mục này vào `<tạm>\scripts`, tạo `<tạm>\run` và `<tạm>\ytdlp-dl` (tải `yt-dlp.exe` +

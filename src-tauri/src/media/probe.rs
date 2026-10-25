@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::time::{timeout, Duration};
 
-use crate::media::{auto, js_runtime_args, probe_cache, resolve, tokio_command, tools};
+use crate::media::{auto, probe_cache, resolve, tools, yt_dlp_command};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,9 +78,8 @@ pub async fn probe(
     url: &str,
     ffmpeg_available: bool,
 ) -> Result<MediaProbeResult, ProbeFailure> {
-    let mut command = tokio_command(&tools.yt_dlp);
+    let mut command = yt_dlp_command(tools);
     command
-        .args(js_runtime_args(tools))
         .args([
             "--encoding",
             "utf-8",

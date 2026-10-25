@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 use utd_engine::fetch::{FetchError, FetchPolicy, Url, fetch_text};
 
-use crate::media::{js_runtime_args, tokio_command, tools};
+use crate::media::{tools, yt_dlp_command};
 
 const EMBED_HOST: &str = "www.tiktok.com";
 /// Trang nhúng thật ~300 KB.
@@ -94,9 +94,8 @@ pub fn parse_tiktok_embed(html: &str) -> Option<ChannelProfile> {
 }
 
 async fn youtube(tools: &tools::MediaTools, listing_url: &str) -> Option<ChannelProfile> {
-    let mut command = tokio_command(&tools.yt_dlp);
+    let mut command = yt_dlp_command(tools);
     command
-        .args(js_runtime_args(tools))
         .args([
             "--encoding",
             "utf-8",

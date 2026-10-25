@@ -31,7 +31,7 @@ pub use seen::{ChannelPick, forget, remember};
 pub(crate) use seen::is_downloaded;
 
 use crate::media::{
-    auto_tools, interactive_tools, js_runtime_args, kill_tree, probe, tokio_command, tools,
+    auto_tools, interactive_tools, kill_tree, probe, tools, yt_dlp_command,
 };
 use crate::state::AppState;
 
@@ -239,9 +239,8 @@ struct Request<'a> {
 }
 
 async fn list_entries(request: &Request<'_>, sink: &impl Sink) -> ListingEvent {
-    let mut command = tokio_command(&request.tools.yt_dlp);
+    let mut command = yt_dlp_command(request.tools);
     command
-        .args(js_runtime_args(request.tools))
         .args(listing_args(request.url))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
