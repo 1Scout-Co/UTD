@@ -542,6 +542,7 @@ pub(crate) fn spawn_run(
             cancel,
             events: Some(sender),
             initial_connections: None,
+            cookies: None,
         };
         let result = if resume {
             engine.resume(&task_id, control).await

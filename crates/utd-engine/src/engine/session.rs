@@ -20,7 +20,7 @@ use super::file::{move_no_clobber, target_path, PartFile};
 use super::http::{host_key, probe, sanitize_suggested_name, Probe};
 use super::limiter::Limiter;
 use super::pulse::Pulse;
-use super::transport::{plain_policy, scoped_policy, Transport};
+use super::transport::{plain_policy, scoped_policy, Clients, Transport};
 use super::verify::{sha256_file, HashOutcome};
 use super::worker::{
     run_segment, RetryPolicy, SegmentFailure, SegmentJob, SegmentRuntime, StreamJob,
@@ -29,6 +29,7 @@ use super::{
     DownloadControl, DownloadOutcome, DownloadRequest, EngineEvent, EngineOptions, ProgressSnapshot,
     RemoteFile, LARGE_FILE_BYTES,
 };
+use crate::auth::{auth_expired, auth_required, is_login_redirect};
 use crate::db::Journal;
 use crate::safety::{self, GuardAction};
 use crate::model::{
@@ -45,9 +46,7 @@ const MIN_IDLE_PIECE: u64 = MIN_SEGMENT_BYTES;
 
 pub struct DownloadEngine {
     journal: Arc<Journal>,
-    client: Client,
-    /// Cho task có header riêng: dừng ở chuyển hướng sang origin khác (xem `Transport`).
-    scoped_client: Client,
+    clients: Clients,
     limiter: Arc<Limiter>,
     options: EngineOptions,
 }
@@ -113,28 +112,30 @@ impl SegmentContext {
 impl DownloadEngine {
     pub fn new(journal: Arc<Journal>, options: EngineOptions) -> Result<Self> {
         options.validate()?;
-        let client = build_client(&options, plain_policy())?;
-        let scoped_client = build_client(&options, scoped_policy())?;
+        let clients = Clients {
+            plain: build_client(&options, plain_policy())?,
+            scoped: build_client(&options, scoped_policy())?,
+            manual: build_client(&options, reqwest::redirect::Policy::none())?,
+        };
         let limiter = Arc::new(Limiter::new(
             usize::from(options.global_connections),
             usize::from(options.host_connections),
         ));
         Ok(Self {
             journal,
-            client,
-            scoped_client,
+            clients,
             limiter,
             options,
         })
     }
 
-    fn transport(&self, task: &DownloadTask, url: &Url) -> Result<Transport> {
+    fn transport(&self, task: &DownloadTask, url: &Url, control: &DownloadControl) -> Result<Transport> {
         Transport::new(
-            &self.client,
-            &self.scoped_client,
+            &self.clients,
             url,
             &task.request_headers,
             task.max_request_bytes,
+            control.cookies.clone(),
         )
     }
 
@@ -150,7 +151,7 @@ impl DownloadEngine {
             code: "url.invalid".into(),
             message: error.to_string(),
         })?;
-        let transport = Transport::new(&self.client, &self.scoped_client, &url, &[], None)
+        let transport = Transport::new(&self.clients, &url, &[], None, None)
             .map_err(|_| internal_error())?;
         let probe = probe(&transport, &url, self.options.connect_timeout)
             .await
@@ -202,6 +203,7 @@ impl DownloadEngine {
         }
         task.max_request_bytes = request.max_request_bytes;
         task.request_headers = request.request_headers;
+        task.auth_sites = request.auth_sites;
         task.validate()?;
         self.journal.save_task(&task)?;
         Ok(task)
@@ -260,8 +262,13 @@ impl DownloadEngine {
         self.journal.save_task(&task)?;
         emit_task(&control, &task);
 
+        // Cần đăng nhập mà lượt này không có cookie (vd vừa mở lại app): không gửi yêu cầu nào, chờ người
+        // dùng cho phép lại từ trình duyệt.
+        if !task.auth_sites.is_empty() && control.cookies.is_none() {
+            return self.fail(task, auth_required(), &control);
+        }
         let url = validate_url(&task.url)?;
-        let transport = self.transport(&task, &url)?;
+        let transport = self.transport(&task, &url, &control)?;
         let probe = match self.probe_with_retry(&transport, &url, &control).await {
             Ok(probe) => probe,
             Err(error) => {
@@ -271,6 +278,11 @@ impl DownloadEngine {
                 return self.fail(task, error, &control);
             }
         };
+        // Máy chủ đưa về trang đăng nhập thay vì trả file.
+        if is_login_redirect(&url, &probe.url) {
+            let error = if transport.has_cookies() { auth_expired() } else { auth_required() };
+            return self.fail(task, error, &control);
+        }
         pulse.mark("probe");
         if control.cancel.is_cancelled() {
             return self.pause(task, &control);

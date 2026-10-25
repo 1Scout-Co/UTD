@@ -10,7 +10,8 @@ use url::Url;
 
 use super::adaptive::{is_throttle, ConnectionGate, GateSlot};
 use super::file::PartFile;
-use super::http::{classify_error, failure_from_status, parse_content_range, RequestFailure};
+use super::http::{classify_error, parse_content_range, RequestFailure};
+use crate::auth::AUTH_EXPIRED;
 use super::limiter::Limiter;
 use super::pulse::Pulse;
 use super::transport::Transport;
@@ -386,7 +387,12 @@ impl SegmentJob {
                 "The server ignored the byte range request.",
             ));
         }
-        Attempt::Retry(failure_from_status(status, response.headers()))
+        let failure = self.transport.status_failure(status, response.headers());
+        // Đã kèm cookie mà vẫn bị từ chối: thử lại vô ích, dừng cả lượt để xin đăng nhập mới.
+        if failure.error.code == AUTH_EXPIRED {
+            return Attempt::Fatal(failure.error);
+        }
+        Attempt::Retry(failure)
     }
 
     /// Nhận thân của yêu cầu đã xin tới byte `stop` (gồm).
@@ -588,7 +594,10 @@ impl StreamJob {
                 }
             } else {
                 drop(limit);
-                let failure = failure_from_status(status, response.headers());
+                let failure = self.transport.status_failure(status, response.headers());
+                if failure.error.code == AUTH_EXPIRED {
+                    return Err(SegmentFailure { error: failure.error });
+                }
                 attempts += 1;
                 if attempts >= self.retry.max_attempts {
                     return Err(SegmentFailure { error: failure.error });

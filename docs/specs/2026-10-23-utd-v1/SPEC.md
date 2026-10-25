@@ -39,7 +39,7 @@ Ngày: 2026-10-23 · Trạng thái: chờ duyệt Cổng 1
 | S-11 | Có dữ liệu | Danh sách chất lượng (resolution, codec, bitrate, size); mặc định tốt nhất tương thích | Chọn chất lượng, chọn audio+video, bắt đầu tải |
 | S-12 | Trống | Không tìm thấy media tải được | Mở trang gốc, dán URL trực tiếp, cập nhật extractor |
 | S-13 | Lỗi | Extractor lỗi/hết hạn, mạng lỗi, trang đổi cấu trúc | Cập nhật extractor, thử lại, sao chép log |
-| S-14 | Lỗi (đăng nhập/DRM) | Cần đăng nhập hoặc nội dung DRM không hỗ trợ | Cho phép gửi cookie cho phiên này, mở trang đăng nhập, huỷ; DRM thì từ chối rõ |
+| S-14 | Lỗi (đăng nhập/DRM) | "Cần đăng nhập · <trang>" + gợi ý "Bấm biểu tượng UTD trên trình duyệt" (2026-10-25: cho phép xảy ra trong popup, xem S-70); hoặc nội dung DRM không hỗ trợ | Mở trang, huỷ; nhận được đăng nhập thì tự phân tích lại; DRM thì từ chối rõ |
 
 #### Chi tiết download
 
@@ -116,7 +116,18 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 | S-60 | Đang tải | Tên, ảnh đại diện kênh; video hiện dần, số video đếm dần | Dừng liệt kê (giữ phần đã có), huỷ |
 | S-61 | Có dữ liệu | Video: ảnh nhỏ, tiêu đề, ngày, thời lượng, lượt xem; video đã tải lần trước đánh dấu "Đã tải" | Lọc mới nhất N / khoảng ngày / chỉ video mới, chọn tất cả / bỏ chọn, một chất lượng chung, thư mục riêng theo tên kênh, tải |
 | S-62 | Trống | Kênh chưa có video công khai | Huỷ |
-| S-63 | Lỗi | Tài khoản riêng tư/cần đăng nhập (UTD không gửi cookie), kênh không có, mạng lỗi, thiếu yt-dlp | Thử lại, huỷ |
+| S-63 | Lỗi | Tài khoản riêng tư/cần đăng nhập (cùng luồng S-14), kênh không có, mạng lỗi, thiếu yt-dlp | Mở trang, thử lại, huỷ |
+
+#### Đăng nhập (cookie của trình duyệt)
+
+Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25). Cookie chỉ đọc trong cú bấm trên trình duyệt, cho phép theo từng trang (quyền của trình duyệt), chỉ nằm trong RAM của app. Mã S-70–S-73 (ngoài khoảng S-40–S-59 đang chừa).
+
+| mã | khi | thấy gì | làm được gì |
+|---|---|---|---|
+| S-70 | Có dữ liệu (popup extension) | Trang đang mở có task chờ đăng nhập: "google.com · 2 tải chờ"; trang nhạy cảm (ngân hàng, gov…) ghi rõ | Dùng đăng nhập / Tiếp tục (n); bật/tắt "Đăng nhập trên trang này" |
+| S-71 | Lỗi (popup extension) | Trình duyệt chưa cho phép, hoặc tiện ích không được chạy ở cửa sổ riêng tư | Thử lại |
+| S-72 | Lỗi (danh sách, chi tiết) | Task "Cần đăng nhập": chưa có cookie, đăng nhập hết hạn, hoặc app vừa mở lại | Mở trang, huỷ |
+| S-73 | Có dữ liệu (Cài đặt › Tích hợp) | Công tắc "Dùng đăng nhập của trình duyệt" (mặc định bật), số trang đang giữ cookie, cảnh báo khoá tài khoản | Quên cookie |
 
 ### Làm được gì
 
@@ -129,6 +140,7 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 - Quản lý hàng đợi, tìm/lọc, retry, giới hạn tốc độ toàn cục và theo tác vụ (S-01, S-27).
 - Cài đặt mạng/proxy cơ bản, số kết nối, giới hạn theo host, ngôn ngữ VI/EN, auto-update (S-27–S-31).
 - Onboarding cài native host/extension và tải thử (S-32–S-33).
+- Tải nội dung cần đăng nhập (video giới hạn tuổi/riêng tư, file Drive…) bằng đăng nhập của trình duyệt, cho phép theo từng trang (S-14, S-70–S-73).
 - Dữ liệu local, không tài khoản, không telemetry; cookie chỉ dùng khi opt-in (P-01–P-04).
 
 ### Để sau
@@ -181,7 +193,7 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 - **Extension**: MV3 cho Chromium, WebExtensions cho Firefox; quyền tối thiểu, host permission optional theo site; right-click, toolbar popup, overlay; takeover opt-in.
 - **Engine**: tokio + reqwest/hyper + rustls; HTTP/1.1 + HTTP/2; phân đoạn thích ứng; preallocate + positional writes; SQLite WAL cho journal; verify; speed limit; retry/backoff; Doctor.
 - **Media**: yt-dlp (external) cho site extractor; ffmpeg (external) cho mux/remux; HLS/DASH VOD native cho URL trực tiếp. Không bundle binary GPL; quản lý phiên bản, checksum, license notice, rollback.
-- **Lưu trữ**: SQLite `%LOCALAPPDATA%\UTD-Data\utd.db`; settings `%APPDATA%\UTD\settings.json`; log `%LOCALAPPDATA%\UTD-Data\logs`; download mặc định `%USERPROFILE%\Downloads\UTD`; quarantine `%LOCALAPPDATA%\UTD-Data\quarantine`. Không lưu cookie/token.
+- **Lưu trữ**: SQLite `%LOCALAPPDATA%\UTD-Data\utd.db`; settings `%APPDATA%\UTD\settings.json`; log `%LOCALAPPDATA%\UTD-Data\logs`; download mặc định `%USERPROFILE%\Downloads\UTD`; quarantine `%LOCALAPPDATA%\UTD-Data\quarantine`. Không lưu cookie/token (journal chỉ ghi task nào cần đăng nhập ở trang nào, không ghi giá trị).
 - **Phân phối**: NSIS installer + Tauri updater (chữ ký), WebView2 bootstrap; portable/ARM64 để sau.
 
 ### 3. Luồng chính
@@ -243,7 +255,7 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 - AC-15: KHI bật takeover THÌ HỆ THỐNG PHẢI hủy download của browser và chuyển sang UTD với headers/cookies; tắt thì browser tải như thường.
 - AC-16: KHI người dùng tải video từ trang được hỗ trợ THÌ HỆ THỐNG PHẢI hiện danh sách chất lượng và tải format đã chọn; extractor lỗi THÌ có nút cập nhật/thử lại.
 - AC-17: KHI URL là HLS/DASH không DRM THÌ HỆ THỐNG PHẢI tải và ghép bằng ffmpeg; KHI phát hiện DRM THÌ phải từ chối rõ, không thử bypass.
-- AC-18: KHI người dùng chưa opt-in cookie THÌ HỆ THỐNG PHẢI không đọc/gửi cookie; khi opt-in THÌ cookie chỉ dùng cho request đó và không ghi disk/log.
+- AC-18: KHI người dùng chưa opt-in cookie THÌ HỆ THỐNG PHẢI không đọc/gửi cookie; khi opt-in THÌ cookie chỉ dùng cho request đó và không ghi disk/log. Opt-in là cho phép theo từng trang trong popup; extension chỉ đọc cookie bên trong cú bấm của người dùng trên trình duyệt (menu chuột phải, nút popup), app không bao giờ tự xin cookie (2026-10-25).
 - AC-19: KHI app chạy THÌ HỆ THỐNG PHẢI không gửi telemetry; chỉ có request update và request do người dùng yêu cầu.
 - AC-20: KHI có bản update THÌ HỆ THỐNG PHẢI chỉ chấp nhận gói đã ký; sai chữ ký THÌ từ chối và giữ bản cũ.
 - AC-21: KHI mở app lần đầu THÌ HỆ THỐNG PHẢI hướng dẫn cài native host/extension và tải thử; lỗi THÌ có cách sửa.

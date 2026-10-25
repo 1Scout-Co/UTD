@@ -479,6 +479,7 @@ fn spawn_parts(
             cancel: siblings.child_token(),
             events: Some(events.clone()),
             initial_connections,
+            cookies: None,
         };
         workers.spawn(async move { engine.resume(&id, control).await });
     }

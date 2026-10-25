@@ -235,6 +235,7 @@ async fn pause_then_resume_completes() {
         cancel: CancellationToken::new(),
         events: Some(events),
         initial_connections: None,
+        cookies: None,
     };
     let cancel = control.cancel.clone();
     let request = request(&server, directory.path(), "paused.bin");
