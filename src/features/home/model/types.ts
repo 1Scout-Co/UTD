@@ -35,6 +35,19 @@ export interface EngineTaskError {
   message: string
 }
 
+/** UTD đang chờ gì để tự chạy lại (src-tauri/src/recover.rs). */
+export type EngineRecoveryWait = "retry" | "network" | "disk" | "link"
+
+export interface EngineRecovery {
+  wait: EngineRecoveryWait
+  /** Giờ tự chạy lại (ms); không có = chờ sự kiện (có mạng, đủ chỗ, link mới). */
+  retryAt?: number
+  attempts: number
+  progress: number
+  /** Ổ đầy: cần trống chừng này byte. */
+  needBytes?: number
+}
+
 export interface EngineTask {
   id: string
   url: string
@@ -55,6 +68,7 @@ export interface EngineTask {
   createdAt: number
   updatedAt: number
   completedAt: number | null
+  recovery?: EngineRecovery
 }
 
 export type EngineSegmentStatus = "pending" | "active" | "done" | "failed"
@@ -286,6 +300,10 @@ export interface DownloadItem {
   hashState?: HashState
   note?: string
   errorCode?: string
+  /** UTD đang tự cứu: chờ thử lại / chờ mạng / chờ chỗ trống (không phải lỗi). */
+  waiting?: Exclude<EngineRecoveryWait, "link">
+  /** Download thường (không phải media) chưa xong: đổi được link (link ký hết hạn, cần đăng nhập lại). */
+  relinkable?: boolean
   tone: string
   date: string
   time: string
@@ -306,4 +324,6 @@ export interface HomeScreenProps {
   /** Mở màn Chi tiết (nhấp đúp, Enter, menu "Chi tiết"). */
   onDetails: (id: string) => void
   onSettings: () => void
+  /** Mở hộp "Cập nhật link" (app desktop). */
+  onRefreshLink?: (id: string) => void
 }

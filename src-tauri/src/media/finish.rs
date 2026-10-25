@@ -82,6 +82,7 @@ pub(super) fn pause(
     task.downloaded_bytes = clamp(downloaded, task.total_bytes);
     task.updated_at = now_ms();
     task.error = None;
+    task.recovery = None;
     journal.save_task(task).map_err(|error| error.to_string())?;
     emit_task(sink, task);
     Ok(())

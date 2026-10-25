@@ -432,17 +432,32 @@ where
             PipeResponse::note(CONFIRM_NOTE)
         }
         Route::Download => {
-            let input = crate::commands::AddDownloadInput {
-                url: request.url,
-                dest_dir: None,
-                file_name: request.suggested_name,
-                connections: None,
-                expected_sha256: None,
-                later: false,
-            };
-            match crate::commands::enqueue_download(app, engine, queue, input) {
-                Ok(task) => PipeResponse::ok(task.id),
-                Err(message) => PipeResponse::error(message),
+            // Đúng file của một download đang chờ link mới (link ký hết hạn, cần đăng nhập lại): gắn link
+            // vào download đó, giữ phần đã tải, không tạo download mới.
+            let captured = crate::recover::capture_link(
+                &app,
+                &engine,
+                &queue,
+                &request.url,
+                request.suggested_name.as_deref(),
+            )
+            .await;
+            match captured {
+                Some(task_id) => PipeResponse::ok(task_id),
+                None => {
+                    let input = crate::commands::AddDownloadInput {
+                        url: request.url,
+                        dest_dir: None,
+                        file_name: request.suggested_name,
+                        connections: None,
+                        expected_sha256: None,
+                        later: false,
+                    };
+                    match crate::commands::enqueue_download(app, engine, queue, input) {
+                        Ok(task) => PipeResponse::ok(task.id),
+                        Err(message) => PipeResponse::error(message),
+                    }
+                }
             }
         }
     };

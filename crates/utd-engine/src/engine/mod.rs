@@ -3,7 +3,9 @@ mod content;
 mod file;
 mod http;
 mod limiter;
+mod net;
 mod pulse;
+mod relink;
 mod session;
 mod transport;
 mod verify;
@@ -18,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::headers::RequestHeader;
 use crate::model::{DownloadTask, HashState, TaskStatus};
 
+pub use relink::LinkError;
 pub use session::DownloadEngine;
 
 pub(crate) const USER_AGENT: &str = concat!("utd/", env!("CARGO_PKG_VERSION"));

@@ -281,6 +281,52 @@ impl TaskEvent {
     }
 }
 
+/// Download đang chờ gì để UTD tự chạy lại (giao diện: "Sẽ thử lại lúc…", "Chờ có mạng", "Ổ đầy").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryWait {
+    /// Lỗi tạm thời (máy chủ bận, 429, mạng chập chờn): thử lại lúc `retry_at`.
+    Retry,
+    /// Máy không có đường ra mạng: chạy lại ngay khi có mạng (và mỗi `retry_at` cho chắc).
+    Network,
+    /// Ổ đầy hoặc ổ chứa thư mục tải đã rút: chạy lại khi đủ chỗ / ổ cắm lại.
+    Disk,
+    /// Link hết hạn hoặc cần đăng nhập: chờ link mới (dán vào, hoặc tải lại từ trình duyệt).
+    Link,
+}
+
+/// Trạng thái tự cứu của một task (src-tauri/src/recover.rs giữ lịch, engine chỉ gợi ý `retry_at`
+/// khi máy chủ gửi Retry-After).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Recovery {
+    pub wait: RecoveryWait,
+    /// Giờ máy (ms) sẽ tự chạy lại; `None` = chỉ chờ sự kiện (có mạng, có chỗ, link mới).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<i64>,
+    /// Số lần tự thử lại liền nhau mà không thêm được byte nào.
+    #[serde(default)]
+    pub attempts: u32,
+    /// Byte đã có lúc đếm lần thử gần nhất: lượt sau có thêm byte thì đếm lại từ đầu.
+    #[serde(default)]
+    pub progress: u64,
+    /// Ổ đầy: cần trống chừng này byte để tải tiếp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need_bytes: Option<u64>,
+}
+
+impl Recovery {
+    pub fn new(wait: RecoveryWait) -> Self {
+        Self {
+            wait,
+            retry_at: None,
+            attempts: 0,
+            progress: 0,
+            need_bytes: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Segment {
@@ -337,6 +383,9 @@ pub struct DownloadTask {
     /// Không đưa ra JSON (giao diện không cần, tránh lộ giá trị).
     #[serde(default, skip_serializing)]
     pub request_headers: Vec<RequestHeader>,
+    /// UTD đang tự cứu download (chờ thử lại, chờ mạng, chờ chỗ trống, chờ link mới).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<Recovery>,
 }
 
 impl DownloadTask {
@@ -379,6 +428,7 @@ impl DownloadTask {
             parent_id: None,
             max_request_bytes: None,
             request_headers: Vec::new(),
+            recovery: None,
         };
         task.validate()?;
         Ok(task)

@@ -4,20 +4,28 @@ use std::time::{Duration, Instant};
 
 use reqwest::header::CONTENT_RANGE;
 use reqwest::{Method, Response, StatusCode};
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::adaptive::{is_throttle, ConnectionGate, GateSlot};
-use super::file::PartFile;
-use super::http::{classify_error, failure_from_status, parse_content_range, RequestFailure};
+use super::file::{disk_failure, PartFile};
+use super::http::{
+    classify_error, failure_from_status, parse_content_range, RequestFailure, Validators,
+};
 use super::limiter::Limiter;
+use super::net::NetEpoch;
 use super::pulse::Pulse;
 use super::transport::Transport;
 use crate::model::{ErrorClass, Segment, SegmentStatus, TaskError};
 
 /// Nhịp hỏi "kết nối khác có đang nhận byte không" của luật treo (tối đa; hạn treo ngắn thì nửa hạn).
 const STALL_RECHECK: Duration = Duration::from_millis(500);
+/// Nhịp hỏi "mạng vừa đổi chưa" khi không có luật treo (một kết nối).
+const NET_RECHECK: Duration = Duration::from_millis(500);
+/// Máy chủ bảo chờ (Retry-After) lâu hơn chừng này mà không còn kết nối nào chạy: dừng lượt để app hẹn
+/// giờ thử lại, không giữ chỗ trong hàng đợi lúc chờ. Ngắn hơn thì chờ ngay trong lượt.
+pub(crate) const MAX_INLINE_WAIT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RetryPolicy {
@@ -182,10 +190,41 @@ pub(crate) struct SegmentJob {
     pub cancel: CancellationToken,
     pub retry: RetryPolicy,
     pub pulse: Arc<Pulse>,
+    /// ETag / Last-Modified lúc bắt đầu lượt: phản hồi mang validator khác ⇒ file đã đổi (AC-04).
+    pub validators: Arc<Validators>,
+    pub net: Arc<NetEpoch>,
 }
 
 pub(crate) struct SegmentFailure {
     pub error: TaskError,
+    /// Máy chủ bảo chờ chừng này (Retry-After) rồi mới thử lại.
+    pub retry_after: Option<Duration>,
+}
+
+impl SegmentFailure {
+    pub fn new(error: TaskError) -> Self {
+        Self {
+            error,
+            retry_after: None,
+        }
+    }
+
+    fn from_request(failure: RequestFailure) -> Self {
+        Self {
+            error: failure.error,
+            retry_after: failure.retry_after,
+        }
+    }
+}
+
+/// Lỗi kết thúc lượt luôn (không thử lại trong lượt): lỗi không tự khỏi (403 link hết hạn, 404) hoặc
+/// máy chủ bảo chờ lâu, khi không còn kết nối nào khác đang chạy.
+fn ends_the_run(failure: &RequestFailure, alone: bool) -> bool {
+    alone
+        && (!failure.retryable()
+            || failure
+                .retry_after
+                .is_some_and(|after| after > MAX_INLINE_WAIT))
 }
 
 /// Đếm lượt của một worker.
@@ -276,20 +315,24 @@ impl SegmentJob {
             Attempt::Cancelled => Next::Stop(Ok(())),
             Attempt::Retry(failure) => {
                 self.gate.report(&failure);
+                if ends_the_run(&failure, self.gate.live() == 0) {
+                    self.segment.mark_status(SegmentStatus::Failed);
+                    return Next::Stop(Err(SegmentFailure::from_request(failure)));
+                }
                 // Server chê nhiều kết nối mà các kết nối khác vẫn chạy: chỉ cần bớt, không phải hỏng.
                 if !(is_throttle(&failure) && self.gate.live() > 0) {
                     tries.attempts += 1;
                 }
                 if tries.attempts >= self.retry.max_attempts {
                     self.segment.mark_status(SegmentStatus::Failed);
-                    return Next::Stop(Err(SegmentFailure { error: failure.error }));
+                    return Next::Stop(Err(SegmentFailure::from_request(failure)));
                 }
                 let delay = retry_delay(&failure, tries.attempts.max(1), self.segment.index());
                 Next::After(delay)
             }
             Attempt::Fatal(error) => {
                 self.segment.mark_status(SegmentStatus::Failed);
-                Next::Stop(Err(SegmentFailure { error }))
+                Next::Stop(Err(SegmentFailure::new(error)))
             }
         }
     }
@@ -310,6 +353,8 @@ impl SegmentJob {
             pulse: &self.pulse,
             idle: self.retry.idle_timeout,
             stall,
+            net: &self.net,
+            net_at: self.net.current(),
         }
     }
 
@@ -377,6 +422,12 @@ impl SegmentJob {
                     "The file size changed on the server.",
                 ));
             }
+            if self
+                .validators
+                .differs(&Validators::from_headers(response.headers()))
+            {
+                return Attempt::Fatal(file_changed());
+            }
             return self.stream(response, slot, end, watch).await;
         }
         if status.is_success() {
@@ -425,7 +476,7 @@ impl SegmentJob {
             match self.write(&chunk) {
                 WriteResult::Complete => return Attempt::Complete,
                 WriteResult::Progress => wrote = true,
-                WriteResult::Disk => return Attempt::Fatal(disk_error()),
+                WriteResult::Disk(error) => return Attempt::Fatal(error),
             }
             // Bộ điều khiển vừa giảm số kết nối: đóng kết nối này, phần còn lại tải sau.
             if slot.yield_if_over() {
@@ -442,8 +493,8 @@ impl SegmentJob {
         }
         let room = state.end - next + 1;
         let take = usize::try_from(room.min(chunk.len() as u64)).unwrap_or(chunk.len());
-        if self.file.write_at(next, &chunk[..take]).is_err() {
-            return WriteResult::Disk;
+        if let Err(error) = self.file.write_at(next, &chunk[..take]) {
+            return WriteResult::Disk(disk_failure(&error));
         }
         self.pulse.beat();
         state.downloaded += take as u64;
@@ -470,6 +521,8 @@ pub(crate) struct StreamJob {
     /// Server nhận Range: theo trần byte mỗi yêu cầu của task (nếu có).
     pub ranged: bool,
     pub pulse: Arc<Pulse>,
+    pub validators: Arc<Validators>,
+    pub net: Arc<NetEpoch>,
 }
 
 impl StreamJob {
@@ -501,8 +554,8 @@ impl StreamJob {
                 Err(failure) => {
                     drop(limit);
                     attempts += 1;
-                    if attempts >= self.retry.max_attempts {
-                        return Err(SegmentFailure { error: failure.error });
+                    if attempts >= self.retry.max_attempts || ends_the_run(&failure, true) {
+                        return Err(SegmentFailure::from_request(failure));
                     }
                     let delay = retry_delay(&failure, attempts, 0);
                     tokio::select! {
@@ -521,13 +574,11 @@ impl StreamJob {
                 if at_end {
                     return Ok(());
                 }
-                return Err(SegmentFailure {
-                    error: task_error(
+                return Err(SegmentFailure::new(task_error(
                         ErrorClass::Permanent,
                         "http.range_mismatch",
                         "The server rejected the resume offset.",
-                    ),
-                });
+                    )));
             }
             let mut requested_stop = None;
             if status == StatusCode::PARTIAL_CONTENT {
@@ -538,51 +589,49 @@ impl StreamJob {
                     .and_then(|value| value.to_str().ok())
                     .and_then(parse_content_range);
                 let Some(range) = range else {
-                    return Err(SegmentFailure {
-                        error: task_error(
+                    return Err(SegmentFailure::new(task_error(
                             ErrorClass::Permanent,
                             "http.content_range",
                             "The server sent an invalid byte range.",
-                        ),
-                    });
+                        )));
                 };
                 if range.start != position || range.end < range.start {
-                    return Err(SegmentFailure {
-                        error: task_error(
+                    return Err(SegmentFailure::new(task_error(
                             ErrorClass::Permanent,
                             "http.range_mismatch",
                             "The server returned a different byte range than requested.",
-                        ),
-                    });
+                        )));
                 }
                 match (self.total, range.total) {
                     (Some(total), Some(server_total)) if total != server_total => {
-                        return Err(SegmentFailure {
-                            error: task_error(
+                        return Err(SegmentFailure::new(task_error(
                                 ErrorClass::Permanent,
                                 "http.size_mismatch",
                                 "The file size changed on the server.",
-                            ),
-                        });
+                            )));
                     }
                     // Lúc dò chưa biết tổng mà phản hồi Range nói rõ: biết chỗ hết file.
                     (None, Some(server_total)) => self.total = Some(server_total),
                     _ => {}
                 }
+                if self
+                    .validators
+                    .differs(&Validators::from_headers(response.headers()))
+                {
+                    return Err(SegmentFailure::new(file_changed()));
+                }
             } else if status.is_success() {
                 if position > 0 {
                     restarts += 1;
                     if restarts > 3 {
-                        return Err(SegmentFailure {
-                            error: task_error(
+                        return Err(SegmentFailure::new(task_error(
                                 ErrorClass::Permanent,
                                 "http.restart",
                                 "The server keeps restarting the download from the beginning.",
-                            ),
-                        });
+                            )));
                     }
-                    if let Err(_error) = self.file.reset(self.total) {
-                        return Err(SegmentFailure { error: disk_error() });
+                    if let Err(error) = self.file.reset(self.total) {
+                        return Err(SegmentFailure::new(disk_failure(&error)));
                     }
                     self.downloaded.store(0, Ordering::Relaxed);
                 }
@@ -590,8 +639,8 @@ impl StreamJob {
                 drop(limit);
                 let failure = failure_from_status(status, response.headers());
                 attempts += 1;
-                if attempts >= self.retry.max_attempts {
-                    return Err(SegmentFailure { error: failure.error });
+                if attempts >= self.retry.max_attempts || ends_the_run(&failure, true) {
+                    return Err(SegmentFailure::from_request(failure));
                 }
                 let delay = retry_delay(&failure, attempts, 0);
                 tokio::select! {
@@ -610,7 +659,7 @@ impl StreamJob {
                 Attempt::Retry(failure) | Attempt::Stalled(failure) => {
                     attempts += 1;
                     if attempts >= self.retry.max_attempts {
-                        return Err(SegmentFailure { error: failure.error });
+                        return Err(SegmentFailure::from_request(failure));
                     }
                     let delay = retry_delay(&failure, attempts, 0);
                     tokio::select! {
@@ -618,17 +667,19 @@ impl StreamJob {
                         _ = sleep(delay) => {}
                     }
                 }
-                Attempt::Fatal(error) => return Err(SegmentFailure { error }),
+                Attempt::Fatal(error) => return Err(SegmentFailure::new(error)),
             }
         }
     }
 
-    /// Chỉ một kết nối: không có kết nối khác để so, chờ đủ `idle_timeout`.
+    /// Chỉ một kết nối: không có kết nối khác để so, chờ đủ `idle_timeout` (mạng đổi thì mở lại ngay).
     fn watch(&self) -> Watch<'_> {
         Watch {
             pulse: &self.pulse,
             idle: self.retry.idle_timeout,
             stall: None,
+            net: &self.net,
+            net_at: self.net.current(),
         }
     }
 
@@ -668,8 +719,8 @@ impl StreamJob {
             if take == 0 {
                 return Attempt::Complete;
             }
-            if self.file.write_at(position, &chunk[..take]).is_err() {
-                return Attempt::Fatal(disk_error());
+            if let Err(error) = self.file.write_at(position, &chunk[..take]) {
+                return Attempt::Fatal(disk_failure(&error));
             }
             self.pulse.beat();
             self.downloaded
@@ -716,7 +767,7 @@ enum Attempt {
 enum WriteResult {
     Complete,
     Progress,
-    Disk,
+    Disk(TaskError),
 }
 
 /// Hạn chờ byte của một kết nối.
@@ -726,32 +777,29 @@ struct Watch<'a> {
     /// Có ⇒ im quá chừng này mà kết nối khác của lượt tải đang nhận byte (xem `stalled`) thì coi
     /// là treo (học Surge `health.go`, fast-down `multi.rs`).
     stall: Option<Duration>,
+    /// Mạng đổi (Wi-Fi↔4G, máy ngủ dậy) từ lúc mở kết nối ⇒ kết nối đã chết lặng: mở lại ngay.
+    net: &'a NetEpoch,
+    net_at: u64,
 }
 
 enum Waited<T> {
     Done(T),
     /// Im quá `idle`.
     Idle,
-    /// Im quá hạn treo trong khi kết nối khác vẫn nhận byte.
+    /// Im quá hạn treo trong khi kết nối khác vẫn nhận byte, hoặc mạng vừa đổi.
     Stalled,
 }
 
 impl Watch<'_> {
     async fn wait<T>(&self, work: impl Future<Output = T>) -> Waited<T> {
         let _waiting = self.pulse.waiting();
-        let Some(stall) = self.stall else {
-            return match timeout(self.idle, work).await {
-                Ok(output) => Waited::Done(output),
-                Err(_) => Waited::Idle,
-            };
-        };
         tokio::pin!(work);
         let since = Instant::now();
         let idle_at = since + self.idle;
-        let recheck = stall_recheck(stall);
-        // Nhịp hỏi đầu sớm hơn hạn treo một nhịp: tới hạn đã có đủ hai nhịp để xét.
-        let mut check_at = (since + stall.saturating_sub(recheck)).min(idle_at);
-        let mut heard_from = since.max(check_at - recheck);
+        // Hỏi đều mỗi nhịp từ lúc bắt đầu: mạng đổi thì biết ngay; tới hạn treo đã có đủ hai nhịp để xét.
+        let recheck = self.stall.map_or(NET_RECHECK, stall_recheck);
+        let mut check_at = (since + recheck).min(idle_at);
+        let mut heard_from = since;
         let mut heard_before = false;
         loop {
             tokio::select! {
@@ -763,11 +811,16 @@ impl Watch<'_> {
             if now >= idle_at {
                 return Waited::Idle;
             }
-            let heard = self.pulse.heard_since(heard_from);
-            if now >= since + stall && self.stalled(since, heard, heard_before) {
+            if self.net.current() != self.net_at {
                 return Waited::Stalled;
             }
-            (heard_from, heard_before) = (now, heard);
+            if let Some(stall) = self.stall {
+                let heard = self.pulse.heard_since(heard_from);
+                if now >= since + stall && self.stalled(since, heard, heard_before) {
+                    return Waited::Stalled;
+                }
+                (heard_from, heard_before) = (now, heard);
+            }
             check_at = (now + recheck).min(idle_at);
         }
     }
@@ -821,7 +874,7 @@ fn retry_or_progress(failure: RequestFailure, wrote: bool) -> Attempt {
 
 fn retry_delay(failure: &RequestFailure, attempt: u32, seed: u32) -> Duration {
     if let Some(after) = failure.retry_after {
-        return after.max(Duration::from_millis(100));
+        return after.clamp(Duration::from_millis(100), MAX_INLINE_WAIT);
     }
     let exponent = attempt.saturating_sub(1).min(6);
     let base = 500u64.saturating_mul(1u64 << exponent).min(30_000);
@@ -867,11 +920,11 @@ fn closed_failure() -> RequestFailure {
     }
 }
 
-fn disk_error() -> TaskError {
+fn file_changed() -> TaskError {
     task_error(
         ErrorClass::Permanent,
-        "disk.write",
-        "Could not write to the download file.",
+        "file.changed",
+        "The file changed on the server since the download started.",
     )
 }
 
@@ -937,11 +990,15 @@ mod tests {
         assert!(policy.stall_window(u32::MAX).is_none());
     }
 
+    static NET: NetEpoch = NetEpoch::new();
+
     fn watch(pulse: &Pulse, idle: Duration) -> Watch<'_> {
         Watch {
             pulse,
             idle,
             stall: Some(Duration::from_millis(200)),
+            net: &NET,
+            net_at: NET.current(),
         }
     }
 

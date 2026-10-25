@@ -1,5 +1,7 @@
 import { useState } from "react"
+import { Link2 } from "lucide-react"
 
+import { Button } from "@/components/ui/button"
 import { t } from "@/shared/i18n/i18n"
 
 import { pauseDownload, removeDownload, resumeDownload } from "../api/downloads"
@@ -18,6 +20,8 @@ export interface DetailFlowProps {
   /** Bỏ task khỏi danh sách đang hiện (sau Xoá khỏi danh sách / Huỷ tải). */
   onDropped: (id: string) => void
   onSettings: () => void
+  /** Lỗi vì link hết hạn/bị từ chối: mở hộp "Cập nhật link" (giữ phần đã tải). */
+  onRefreshLink?: (id: string) => void
 }
 
 /** Hộp Chi tiết nối với thao tác thật của app; xoá/huỷ xong thì đóng hộp. */
@@ -30,6 +34,7 @@ export function DetailFlow({
   progress,
   onDropped,
   onSettings,
+  onRefreshLink,
 }: DetailFlowProps) {
   // Đóng hộp vẫn vẽ task vừa xem cho tới khi hộp mờ hẳn (không nháy sang màn "không còn").
   const [lastId, setLastId] = useState(taskId)
@@ -39,11 +44,12 @@ export function DetailFlow({
     onDropped(id)
     onClose()
   }
+  const item = items.find((entry) => entry.id === shownId)
   return (
     <DetailDialog
       open={taskId !== null}
       taskId={shownId}
-      item={items.find((item) => item.id === shownId)}
+      item={item}
       task={tasks.find((task) => task.id === shownId)}
       progress={shownId ? progress[shownId] : undefined}
       desktop={desktop}
@@ -63,6 +69,21 @@ export function DetailFlow({
           onClose()
           onSettings()
         },
+        failedExtra: (detail) =>
+          onRefreshLink && item?.relinkable ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!desktop}
+              onClick={() => {
+                onClose()
+                onRefreshLink(detail.task.id)
+              }}
+            >
+              <Link2 />
+              {t("recover.menu")}
+            </Button>
+          ) : null,
       }}
     />
   )

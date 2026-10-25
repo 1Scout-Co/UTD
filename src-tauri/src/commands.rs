@@ -106,11 +106,22 @@ pub fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadTask>, S
         .map_err(|error| error.to_string())
 }
 
-/// Task đang chờ: bỏ khỏi hàng (`paused`); đang chạy: huỷ lượt tải (engine giữ tiến độ).
+/// Task đang chờ: bỏ khỏi hàng (`paused`); đang chạy: huỷ lượt tải (engine giữ tiến độ); đang chờ tự
+/// thử lại / chờ mạng / chờ chỗ trống: thôi tự chạy lại.
 #[tauri::command]
-pub fn pause_download(state: State<'_, AppState>, task_id: String) -> Result<(), String> {
+pub fn pause_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<(), String> {
+    let stopped = crate::recover::forget(&state.journal, &task_id);
     if !state.queue.pause(&task_id)? {
         state.running.cancel(&task_id);
+    }
+    if let Some(task) = stopped
+        && !state.running.contains(&task_id)
+    {
+        let _ = app.emit(crate::events::TASK_EVENT, &task);
     }
     Ok(())
 }
@@ -130,6 +141,8 @@ pub(crate) fn resume_task(state: &AppState, task_id: &str) -> Result<(), String>
         .load_task(task_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "download not found".to_string())?;
+    // Người dùng bấm Tiếp tục / Thử lại: đếm lần tự thử lại từ đầu.
+    crate::recover::forget(&state.journal, task_id);
     state
         .queue
         .submit(vec![Entry::new(task_id)], Place::Front)
@@ -158,6 +171,7 @@ fn remove_task(journal: &Journal, task_id: &str, delete_files: bool) -> Result<(
         .ok_or_else(|| "download not found".to_string())?;
     if task.kind == TaskKind::Media {
         crate::media::parts::discard_parts(journal, task_id);
+        crate::media::parts::discard_leftovers(&task);
     }
     journal
         .delete_task(task_id)
@@ -532,7 +546,7 @@ pub(crate) fn spawn_run(
     }
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let event_app = app.clone();
-    tauri::async_runtime::spawn(async move {
+    let forwarder = tauri::async_runtime::spawn(async move {
         while let Some(event) = receiver.recv().await {
             emit_engine_event(&event_app, event);
         }
@@ -548,16 +562,21 @@ pub(crate) fn spawn_run(
         } else {
             engine.run_new(&task_id, control, allow_rename).await
         };
-        if let Err(error) = result {
+        // Lượt chạy xong thì mọi bản sao `events` đã bỏ: chờ phát hết sự kiện của engine rồi mới báo trạng
+        // thái tự cứu, kẻo "lỗi" của engine tới giao diện sau "chờ thử lại". Có hạn để không giữ chỗ hàng đợi.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), forwarder).await;
+        let failure = result.err().map(|error| error.to_string());
+        if let Some(message) = &failure {
             let _ = app.emit(
                 ERROR_EVENT,
                 BridgeError {
                     task_id: task_id.clone(),
-                    message: error.to_string(),
+                    message: message.clone(),
                 },
             );
         }
         running.remove(&task_id);
+        crate::recover::after_run(&app, &task_id, failure.as_deref());
         crate::queue::finished(&app, &task_id);
     });
     Ok(())

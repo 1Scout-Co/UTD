@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::fs::File;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -16,28 +18,41 @@ use super::content::{
     empty_response, file_is_page, is_html_type, is_page_name, looks_like_html, not_a_file,
     page_check, sniff_remote, PageCheck,
 };
-use super::file::{move_no_clobber, target_path, PartFile};
-use super::http::{host_key, probe, sanitize_suggested_name, Probe};
+use super::file::{disk_failure, move_no_clobber, read_at, target_path, volume_missing, PartFile};
+use super::http::{host_key, probe, sanitize_suggested_name, Probe, RequestFailure, Validators};
 use super::limiter::Limiter;
+use super::net::{NetEpoch, NetState, NetWatch};
 use super::pulse::Pulse;
+use super::relink::{self, LinkError};
 use super::transport::{plain_policy, scoped_policy, Transport};
 use super::verify::{sha256_file, HashOutcome};
 use super::worker::{
     run_segment, RetryPolicy, SegmentFailure, SegmentJob, SegmentRuntime, StreamJob,
+    MAX_INLINE_WAIT,
 };
 use super::{
     DownloadControl, DownloadOutcome, DownloadRequest, EngineEvent, EngineOptions, ProgressSnapshot,
     RemoteFile, LARGE_FILE_BYTES,
 };
 use crate::db::Journal;
+use crate::headers::{validate_request_headers, RequestHeader};
 use crate::safety::{self, GuardAction};
 use crate::model::{
     now_ms, plan_segments, validate_file_name, validate_segments, validate_url, DownloadTask,
-    ErrorClass, HashState, Segment, SegmentStatus, TaskError, TaskStatus, MAX_SEGMENTS,
-    MIN_SEGMENT_BYTES,
+    ErrorClass, HashState, Recovery, RecoveryWait, Segment, SegmentStatus, TaskError, TaskKind,
+    TaskStatus, MAX_SEGMENTS, MIN_SEGMENT_BYTES,
 };
+use crate::recovery::RouteProbe;
 use crate::{Error, Result};
 
+/// Dò link tối đa chừng này lượt trong một lần chạy; hỏng nữa thì app hẹn giờ thử lại (hiện "Sẽ thử
+/// lại lúc…"), không đứng "đang dò" vài phút.
+const PROBE_ATTEMPTS: u32 = 2;
+/// Mở lại task: lùi mốc mỗi đoạn qua đuôi toàn byte 0 tối đa chừng này (byte chưa xuống đĩa lúc rút
+/// điện, ổ có bộ đệm ghi không tôn trọng fsync).
+const ZERO_SCAN: u64 = 1024 * 1024;
+/// Khối đọc khi soát đuôi đoạn (trang bộ đệm của hệ điều hành).
+const PAGE: u64 = 4096;
 const MIN_SPLIT_REMAINING: u64 = 8 * MIN_SEGMENT_BYTES;
 const MAX_SPLITS: usize = 8;
 /// Kết nối rảnh mà hết đoạn chờ: chia đôi đoạn còn nhiều nhất, mỗi nửa ít nhất chừng này.
@@ -50,12 +65,14 @@ pub struct DownloadEngine {
     scoped_client: Client,
     limiter: Arc<Limiter>,
     options: EngineOptions,
+    /// Hỏi đường ra mạng (bài thử thay bằng mạng giả).
+    route: RouteProbe,
 }
 
 enum SessionEnd {
     Completed,
     Paused,
-    Failed(TaskError),
+    Failed(SegmentFailure),
     /// Không phải file (AC-06): bỏ file tạm rồi báo lỗi.
     Rejected(TaskError),
 }
@@ -80,6 +97,8 @@ struct SegmentContext {
     cancel: CancellationToken,
     retry: RetryPolicy,
     pulse: Arc<Pulse>,
+    validators: Arc<Validators>,
+    net: Arc<NetEpoch>,
 }
 
 impl SegmentContext {
@@ -101,6 +120,8 @@ impl SegmentContext {
             cancel: self.cancel.clone(),
             retry: self.retry,
             pulse: self.pulse.clone(),
+            validators: self.validators.clone(),
+            net: self.net.clone(),
         };
         let results = results.clone();
         join_set.spawn(async move {
@@ -125,7 +146,14 @@ impl DownloadEngine {
             scoped_client,
             limiter,
             options,
+            route: RouteProbe::default(),
         })
+    }
+
+    /// Thay cách hỏi đường ra mạng (bài thử: rớt mạng, đổi mạng giả).
+    pub fn with_route(mut self, route: RouteProbe) -> Self {
+        self.route = route;
+        self
     }
 
     fn transport(&self, task: &DownloadTask, url: &Url) -> Result<Transport> {
@@ -166,6 +194,80 @@ impl DownloadEngine {
             content_type: probe.content_type,
             page,
         })
+    }
+
+    /// Cập nhật link của task đang dừng/lỗi (link ký hết hạn, cần đăng nhập lại): chỉ nhận khi link mới
+    /// trỏ đúng file đang tải dở (relink.rs), giữ phần đã tải. `headers`: header thường cho link mới (đã
+    /// lọc, không cookie). Không đổi trạng thái task; người gọi xếp nó vào hàng đợi.
+    pub async fn replace_link(
+        &self,
+        task_id: &str,
+        raw_url: &str,
+        headers: Vec<RequestHeader>,
+    ) -> std::result::Result<DownloadTask, LinkError> {
+        let mut task = self
+            .journal
+            .load_task(task_id)
+            .ok()
+            .flatten()
+            .ok_or(LinkError::NotAllowed)?;
+        let editable = task.kind == TaskKind::Http
+            && task.parent_id.is_none()
+            && !task.status.is_active()
+            && !matches!(task.status, TaskStatus::Completed | TaskStatus::Quarantined);
+        if !editable {
+            return Err(LinkError::NotAllowed);
+        }
+        let url = validate_url(raw_url.trim()).map_err(|_| LinkError::Invalid)?;
+        validate_request_headers(&headers).map_err(|_| LinkError::Invalid)?;
+        let transport = Transport::new(
+            &self.client,
+            &self.scoped_client,
+            &url,
+            &headers,
+            task.max_request_bytes,
+        )
+        .map_err(|_| LinkError::Invalid)?;
+        let segments = self.journal.load_segments(task_id).unwrap_or_default();
+        let timeout = self.options.connect_timeout;
+        let probe = relink::verify(&transport, &url, &task, &segments, timeout).await?;
+        task.url = url.to_string();
+        task.final_url = Some(probe.url.to_string());
+        task.etag = probe.etag;
+        task.last_modified = probe.last_modified;
+        if task.downloaded_bytes == 0 {
+            task.total_bytes = probe.total_bytes;
+        }
+        task.request_headers = headers;
+        task.error = None;
+        task.recovery = None;
+        task.updated_at = now_ms();
+        self.journal
+            .save_task(&task)
+            .map_err(|_| LinkError::NotAllowed)?;
+        Ok(task)
+    }
+
+    /// Bỏ phần đã tải để lượt sau tải lại từ đầu (file trên máy chủ đã đổi, `.part` mất). Giữ link, tên.
+    pub fn reset_progress(&self, task_id: &str) -> Result<DownloadTask> {
+        let mut task = self
+            .journal
+            .load_task(task_id)?
+            .ok_or_else(|| Error::NotFound(format!("task {task_id}")))?;
+        if task.status.is_active() || task.status == TaskStatus::Completed {
+            return Err(Error::InvalidInput("task is running or finished".into()));
+        }
+        self.journal.reset_task_progress(task_id)?;
+        let _ = std::fs::remove_file(&task.temp_path);
+        task.downloaded_bytes = 0;
+        task.etag = None;
+        task.last_modified = None;
+        task.hash_state = HashState::Pending;
+        task.error = None;
+        task.recovery = None;
+        task.updated_at = now_ms();
+        self.journal.save_task(&task)?;
+        Ok(task)
     }
 
     pub async fn download(
@@ -243,18 +345,44 @@ impl DownloadEngine {
         self.run(task, control, false).await
     }
 
+    /// Một lượt tải. Lỗi đĩa giữa chừng (đầy ổ lúc cấp phát `.part`, ổ USB rút, mất quyền) thành lỗi
+    /// của task — không để task kẹt ở "đang tải" trong journal.
     async fn run(
         &self,
-        mut task: DownloadTask,
+        task: DownloadTask,
         control: DownloadControl,
         allow_rename: bool,
     ) -> Result<DownloadOutcome> {
+        let id = task.id.clone();
+        match self.run_inner(task, &control, allow_rename).await {
+            Err(Error::Io(error)) => {
+                log::warn!("engine: task={id} io error {:?}", error.kind());
+                match self.journal.load_task(&id)? {
+                    Some(task) => self.fail(task, disk_failure(&error), &control),
+                    None => Err(Error::Io(error)),
+                }
+            }
+            other => other,
+        }
+    }
+
+    async fn run_inner(
+        &self,
+        mut task: DownloadTask,
+        control: &DownloadControl,
+        allow_rename: bool,
+    ) -> Result<DownloadOutcome> {
+        let control = control.clone();
         if control.cancel.is_cancelled() {
             return self.pause(task, &control);
         }
         let pulse = Pulse::new(&task.id, task.parent_id.as_deref());
         task.status = TaskStatus::Resolving;
         task.error = None;
+        // Giờ hẹn cũ (gợi ý Retry-After của lượt trước) đã dùng xong; số lần thử app vẫn giữ.
+        if let Some(recovery) = &mut task.recovery {
+            recovery.retry_at = None;
+        }
         task.updated_at = now_ms();
         task.validate()?;
         self.journal.save_task(&task)?;
@@ -264,11 +392,11 @@ impl DownloadEngine {
         let transport = self.transport(&task, &url)?;
         let probe = match self.probe_with_retry(&transport, &url, &control).await {
             Ok(probe) => probe,
-            Err(error) => {
+            Err(failure) => {
                 if control.cancel.is_cancelled() {
                     return self.pause(task, &control);
                 }
-                return self.fail(task, error, &control);
+                return self.fail_with(task, failure.error, failure.retry_after, &control);
             }
         };
         pulse.mark("probe");
@@ -280,6 +408,11 @@ impl DownloadEngine {
         let size_redefined = probe
             .total_bytes
             .is_some_and(|total| task.total_bytes != Some(total));
+        // AC-04: file đổi trên máy chủ trong lúc tải dở ⇒ dừng và báo, người dùng chọn tải lại từ đầu.
+        // Luồng con của media: app tự hỏi yt-dlp và ghép lại, ở đây chỉ bỏ đoạn cũ như trước.
+        if changed && task.downloaded_bytes > 0 && task.parent_id.is_none() && probe.supports_ranges {
+            return self.fail(task, file_changed(), &control);
+        }
         if (changed || size_redefined) && task.downloaded_bytes > 0 {
             self.journal.reset_task_progress(&task.id)?;
             task.downloaded_bytes = 0;
@@ -331,11 +464,40 @@ impl DownloadEngine {
             .min(self.options.global_connections)
             .max(1);
         let ranged = probe.supports_ranges && task.total_bytes.is_some();
+        // `.part` / thư mục tải mất lúc đang dừng: báo rõ, không âm thầm tải lại từ 0. Ổ rút ra thì app
+        // chờ ổ cắm lại. Luồng con của media do app sửa (tải lại luồng đó).
+        if ranged
+            && task.downloaded_bytes > 0
+            && task.parent_id.is_none()
+            && let Some(error) = missing_part(&task)
+        {
+            return self.fail(task, error, &control);
+        }
         let mut segments = if ranged {
             self.journal.load_segments(&task.id)?
         } else {
             Vec::new()
         };
+        if ranged && task.downloaded_bytes > 0 && !segments.is_empty() {
+            let path = PathBuf::from(&task.temp_path);
+            let mut checked = segments.clone();
+            let dropped = tokio::task::spawn_blocking(move || {
+                reconcile_part(&path, &mut checked).map(|dropped| (dropped, checked))
+            })
+            .await
+            .map_err(|error| Error::Io(io::Error::other(error)))?;
+            if let Ok((dropped, checked)) = dropped
+                && dropped > 0
+            {
+                log::warn!(
+                    "engine: task={} .part thiếu {dropped} byte so với journal, tải lại phần đó",
+                    task.id
+                );
+                self.journal.save_segments(&task.id, &checked)?;
+                task.downloaded_bytes = checked.iter().map(|segment| segment.downloaded).sum();
+                segments = checked;
+            }
+        }
         let saved: u64 = segments.iter().map(|segment| segment.downloaded).sum();
         let temp_len = std::fs::metadata(&task.temp_path)
             .map(|metadata| metadata.len())
@@ -373,6 +535,7 @@ impl DownloadEngine {
             if task.downloaded_bytes >= total {
                 return self.finish(task, &control, sniff, &pulse).await;
             }
+            let validators = Arc::new(Validators::of(&task));
             let end = self
                 .run_segmented(
                     &mut task,
@@ -384,9 +547,10 @@ impl DownloadEngine {
                     total,
                     max_connections,
                     pulse.clone(),
+                    validators,
                 )
                 .await?;
-            return self.conclude(task, control, end, sniff, &pulse).await;
+            return self.conclude(task, &control, end, sniff, &pulse).await;
         }
 
         self.journal.reset_task_progress(&task.id)?;
@@ -400,24 +564,26 @@ impl DownloadEngine {
         let end = self
             .run_single(&mut task, &control, file, transport, probe, pulse.clone())
             .await?;
-        self.conclude(task, control, end, sniff, &pulse).await
+        self.conclude(task, &control, end, sniff, &pulse).await
     }
 
     async fn conclude(
         &self,
         mut task: DownloadTask,
-        control: DownloadControl,
+        control: &DownloadControl,
         end: SessionEnd,
         sniff: bool,
         pulse: &Pulse,
     ) -> Result<DownloadOutcome> {
         match end {
-            SessionEnd::Completed => self.finish(task, &control, sniff, pulse).await,
-            SessionEnd::Paused => self.pause(task, &control),
-            SessionEnd::Failed(error) => self.fail(task, error, &control),
+            SessionEnd::Completed => self.finish(task, control, sniff, pulse).await,
+            SessionEnd::Paused => self.pause(task, control),
+            SessionEnd::Failed(failure) => {
+                self.fail_with(task, failure.error, failure.retry_after, control)
+            }
             SessionEnd::Rejected(error) => {
                 self.discard_part(&mut task).await?;
-                self.fail(task, error, &control)
+                self.fail(task, error, control)
             }
         }
     }
@@ -464,26 +630,35 @@ impl DownloadEngine {
         transport: &Transport,
         url: &Url,
         control: &DownloadControl,
-    ) -> std::result::Result<Probe, TaskError> {
-        let limit = self.options.max_attempts.clamp(1, 4);
+    ) -> std::result::Result<Probe, RequestFailure> {
+        let limit = self.options.max_attempts.clamp(1, PROBE_ATTEMPTS);
+        let cancelled = || RequestFailure {
+            error: cancelled_error(),
+            retry_after: None,
+        };
         let mut attempts = 0;
         loop {
             let probed = tokio::select! {
                 result = probe(transport, url, self.options.connect_timeout) => result,
-                _ = control.cancel.cancelled() => return Err(cancelled_error()),
+                _ = control.cancel.cancelled() => return Err(cancelled()),
             };
             match probed {
                 Ok(probe) => return Ok(probe),
                 Err(failure) => {
                     attempts += 1;
-                    if !failure.retryable() || attempts >= limit {
-                        return Err(failure.error);
+                    // Máy chủ im tới hết hạn, hoặc bảo chờ lâu: thôi luôn, app hẹn giờ thử lại.
+                    let slow = failure.error.code == "network.timeout"
+                        || failure
+                            .retry_after
+                            .is_some_and(|after| after > MAX_INLINE_WAIT);
+                    if !failure.retryable() || attempts >= limit || slow {
+                        return Err(failure);
                     }
                     let delay = failure
                         .retry_after
                         .unwrap_or_else(|| Duration::from_millis(500 * u64::from(attempts)));
                     tokio::select! {
-                        _ = control.cancel.cancelled() => return Err(cancelled_error()),
+                        _ = control.cancel.cancelled() => return Err(cancelled()),
                         _ = sleep(delay) => {}
                     }
                 }
@@ -533,6 +708,7 @@ impl DownloadEngine {
         total: u64,
         max_connections: u16,
         pulse: Arc<Pulse>,
+        validators: Arc<Validators>,
     ) -> Result<SessionEnd> {
         let mut runtimes: Vec<Arc<SegmentRuntime>> = segments
             .iter()
@@ -558,17 +734,20 @@ impl DownloadEngine {
             Instant::now(),
             total_downloaded(&runtimes),
         );
+        let mut net = NetWatch::new(self.route.clone());
         let context = SegmentContext {
             transport,
             total,
             url,
             host,
-            file,
+            file: file.clone(),
             limiter: self.limiter.clone(),
             gate: gate.clone(),
             cancel: cancel.clone(),
             retry,
             pulse,
+            validators,
+            net: net.epoch(),
         };
         let (results_tx, mut results_rx) = mpsc::unbounded_channel();
         let mut pending_workers = 0usize;
@@ -589,13 +768,15 @@ impl DownloadEngine {
             .map(|runtime| (runtime.start(), runtime.downloaded()))
             .collect();
         let mut splits_left = MAX_SPLITS.min(MAX_SEGMENTS.saturating_sub(runtimes.len()));
+        let mut saving = Saving::new(&segments);
 
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
                     join_set.abort_all();
                     while join_set.join_next().await.is_some() {}
-                    self.checkpoint_segments(task, &runtimes)?;
+                    saving.settle().await?;
+                    self.checkpoint_segments(task, &runtimes, &file).await?;
                     return Ok(SessionEnd::Paused);
                 }
                 message = results_rx.recv() => {
@@ -609,8 +790,9 @@ impl DownloadEngine {
                         Some(Some(failure)) => {
                             join_set.abort_all();
                             while join_set.join_next().await.is_some() {}
-                            self.checkpoint_segments(task, &runtimes)?;
-                            return Ok(SessionEnd::Failed(failure.error));
+                            saving.settle().await?;
+                            self.checkpoint_segments(task, &runtimes, &file).await?;
+                            return Ok(SessionEnd::Failed(failure));
                         }
                         None => break,
                     }
@@ -620,11 +802,32 @@ impl DownloadEngine {
                     let downloaded = total_downloaded(&runtimes);
                     let elapsed = now.duration_since(last_sample).as_secs_f64().max(0.001);
                     let speed = ((downloaded.saturating_sub(last_bytes)) as f64 / elapsed) as u64;
+                    let receiving = downloaded > last_bytes;
                     last_bytes = downloaded;
                     last_sample = now;
 
-                    if now.duration_since(last_checkpoint) >= self.options.checkpoint_interval {
-                        self.checkpoint_segments(task, &runtimes)?;
+                    let stop = if net.tick(now, receiving) == NetState::Offline {
+                        Some(offline_error())
+                    } else if !Path::new(&task.temp_path).exists() {
+                        // Xoá / đổi tên `.part` lúc đang tải (Windows cho xoá vì mở kèm FILE_SHARE_DELETE).
+                        Some(part_missing())
+                    } else {
+                        None
+                    };
+                    if let Some(error) = stop {
+                        join_set.abort_all();
+                        while join_set.join_next().await.is_some() {}
+                        saving.settle().await?;
+                        self.checkpoint_segments(task, &runtimes, &file).await?;
+                        return Ok(SessionEnd::Failed(SegmentFailure::new(error)));
+                    }
+                    // Checkpoint chạy nền (fsync rồi ghi journal); lượt trước chưa xong (đĩa chậm) thì để nhịp sau.
+                    if now.duration_since(last_checkpoint) >= self.options.checkpoint_interval
+                        && !saving.busy()
+                    {
+                        saving.settle().await?;
+                        saving.start(&self.journal, &file, &task.id, snapshot(&runtimes));
+                        task.updated_at = now_ms();
                         last_checkpoint = now;
                     }
                     let sample = Sample {
@@ -636,7 +839,12 @@ impl DownloadEngine {
                     if let Some(target) = controller.on_tick(sample) {
                         gate.set_target(target);
                     }
-                    for tail in self.fill_idle(task, &mut runtimes, controller.target())? {
+                    let tails = self.fill_idle(&mut runtimes, controller.target());
+                    if !tails.is_empty() {
+                        saving.settle().await?;
+                        self.save_plan(task, &saving.durable_plan(&runtimes))?;
+                    }
+                    for tail in tails {
                         previous_balance.insert(tail.start(), 0);
                         context.spawn(&mut join_set, &results_tx, tail);
                         pending_workers += 1;
@@ -655,13 +863,11 @@ impl DownloadEngine {
                         let balance_elapsed =
                             now.duration_since(last_balance).as_secs_f64().max(0.001);
                         if splits_left > 0
-                            && let Some(tail) = self.split_slowest(
-                                task,
-                                &mut runtimes,
-                                &previous_balance,
-                                balance_elapsed,
-                            )?
+                            && let Some(tail) =
+                                split_slowest(&mut runtimes, &previous_balance, balance_elapsed)
                         {
+                            saving.settle().await?;
+                            self.save_plan(task, &saving.durable_plan(&runtimes))?;
                             context.spawn(&mut join_set, &results_tx, tail);
                             pending_workers += 1;
                             splits_left -= 1;
@@ -676,16 +882,17 @@ impl DownloadEngine {
             }
         }
 
-        self.checkpoint_segments(task, &runtimes)?;
+        saving.settle().await?;
+        self.checkpoint_segments(task, &runtimes, &file).await?;
         if cancel.is_cancelled() {
             return Ok(SessionEnd::Paused);
         }
         let downloaded = task.downloaded_bytes;
         if downloaded != total {
-            return Ok(SessionEnd::Failed(client_error(
+            return Ok(SessionEnd::Failed(SegmentFailure::new(client_error(
                 "network.closed",
                 "The download ended before all bytes arrived.",
-            )));
+            ))));
         }
         Ok(SessionEnd::Completed)
     }
@@ -694,10 +901,9 @@ impl DownloadEngine {
     /// để kết nối rảnh có việc, nhất là lúc gần xong.
     fn fill_idle(
         &self,
-        task: &mut DownloadTask,
         runtimes: &mut Vec<Arc<SegmentRuntime>>,
         target: usize,
-    ) -> Result<Vec<Arc<SegmentRuntime>>> {
+    ) -> Vec<Arc<SegmentRuntime>> {
         let mut added = Vec::new();
         while runtimes.len() < MAX_SEGMENTS {
             let unfinished = runtimes.iter().filter(|runtime| !runtime.is_done()).count();
@@ -717,49 +923,12 @@ impl DownloadEngine {
             };
             added.push(insert_split(runtimes, &largest, range));
         }
-        if !added.is_empty() {
-            self.save_plan(task, runtimes)?;
-        }
-        Ok(added)
+        added
     }
 
-    /// Đoạn chậm hơn một nửa đoạn nhanh nhất (kể cả đoạn treo 0 B/s): tách phần đuôi cho kết
-    /// nối khác làm.
-    fn split_slowest(
-        &self,
-        task: &mut DownloadTask,
-        runtimes: &mut Vec<Arc<SegmentRuntime>>,
-        previous: &HashMap<u64, u64>,
-        elapsed: f64,
-    ) -> Result<Option<Arc<SegmentRuntime>>> {
-        let unfinished = runtimes.iter().filter(|runtime| !runtime.is_done()).count();
-        if unfinished < 2 || runtimes.len() >= MAX_SEGMENTS {
-            return Ok(None);
-        }
-        let speeds: Vec<(Arc<SegmentRuntime>, u64)> = runtimes
-            .iter()
-            .map(|runtime| {
-                let current = runtime.downloaded();
-                let before = previous.get(&runtime.start()).copied().unwrap_or(current);
-                let per_second = (current.saturating_sub(before) as f64 / elapsed) as u64;
-                (runtime.clone(), per_second)
-            })
-            .collect();
-        let Some(runtime) = pick_slowest(&speeds, Duration::from_secs_f64(elapsed)) else {
-            return Ok(None);
-        };
-        let Some(range) = runtime.split_tail(MIN_SPLIT_REMAINING) else {
-            return Ok(None);
-        };
-        let tail = insert_split(runtimes, &runtime, range);
-        self.save_plan(task, runtimes)?;
-        Ok(Some(tail))
-    }
-
-    fn save_plan(&self, task: &mut DownloadTask, runtimes: &[Arc<SegmentRuntime>]) -> Result<()> {
-        let plan: Vec<Segment> = runtimes.iter().map(|runtime| runtime.snapshot()).collect();
-        self.journal.save_segments(&task.id, &plan)?;
-        task.downloaded_bytes = plan.iter().map(|segment| segment.downloaded).sum();
+    /// Lưu cách chia đoạn mới; `plan` chỉ kèm byte đã chắc nằm trên đĩa (`Saving::durable_plan`).
+    fn save_plan(&self, task: &mut DownloadTask, plan: &[Segment]) -> Result<()> {
+        self.journal.save_segments(&task.id, plan)?;
         task.updated_at = now_ms();
         Ok(())
     }
@@ -776,6 +945,7 @@ impl DownloadEngine {
         let cancel = control.cancel.clone();
         let downloaded = Arc::new(AtomicU64::new(0));
         let host = host_key(&probe.url);
+        let mut net = NetWatch::new(self.route.clone());
         let job = StreamJob {
             transport,
             url: probe.url,
@@ -788,6 +958,8 @@ impl DownloadEngine {
             downloaded: downloaded.clone(),
             total: task.total_bytes,
             pulse,
+            validators: Arc::new(Validators::of(task)),
+            net: net.epoch(),
         };
         let mut join_set = JoinSet::new();
         join_set.spawn(job.run());
@@ -813,13 +985,13 @@ impl DownloadEngine {
                         Some(Ok(Err(failure))) => {
                             let bytes = downloaded.load(Ordering::Relaxed);
                             self.checkpoint_stream(task, bytes)?;
-                            return Ok(SessionEnd::Failed(failure.error));
+                            return Ok(SessionEnd::Failed(failure));
                         }
                         Some(Err(error)) if error.is_cancelled() => break,
                         Some(Err(_)) => {
                             let bytes = downloaded.load(Ordering::Relaxed);
                             self.checkpoint_stream(task, bytes)?;
-                            return Ok(SessionEnd::Failed(internal_error()));
+                            return Ok(SessionEnd::Failed(SegmentFailure::new(internal_error())));
                         }
                     }
                 }
@@ -828,8 +1000,15 @@ impl DownloadEngine {
                     let bytes = downloaded.load(Ordering::Relaxed);
                     let elapsed = now.duration_since(last_sample).as_secs_f64().max(0.001);
                     let speed = ((bytes.saturating_sub(last_bytes)) as f64 / elapsed) as u64;
+                    let receiving = bytes > last_bytes;
                     last_bytes = bytes;
                     last_sample = now;
+                    if net.tick(now, receiving) == NetState::Offline {
+                        join_set.abort_all();
+                        while join_set.join_next().await.is_some() {}
+                        self.checkpoint_stream(task, bytes)?;
+                        return Ok(SessionEnd::Failed(SegmentFailure::new(offline_error())));
+                    }
                     if now.duration_since(last_checkpoint) >= self.options.checkpoint_interval {
                         self.checkpoint_stream(task, bytes)?;
                         last_checkpoint = now;
@@ -853,24 +1032,25 @@ impl DownloadEngine {
             task.total_bytes = Some(bytes);
         }
         if task.total_bytes.is_some_and(|total| total != bytes) {
-            return Ok(SessionEnd::Failed(client_error(
+            return Ok(SessionEnd::Failed(SegmentFailure::new(client_error(
                 "http.size_mismatch",
                 "The downloaded size does not match the server's declared size.",
-            )));
+            ))));
         }
         Ok(SessionEnd::Completed)
     }
 
-    fn checkpoint_segments(
+    /// Chụp tiến độ, fsync `.part`, rồi mới ghi journal: journal không bao giờ đi trước dữ liệu trên
+    /// đĩa (rút điện ngay sau đó vẫn tải tiếp đúng). Checkpoint cuối lượt; giữa lượt dùng `Saving`.
+    async fn checkpoint_segments(
         &self,
         task: &mut DownloadTask,
         runtimes: &[Arc<SegmentRuntime>],
+        file: &Arc<PartFile>,
     ) -> Result<()> {
-        let segments: Vec<Segment> = runtimes
-            .iter()
-            .map(|runtime| runtime.snapshot())
-            .collect();
+        let segments = snapshot(runtimes);
         let downloaded = segments.iter().map(|segment| segment.downloaded).sum();
+        sync_part(file).await?;
         self.journal.checkpoint(&task.id, &segments, downloaded)?;
         task.downloaded_bytes = downloaded;
         task.updated_at = now_ms();
@@ -996,6 +1176,8 @@ impl DownloadEngine {
         if task.status != TaskStatus::Completed {
             task.status = TaskStatus::Paused;
             task.error = None;
+            // Người dùng (hoặc app sắp tắt / cài bản mới) dừng: không còn lịch tự thử lại nào.
+            task.recovery = None;
             task.updated_at = now_ms();
             self.journal.save_task(&task)?;
             emit_task(control, &task);
@@ -1005,10 +1187,33 @@ impl DownloadEngine {
 
     fn fail(
         &self,
-        mut task: DownloadTask,
+        task: DownloadTask,
         error: TaskError,
         control: &DownloadControl,
     ) -> Result<DownloadOutcome> {
+        self.fail_with(task, error, None, control)
+    }
+
+    /// `retry_after`: máy chủ bảo chờ (Retry-After) ⇒ gợi ý giờ thử lại cho app (`task.recovery`).
+    fn fail_with(
+        &self,
+        mut task: DownloadTask,
+        mut error: TaskError,
+        retry_after: Option<Duration>,
+        control: &DownloadControl,
+    ) -> Result<DownloadOutcome> {
+        if error.code.starts_with("disk.") && volume_missing(Path::new(&task.dest_dir)) {
+            error = unplugged();
+        }
+        if let Some(after) = retry_after {
+            let mut hint = task
+                .recovery
+                .take()
+                .unwrap_or_else(|| Recovery::new(RecoveryWait::Retry));
+            let after = i64::try_from(after.as_millis()).unwrap_or(i64::MAX);
+            hint.retry_at = Some(now_ms().saturating_add(after));
+            task.recovery = Some(hint);
+        }
         task.status = TaskStatus::Failed;
         task.error = Some(error);
         task.updated_at = now_ms();
@@ -1059,19 +1264,160 @@ fn build_client(options: &EngineOptions, redirect: reqwest::redirect::Policy) ->
 }
 
 fn metadata_changed(task: &DownloadTask, probe: &Probe) -> bool {
-    let etag_changed = matches!(
-        (task.etag.as_deref(), probe.etag.as_deref()),
-        (Some(left), Some(right)) if left != right
-    );
-    let modified_changed = matches!(
-        (task.last_modified.as_deref(), probe.last_modified.as_deref()),
-        (Some(left), Some(right)) if left != right
-    );
+    let validators = Validators {
+        etag: probe.etag.clone(),
+        last_modified: probe.last_modified.clone(),
+    };
     let size_changed = matches!(
         (task.total_bytes, probe.total_bytes),
         (Some(left), Some(right)) if left != right
     );
-    etag_changed || modified_changed || size_changed
+    size_changed || Validators::of(task).differs(&validators)
+}
+
+/// `.part` hoặc thư mục tải không còn (task đã có byte): ổ rút ra thì `disk.unplugged` (app chờ ổ
+/// cắm lại), còn lại `file.part_missing` (người dùng chọn tải lại phần thiếu).
+fn missing_part(task: &DownloadTask) -> Option<TaskError> {
+    let folder = Path::new(&task.dest_dir);
+    if !folder.is_dir() {
+        return Some(if volume_missing(folder) {
+            unplugged()
+        } else {
+            part_missing()
+        });
+    }
+    (!Path::new(&task.temp_path).is_file()).then(part_missing)
+}
+
+/// Đối chiếu `.part` với journal trước khi tải tiếp: đoạn nào journal nhận quá độ dài file thì cắt
+/// bớt; đuôi đoạn là các trang toàn byte 0 (byte chưa kịp xuống đĩa khi rút điện) thì tải lại. Trả số
+/// byte phải tải lại. Byte 0 thật chỉ tốn tải lại, không bao giờ giữ vùng chưa chắc có dữ liệu.
+fn reconcile_part(path: &Path, segments: &mut [Segment]) -> io::Result<u64> {
+    let file = File::open(path)?;
+    let length = file.metadata()?.len();
+    let mut dropped = 0u64;
+    let mut page = vec![0u8; PAGE as usize];
+    for segment in segments.iter_mut() {
+        let room = length.saturating_sub(segment.start);
+        let mut end = segment.start + segment.downloaded.min(room);
+        let floor = end.saturating_sub(ZERO_SCAN).max(segment.start);
+        while end > floor {
+            let from = ((end - 1) / PAGE * PAGE).max(floor);
+            let size = (end - from) as usize;
+            let read = read_at(&file, from, &mut page[..size])?;
+            if read < size || page[..size].iter().any(|byte| *byte != 0) {
+                break;
+            }
+            end = from;
+        }
+        let keep = end - segment.start;
+        if keep < segment.downloaded {
+            dropped += segment.downloaded - keep;
+            segment.downloaded = keep;
+            if segment.status == SegmentStatus::Done {
+                segment.status = SegmentStatus::Pending;
+            }
+        }
+    }
+    Ok(dropped)
+}
+
+fn snapshot(runtimes: &[Arc<SegmentRuntime>]) -> Vec<Segment> {
+    runtimes.iter().map(|runtime| runtime.snapshot()).collect()
+}
+
+/// Checkpoint giữa lượt chạy nền: fsync `.part` rồi ghi journal, không chặn vòng lượt tải (đĩa chậm, USB).
+/// Nhớ byte chắc chắn đã nằm trên đĩa của mỗi đoạn để cách chia đoạn mới không nhận hơn.
+struct Saving {
+    handle: Option<tokio::task::JoinHandle<Result<Vec<Segment>>>>,
+    /// Theo byte đầu đoạn (không đổi khi tách đoạn): số byte đã fsync và journal đã nhận.
+    durable: HashMap<u64, u64>,
+}
+
+impl Saving {
+    fn new(saved: &[Segment]) -> Self {
+        Self {
+            handle: None,
+            durable: saved
+                .iter()
+                .map(|segment| (segment.start, segment.downloaded))
+                .collect(),
+        }
+    }
+
+    fn busy(&self) -> bool {
+        self.handle.as_ref().is_some_and(|handle| !handle.is_finished())
+    }
+
+    fn start(&mut self, journal: &Arc<Journal>, file: &Arc<PartFile>, task_id: &str, segments: Vec<Segment>) {
+        let (journal, file, task_id) = (journal.clone(), file.clone(), task_id.to_string());
+        self.handle = Some(tokio::task::spawn_blocking(move || {
+            let downloaded = segments.iter().map(|segment| segment.downloaded).sum();
+            file.sync()?;
+            journal.checkpoint(&task_id, &segments, downloaded)?;
+            Ok(segments)
+        }));
+    }
+
+    /// Chờ checkpoint đang chạy (nếu có) xong. Gọi trước mọi lần ghi cách chia đoạn và checkpoint cuối:
+    /// checkpoint cập nhật theo số thứ tự đoạn, ghi sau cách chia mới là lệch đoạn.
+    async fn settle(&mut self) -> Result<()> {
+        if let Some(handle) = self.handle.take() {
+            let saved = handle
+                .await
+                .map_err(|error| Error::Io(io::Error::other(error)))??;
+            self.durable = saved
+                .iter()
+                .map(|segment| (segment.start, segment.downloaded))
+                .collect();
+        }
+        Ok(())
+    }
+
+    /// Cách chia hiện tại, mỗi đoạn chỉ kèm byte đã chắc nằm trên đĩa (đoạn mới tách: 0).
+    fn durable_plan(&self, runtimes: &[Arc<SegmentRuntime>]) -> Vec<Segment> {
+        let mut plan = snapshot(runtimes);
+        for segment in &mut plan {
+            let durable = self.durable.get(&segment.start).copied().unwrap_or(0);
+            segment.downloaded = segment.downloaded.min(durable);
+            if segment.status == SegmentStatus::Done && !segment.is_done() {
+                segment.status = SegmentStatus::Active;
+            }
+        }
+        plan
+    }
+}
+
+async fn sync_part(file: &Arc<PartFile>) -> Result<()> {
+    let file = file.clone();
+    tokio::task::spawn_blocking(move || file.sync())
+        .await
+        .map_err(|error| Error::Io(io::Error::other(error)))??;
+    Ok(())
+}
+
+/// Đoạn chậm hơn một nửa đoạn nhanh nhất (kể cả đoạn treo 0 B/s): tách phần đuôi cho kết nối khác làm.
+fn split_slowest(
+    runtimes: &mut Vec<Arc<SegmentRuntime>>,
+    previous: &HashMap<u64, u64>,
+    elapsed: f64,
+) -> Option<Arc<SegmentRuntime>> {
+    let unfinished = runtimes.iter().filter(|runtime| !runtime.is_done()).count();
+    if unfinished < 2 || runtimes.len() >= MAX_SEGMENTS {
+        return None;
+    }
+    let speeds: Vec<(Arc<SegmentRuntime>, u64)> = runtimes
+        .iter()
+        .map(|runtime| {
+            let current = runtime.downloaded();
+            let before = previous.get(&runtime.start()).copied().unwrap_or(current);
+            let per_second = (current.saturating_sub(before) as f64 / elapsed) as u64;
+            (runtime.clone(), per_second)
+        })
+        .collect();
+    let runtime = pick_slowest(&speeds, Duration::from_secs_f64(elapsed))?;
+    let range = runtime.split_tail(MIN_SPLIT_REMAINING)?;
+    Some(insert_split(runtimes, &runtime, range))
 }
 
 /// Đoạn chậm nhất còn đủ lớn để tách, chậm hơn một nửa đoạn nhanh nhất. Đoạn 0 B/s chỉ tính
@@ -1166,6 +1512,34 @@ fn file_exists() -> TaskError {
         code: "file.exists".into(),
         message: "A file with this name already exists.".into(),
     }
+}
+
+fn file_changed() -> TaskError {
+    TaskError {
+        class: ErrorClass::Permanent,
+        code: "file.changed".into(),
+        message: "The file changed on the server since the download started.".into(),
+    }
+}
+
+fn part_missing() -> TaskError {
+    TaskError {
+        class: ErrorClass::User,
+        code: "file.part_missing".into(),
+        message: "The partial download file or its folder was deleted or renamed.".into(),
+    }
+}
+
+fn unplugged() -> TaskError {
+    TaskError {
+        class: ErrorClass::User,
+        code: "disk.unplugged".into(),
+        message: "The drive holding the download folder is not connected.".into(),
+    }
+}
+
+fn offline_error() -> TaskError {
+    client_error("network.offline", "The computer is offline.")
 }
 
 fn cancelled_error() -> TaskError {
