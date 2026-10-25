@@ -244,6 +244,43 @@ impl TaskError {
     }
 }
 
+/// Mỗi task giữ tối đa chừng này mốc lịch sử (cũ nhất bị bỏ): thử lại nhiều lần không phình journal.
+pub const MAX_TASK_EVENTS: usize = 50;
+/// Mã của mốc "dừng vì app tắt ngang" (`Journal::mark_interrupted`).
+pub const INTERRUPTED_CODE: &str = "app.interrupted";
+
+/// Một mốc trong lịch sử của task: đổi trạng thái, lỗi (mã + câu), dừng vì app tắt ngang.
+/// Màn Chi tiết đọc để hiện lý do dừng, các lần lỗi và "Sao chép log".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskEvent {
+    pub at: i64,
+    pub status: TaskStatus,
+    /// Mã lỗi khi lỗi/cách ly, `INTERRUPTED_CODE` khi app tắt ngang; còn lại không có.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub downloaded_bytes: u64,
+}
+
+impl TaskEvent {
+    /// Mốc ứng với trạng thái hiện tại của task (lỗi chỉ đi kèm trạng thái lỗi/cách ly).
+    pub fn of(task: &DownloadTask) -> Self {
+        let error = task
+            .error
+            .as_ref()
+            .filter(|_| matches!(task.status, TaskStatus::Failed | TaskStatus::Quarantined));
+        Self {
+            at: task.updated_at,
+            status: task.status,
+            code: error.map(|error| error.code.clone()),
+            message: error.map(|error| error.message.clone()),
+            downloaded_bytes: task.downloaded_bytes,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Segment {

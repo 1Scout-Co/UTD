@@ -40,7 +40,7 @@ test('S-05: a11y — dialog thêm download không có lỗi truy cập', async (
   expect(result.violations).toEqual([])
 })
 
-test('S-15: mở cài đặt, xem hướng dẫn tích hợp ở chế độ preview', async ({
+test('S-27: mở cài đặt, xem hướng dẫn tích hợp ở chế độ preview', async ({
   page,
 }) => {
   await page.goto('/')
@@ -55,7 +55,7 @@ test('S-15: mở cài đặt, xem hướng dẫn tích hợp ở chế độ pre
   await expect(dialog).not.toBeVisible()
 })
 
-test('S-15: a11y — cài đặt không có lỗi truy cập', async ({ page }) => {
+test('S-27: a11y — cài đặt không có lỗi truy cập', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Cài đặt' }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
@@ -88,7 +88,7 @@ test('S-06: a11y — dialog media không có lỗi truy cập', async ({ page })
   expect(result.violations).toEqual([])
 })
 
-test('S-16: chẩn đoán một download lỗi', async ({ page }) => {
+test('S-21: chẩn đoán một download lỗi', async ({ page }) => {
   await page.goto('/')
   await page
     .getByRole('button', {
@@ -105,7 +105,7 @@ test('S-16: chẩn đoán một download lỗi', async ({ page }) => {
   await expect(dialog).not.toBeVisible()
 })
 
-test('S-16: file bị quarantine hiện chẩn đoán an toàn', async ({ page }) => {
+test('S-21: file bị quarantine hiện chẩn đoán an toàn', async ({ page }) => {
   await page.goto('/')
   await page
     .getByRole('button', { name: 'Tuỳ chọn cho setup_office_2026.exe' })
@@ -120,7 +120,7 @@ test('S-16: file bị quarantine hiện chẩn đoán an toàn', async ({ page }
   ).toHaveCount(0)
 })
 
-test('S-16: a11y — chẩn đoán không có lỗi truy cập', async ({ page }) => {
+test('S-21: a11y — chẩn đoán không có lỗi truy cập', async ({ page }) => {
   await page.goto('/')
   await page
     .getByRole('button', {

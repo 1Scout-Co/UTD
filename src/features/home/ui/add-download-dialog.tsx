@@ -14,10 +14,13 @@ import {
 import { Input } from "@/components/ui/input"
 import { t } from "@/shared/i18n/i18n"
 
+import { preflightLink } from "../api/detail"
 import { parseLinks } from "../model/batch-links"
 import { fileNameFromUrl } from "../model/download-mapper"
 import { isChannelPage, isMediaPage } from "../model/media-pages"
 import type { AddDownloadPayload } from "../model/types"
+import type { WarnedLink } from "../model/warnings"
+import { SingleWarning } from "./warning-panel"
 
 function FieldLabel({ children }: { children: ReactNode }) {
   return (
@@ -94,6 +97,35 @@ function UrlPreview({
   )
 }
 
+/**
+ * S-22 trước khi bắt đầu: kiểm link (dò tên + kiểu nội dung, luật của Download Guard); có cảnh báo thì giữ
+ * lại để người dùng chọn Vẫn tải / Huỷ, không có thì gửi luôn. Bản xem trước trên trình duyệt không kiểm.
+ */
+function usePreflight(
+  desktop: boolean,
+  onSubmit: (payload: AddDownloadPayload) => void | Promise<void>
+) {
+  const [checking, setChecking] = useState(false)
+  const [warning, setWarning] = useState<{
+    link: WarnedLink
+    payload: AddDownloadPayload
+  } | null>(null)
+  const start = async (payload: AddDownloadPayload) => {
+    if (!desktop) return onSubmit(payload)
+    setChecking(true)
+    const link = await preflightLink(payload.url, payload.fileName).catch(() => null)
+    setChecking(false)
+    if (link) setWarning({ link, payload })
+    else await onSubmit(payload)
+  }
+  const proceed = () => {
+    if (!warning) return
+    setWarning(null)
+    void onSubmit(warning.payload)
+  }
+  return { checking, warning, start, proceed, reset: () => setWarning(null) }
+}
+
 export function AddDownloadDialog({
   open,
   onOpenChange,
@@ -123,6 +155,7 @@ export function AddDownloadDialog({
   const [sha256, setSha256] = useState("")
   const [destDir, setDestDir] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
+  const preflight = usePreflight(desktop, onSubmit)
 
   const host = useMemo(() => {
     try {
@@ -157,6 +190,7 @@ export function AddDownloadDialog({
   const close = () => {
     if (!busy) {
       setLocalError(null)
+      preflight.reset()
       onOpenChange(false)
     }
   }
@@ -180,7 +214,7 @@ export function AddDownloadDialog({
       return
     }
     setLocalError(null)
-    void onSubmit({
+    void preflight.start({
       url: url.trim(),
       destDir: effectiveDir || undefined,
       fileName: fileName.trim() || undefined,
@@ -189,14 +223,29 @@ export function AddDownloadDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) preflight.reset()
+        onOpenChange(next)
+      }}
+    >
       <DialogContent data-variant="soniox" className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>{t("add.title")}</DialogTitle>
           <DialogDescription>{t("add.description")}</DialogDescription>
         </DialogHeader>
 
-        <form className="space-y-4" onSubmit={submit}>
+        {preflight.warning ? (
+          <SingleWarning
+            link={preflight.warning.link}
+            busy={busy}
+            onProceed={preflight.proceed}
+            onCancel={close}
+          />
+        ) : null}
+        {/* Đang hỏi S-22: giấu ô nhập (giữ nguyên chữ đã gõ), hiện lại khi Vẫn tải mà lỗi. */}
+        <form className="space-y-4" hidden={Boolean(preflight.warning)} onSubmit={submit}>
           <UrlPreview
             url={url}
             host={host}
@@ -327,7 +376,7 @@ export function AddDownloadDialog({
             <Button
               data-primary
               type="submit"
-              disabled={busy || !url.trim()}
+              disabled={busy || preflight.checking || !url.trim()}
             >
               {channelPage ? <ListVideo /> : mediaPage ? <Film /> : <Download />}
               {channelPage
@@ -336,7 +385,9 @@ export function AddDownloadDialog({
                   ? t("add.downloadVideo")
                   : busy
                     ? t("app.adding")
-                    : t("add.start")}
+                    : preflight.checking
+                      ? t("app.checking")
+                      : t("add.start")}
             </Button>
           </div>
         </form>

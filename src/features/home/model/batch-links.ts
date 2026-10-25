@@ -152,6 +152,9 @@ export interface BatchRow {
   /** undefined = chưa dò; null = server không báo. */
   size?: number | null
   checked: boolean
+  /** Kết quả dò (cảnh báo trước khi tải S-22): link sau chuyển hướng, kiểu nội dung server báo. */
+  finalUrl?: string
+  contentType?: string | null
 }
 
 // Đuôi tệp quen thuộc: link từ trình duyệt không có đuôi (và không phải trang video) để bỏ tick sẵn.

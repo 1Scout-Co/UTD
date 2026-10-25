@@ -23,7 +23,8 @@ impl Sink for AppHandle {
     }
 
     fn progress(&self, progress: ProgressSnapshot) {
-        let _ = self.emit(PROGRESS_EVENT, progress);
+        let _ = self.emit(PROGRESS_EVENT, &progress);
+        crate::detail::progressed(self, &progress.task_id);
     }
 }
 

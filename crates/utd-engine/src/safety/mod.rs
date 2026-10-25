@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+mod preflight;
+
+pub use preflight::{hidden_char, spoofed_name, warnings, LinkFacts, Warning, WarningKind};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuardAction {
     Allow,

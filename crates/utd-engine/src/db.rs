@@ -8,11 +8,12 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use crate::headers::RequestHeader;
 use crate::model::{
     now_ms, validate_segments, DownloadTask, HashState, MediaJob, Segment, SegmentStatus,
-    TaskError, TaskKind, TaskStatus,
+    TaskError, TaskEvent, TaskKind, TaskStatus, INTERRUPTED_CODE, MAX_TASK_EVENTS,
 };
 use crate::{Error, Result};
 
-const SCHEMA_VERSION: u32 = 3;
+/// Bản cấu trúc journal mới nhất (bài thử so với hằng này, không ghi số cứng).
+pub const SCHEMA_VERSION: u32 = 4;
 
 struct Migration {
     version: u32,
@@ -95,6 +96,22 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_tasks_parent ON tasks(parent_id);
         "#,
     },
+    Migration {
+        version: 4,
+        // Lịch sử từng task (đổi trạng thái, lỗi): màn Chi tiết, "Sao chép log". Xoá theo task.
+        sql: r#"
+            CREATE TABLE task_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                at INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                code TEXT,
+                message TEXT,
+                downloaded_bytes INTEGER NOT NULL DEFAULT 0 CHECK (downloaded_bytes >= 0)
+            );
+            CREATE INDEX idx_task_events_task ON task_events(task_id, id);
+        "#,
+    },
 ];
 
 const TASK_COLUMNS: &str = "id, url, final_url, file_name, dest_dir, temp_path, kind, status, \
@@ -171,8 +188,10 @@ impl Journal {
         } else {
             Some(serde_json::to_string(&task.request_headers)?)
         };
-        let conn = self.conn()?;
-        conn.execute(
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction()?;
+        let before = read_event_key(&transaction, &task.id)?;
+        transaction.execute(
             "INSERT INTO tasks (
                 id, url, final_url, file_name, dest_dir, temp_path, kind, status,
                 total_bytes, downloaded_bytes, etag, last_modified, expected_sha256,
@@ -227,7 +246,34 @@ impl Journal {
                 headers_json,
             ],
         )?;
+        // Lưu lại cùng trạng thái (tiến độ, đổi tên…) thì không thêm mốc.
+        let event = TaskEvent::of(task);
+        if before.is_none_or(|(status, code)| status != task.status || code != event.code) {
+            record_event(&transaction, &task.id, &event)?;
+        }
+        transaction.commit()?;
         Ok(())
+    }
+
+    /// Lịch sử của task, cũ trước (tối đa `MAX_TASK_EVENTS` mốc).
+    pub fn task_events(&self, task_id: &str) -> Result<Vec<TaskEvent>> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT at, status, code, message, downloaded_bytes
+             FROM task_events WHERE task_id = ?1 ORDER BY id ASC",
+        )?;
+        let mut rows = statement.query([task_id])?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next()? {
+            events.push(TaskEvent {
+                at: row.get(0)?,
+                status: TaskStatus::parse(&row.get::<_, String>(1)?)?,
+                code: row.get(2)?,
+                message: row.get(3)?,
+                downloaded_bytes: from_i64(row.get(4)?, "event downloaded_bytes")?,
+            });
+        }
+        Ok(events)
     }
 
     pub fn load_task(&self, id: &str) -> Result<Option<DownloadTask>> {
@@ -318,24 +364,65 @@ impl Journal {
     }
 
     pub fn set_task_status(&self, id: &str, status: TaskStatus) -> Result<()> {
-        let conn = self.conn()?;
-        let changed = conn.execute(
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction()?;
+        let before = read_event_key(&transaction, id)?;
+        let at = now_ms();
+        let changed = transaction.execute(
             "UPDATE tasks SET status = ?2, updated_at = ?3 WHERE id = ?1",
-            params![id, status.as_str(), now_ms()],
+            params![id, status.as_str(), at],
         )?;
         if changed == 0 {
             return Err(Error::NotFound(format!("task {id}")));
         }
+        if before.is_some_and(|(old, _)| old != status) {
+            let downloaded: i64 = transaction.query_row(
+                "SELECT downloaded_bytes FROM tasks WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )?;
+            let event = TaskEvent {
+                at,
+                status,
+                code: None,
+                message: None,
+                downloaded_bytes: from_i64(downloaded, "downloaded_bytes")?,
+            };
+            record_event(&transaction, id, &event)?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 
+    /// Task đang chạy dở lúc app tắt ngang ⇒ `paused`, ghi mốc `INTERRUPTED_CODE` (lý do dừng).
     pub fn mark_interrupted(&self) -> Result<usize> {
-        let conn = self.conn()?;
-        let changed = conn.execute(
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction()?;
+        let at = now_ms();
+        let running: Vec<(String, i64)> = {
+            let mut statement = transaction.prepare(
+                "SELECT id, downloaded_bytes FROM tasks
+                 WHERE status IN ('resolving', 'downloading', 'verifying')",
+            )?;
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
+        for (id, downloaded) in &running {
+            let event = TaskEvent {
+                at,
+                status: TaskStatus::Paused,
+                code: Some(INTERRUPTED_CODE.into()),
+                message: None,
+                downloaded_bytes: from_i64(*downloaded, "downloaded_bytes")?,
+            };
+            record_event(&transaction, id, &event)?;
+        }
+        let changed = transaction.execute(
             "UPDATE tasks SET status = 'paused', updated_at = ?1
              WHERE status IN ('resolving', 'downloading', 'verifying')",
-            [now_ms()],
+            [at],
         )?;
+        transaction.commit()?;
         Ok(changed)
     }
 
@@ -635,6 +722,51 @@ fn read_task_total(conn: &Connection, task_id: &str) -> Result<Option<u64>> {
         .optional()?
         .ok_or_else(|| Error::NotFound(format!("task {task_id}")))?;
     total.map(|value| from_i64(value, "total_bytes")).transpose()
+}
+
+/// Trạng thái + mã lỗi đang lưu (chưa có task ⇒ None): so để biết có phải mốc mới không.
+fn read_event_key(conn: &Connection, task_id: &str) -> Result<Option<(TaskStatus, Option<String>)>> {
+    let row: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT status, error_json FROM tasks WHERE id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((status, error_json)) = row else {
+        return Ok(None);
+    };
+    let status = TaskStatus::parse(&status)?;
+    let code = match error_json {
+        Some(json) if matches!(status, TaskStatus::Failed | TaskStatus::Quarantined) => {
+            Some(serde_json::from_str::<TaskError>(&json)?.code)
+        }
+        _ => None,
+    };
+    Ok(Some((status, code)))
+}
+
+/// Thêm một mốc rồi bỏ mốc cũ quá `MAX_TASK_EVENTS`.
+fn record_event(conn: &Connection, task_id: &str, event: &TaskEvent) -> Result<()> {
+    conn.execute(
+        "INSERT INTO task_events (task_id, at, status, code, message, downloaded_bytes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            task_id,
+            event.at,
+            event.status.as_str(),
+            event.code.as_deref(),
+            event.message.as_deref(),
+            to_i64(event.downloaded_bytes)?,
+        ],
+    )?;
+    conn.execute(
+        "DELETE FROM task_events WHERE task_id = ?1 AND id <= (
+             SELECT id FROM task_events WHERE task_id = ?1 ORDER BY id DESC LIMIT 1 OFFSET ?2
+         )",
+        params![task_id, MAX_TASK_EVENTS as i64],
+    )?;
+    Ok(())
 }
 
 fn read_schema_version(conn: &Connection) -> Result<u32> {

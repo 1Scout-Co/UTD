@@ -24,8 +24,8 @@ import { t } from "@/shared/i18n/i18n"
 import { diagnose, type DoctorCategory } from "../model/doctor"
 import type { DownloadItem } from "../model/types"
 
-// Nhãn nhóm: t(`doctor.cat.${category}`).
-const CATEGORY_STYLE: Record<
+// Nhãn nhóm: t(`doctor.cat.${category}`). Màn Chi tiết (S-21) dùng chung.
+export const CATEGORY_STYLE: Record<
   DoctorCategory,
   { icon: typeof WifiOff; box: string }
 > = {

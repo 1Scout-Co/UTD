@@ -12,9 +12,11 @@ import {
 } from "@/components/ui/dialog"
 import { commandErrorText, t } from "@/shared/i18n/i18n"
 
+import { checkLinks } from "../api/detail"
 import { addBatchDownloads, pickFolder } from "../api/downloads"
 import { groupOf, type BatchRow } from "../model/batch-links"
 import type { BatchQuality, BatchResult, EngineTask } from "../model/types"
+import { warnedLinks, type WarnedLink } from "../model/warnings"
 import {
   BatchSource,
   BatchTable,
@@ -24,6 +26,7 @@ import {
   type SourceMode,
 } from "./batch-dialog-parts"
 import { groupsOf, summaryOf, useBatchRows, useSourceLinks } from "./use-batch-rows"
+import { BatchWarning } from "./warning-panel"
 
 export interface BatchDialogProps {
   open: boolean
@@ -77,6 +80,29 @@ function useSubmit(props: BatchDialogProps, setText: (text: string) => void, set
     }
   }
   return { busy, error, setError, submit }
+}
+
+/**
+ * S-22 cho cả lô: trước khi gửi, kiểm mọi link file đã chọn một lần (luật của Download Guard, dùng kết quả
+ * dò tên/kiểu nội dung nếu có). Có link cảnh báo thì giữ lô lại, hỏi một lần cho cả lô.
+ */
+function useBatchWarning(desktop: boolean) {
+  const [held, setHeld] = useState<{ warned: WarnedLink[]; later: boolean } | null>(null)
+  const check = async (rows: BatchRow[], later: boolean) => {
+    if (!desktop) return false
+    const files = rows.filter((row) => row.kind !== "media")
+    const facts = files.map((row) => ({
+      url: row.url,
+      finalUrl: row.finalUrl,
+      fileName: row.name,
+      contentType: row.contentType ?? undefined,
+    }))
+    const found = await checkLinks(facts).catch(() => [])
+    const warned = warnedLinks(facts, found)
+    if (warned.length) setHeld({ warned, later })
+    return warned.length > 0
+  }
+  return { held, check, clear: () => setHeld(null) }
 }
 
 /** Bộ lọc nhanh + bảng + dòng tổng của các link đang có. */
@@ -160,8 +186,14 @@ export function BatchDialog(props: BatchDialogProps) {
   const links = useSourceLinks(source)
   const { rows, probing, setMany } = useBatchRows(links.links, fromBrowser, desktop, open)
   const { busy, error, setError, submit } = useSubmit(props, source.setText, source.setMode)
+  const warning = useBatchWarning(desktop)
   const videos = rows.filter((row) => row.kind === "media").length
-  const chosen = rows.filter((row) => row.checked).map((row) => row.url)
+  const chosenRows = rows.filter((row) => row.checked)
+  const chosen = chosenRows.map((row) => row.url)
+  const send = async (urls: string[], later: boolean) => {
+    warning.clear()
+    await submit(urls, quality, destDir, later)
+  }
   const pick = () =>
     void pickFolder(destDir ?? defaultDir)
       .then((picked) => picked && setDestDir(picked))
@@ -200,14 +232,30 @@ export function BatchDialog(props: BatchDialogProps) {
             {error}
           </p>
         ) : null}
-        <BatchActions
-          dir={destDir ?? defaultDir}
-          desktop={desktop}
-          busy={busy}
-          ready={chosen.length > 0}
-          onPick={pick}
-          onSend={(later) => void submit(chosen, quality, destDir, later)}
-        />
+        {warning.held ? (
+          <BatchWarning
+            warned={warning.held.warned}
+            total={chosen.length}
+            busy={busy}
+            onCancel={warning.clear}
+            onProceed={() => void send(chosen, warning.held?.later ?? false)}
+            onSkip={() => {
+              const skipped = new Set(warning.held?.warned.map((link) => link.url))
+              void send(chosen.filter((url) => !skipped.has(url)), warning.held?.later ?? false)
+            }}
+          />
+        ) : (
+          <BatchActions
+            dir={destDir ?? defaultDir}
+            desktop={desktop}
+            busy={busy}
+            ready={chosen.length > 0}
+            onPick={pick}
+            onSend={(later) =>
+              void warning.check(chosenRows, later).then((held) => (held ? undefined : send(chosen, later)))
+            }
+          />
+        )}
       </DialogContent>
     </Dialog>
   )

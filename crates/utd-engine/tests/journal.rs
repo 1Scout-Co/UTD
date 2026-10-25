@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 use tempfile::TempDir;
+use utd_engine::db::SCHEMA_VERSION;
 use utd_engine::{
     now_ms, plan_segments, DownloadTask, Error, ErrorClass, HashState, Journal, MediaJob,
     SegmentStatus, TaskError, TaskStatus,
@@ -36,7 +37,7 @@ fn completed_task(mut task: DownloadTask, total: u64) -> DownloadTask {
 #[test]
 fn opens_in_wal_mode_with_schema_and_clean_integrity() {
     let (_directory, journal) = setup();
-    assert_eq!(journal.schema_version().expect("version"), 3);
+    assert_eq!(journal.schema_version().expect("version"), SCHEMA_VERSION);
     assert!(journal.integrity_check().expect("integrity").is_empty());
 
     let connection = Connection::open(journal.path()).expect("open raw");
@@ -265,7 +266,7 @@ fn backs_up_legacy_database_before_migrating() {
     }
 
     let journal = Journal::open(&path).expect("migrate");
-    assert_eq!(journal.schema_version().expect("version"), 3);
+    assert_eq!(journal.schema_version().expect("version"), SCHEMA_VERSION);
 
     let backup = PathBuf::from(format!("{}.bak", path.display()));
     assert!(backup.exists(), "backup was not created");
@@ -289,7 +290,7 @@ fn rejects_a_newer_schema() {
     match Journal::open(&path) {
         Err(Error::UnsupportedSchema { found, max }) => {
             assert_eq!(found, 99);
-            assert_eq!(max, 3);
+            assert_eq!(max, SCHEMA_VERSION);
         }
         other => panic!("expected UnsupportedSchema, got {other:?}"),
     }
@@ -388,4 +389,77 @@ fn copies_a_live_journal_including_wal_without_overwriting() {
 
     let error = utd_engine::db::copy_database(journal.path(), &target).expect_err("no overwrite");
     assert!(matches!(error, Error::InvalidInput(_)));
+}
+
+#[test]
+fn records_status_changes_and_errors_but_not_progress_saves() {
+    let (directory, journal) = setup();
+    let mut task = sample_task(directory.path(), 20);
+    journal.save_task(&task).expect("queued");
+    task.status = TaskStatus::Downloading;
+    task.updated_at = now_ms();
+    journal.save_task(&task).expect("downloading");
+    task.downloaded_bytes = 10;
+    journal.save_task(&task).expect("same status again");
+    task.status = TaskStatus::Failed;
+    task.error = Some(TaskError::new(ErrorClass::Transient, "network.closed", "Closed early").unwrap());
+    journal.save_task(&task).expect("failed");
+    // Thử lại rồi lỗi khác: vẫn trạng thái lỗi nhưng mã mới ⇒ một mốc nữa.
+    task.error = Some(TaskError::new(ErrorClass::Permanent, "http.404", "Not found").unwrap());
+    journal.save_task(&task).expect("failed again");
+
+    let events = journal.task_events(&task.id).expect("events");
+    let statuses: Vec<TaskStatus> = events.iter().map(|event| event.status).collect();
+    assert_eq!(
+        statuses,
+        [TaskStatus::Queued, TaskStatus::Downloading, TaskStatus::Failed, TaskStatus::Failed]
+    );
+    assert_eq!(events[0].code, None);
+    assert_eq!(events[2].code.as_deref(), Some("network.closed"));
+    assert_eq!(events[2].message.as_deref(), Some("Closed early"));
+    assert_eq!(events[2].downloaded_bytes, 10);
+    assert_eq!(events[3].code.as_deref(), Some("http.404"));
+}
+
+#[test]
+fn queue_pauses_and_crashes_leave_a_reason() {
+    let (directory, journal) = setup();
+    let mut task = sample_task(directory.path(), 21);
+    journal.save_task(&task).expect("queued");
+    journal.set_task_status(&task.id, TaskStatus::Paused).expect("pause");
+    journal.set_task_status(&task.id, TaskStatus::Paused).expect("pause twice");
+    task.status = TaskStatus::Downloading;
+    journal.save_task(&task).expect("downloading");
+    assert_eq!(journal.mark_interrupted().expect("interrupted"), 1);
+
+    let events = journal.task_events(&task.id).expect("events");
+    let last = events.last().expect("last");
+    assert_eq!(events.len(), 4, "{events:?}");
+    assert_eq!(events[1].status, TaskStatus::Paused);
+    assert_eq!(events[1].code, None, "người dùng dừng");
+    assert_eq!(last.status, TaskStatus::Paused);
+    assert_eq!(last.code.as_deref(), Some(utd_engine::INTERRUPTED_CODE));
+}
+
+#[test]
+fn history_is_capped_and_removed_with_the_task() {
+    let (directory, journal) = setup();
+    let mut task = sample_task(directory.path(), 22);
+    for round in 0..(utd_engine::MAX_TASK_EVENTS + 10) {
+        task.status = if round % 2 == 0 { TaskStatus::Downloading } else { TaskStatus::Paused };
+        task.downloaded_bytes = round as u64;
+        journal.save_task(&task).expect("save");
+    }
+    let events = journal.task_events(&task.id).expect("events");
+    assert_eq!(events.len(), utd_engine::MAX_TASK_EVENTS);
+    assert_eq!(events.last().unwrap().downloaded_bytes, (utd_engine::MAX_TASK_EVENTS + 9) as u64);
+    assert_eq!(events[0].downloaded_bytes, 10, "mốc cũ nhất bị bỏ trước");
+
+    journal.delete_task(&task.id).expect("delete");
+    assert!(journal.task_events(&task.id).expect("events").is_empty());
+    let connection = Connection::open(journal.path()).expect("raw");
+    let left: i64 = connection
+        .query_row("SELECT COUNT(*) FROM task_events", [], |row| row.get(0))
+        .expect("count");
+    assert_eq!(left, 0, "xoá task xoá luôn lịch sử");
 }

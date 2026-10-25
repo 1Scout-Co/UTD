@@ -68,7 +68,8 @@ pub fn emit_engine_event(app: &AppHandle, event: EngineEvent) {
             let _ = app.emit(TASK_EVENT, *task);
         }
         EngineEvent::Progress { progress } => {
-            let _ = app.emit(PROGRESS_EVENT, progress);
+            let _ = app.emit(PROGRESS_EVENT, &progress);
+            crate::detail::progressed(app, &progress.task_id);
         }
     }
 }

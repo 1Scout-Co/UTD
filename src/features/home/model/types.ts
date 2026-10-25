@@ -303,5 +303,7 @@ export interface HomeScreenProps {
   onResume: (id: string) => void
   onRemove: (id: string) => void
   onDiagnose: (id: string) => void
+  /** Mở màn Chi tiết (nhấp đúp, Enter, menu "Chi tiết"). */
+  onDetails: (id: string) => void
   onSettings: () => void
 }

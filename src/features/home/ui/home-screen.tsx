@@ -33,6 +33,7 @@ import type {
 import { AddDownloadDialog } from "./add-download-dialog"
 import { BatchDialog } from "./batch-dialog"
 import { ChannelFlow, useChannelFlow } from "./channel-flow"
+import { DetailFlow } from "./detail-flow"
 import { DoctorDialog } from "./doctor-dialog"
 import { MediaPickerDialog, useMediaRequests } from "./media-picker-dialog"
 import { SettingsDialog } from "./settings-dialog"
@@ -40,6 +41,19 @@ import { ToolsAutoCard } from "./tools-auto"
 import { useBatchFlow } from "./use-batch-flow"
 import { useUpdateAvailable } from "./use-update-available"
 import { Soniox } from "./variants/soniox"
+
+/**
+ * Task vừa thêm lên đầu danh sách. Lệnh thêm trả trạng thái lúc tạo (đang chờ); file nhỏ có thể đã chạy xong
+ * (`utd://task`) trước khi lệnh trả về — bản đã có trong danh sách mới hơn thì giữ, không đè lại "đang chờ".
+ */
+function putFirst(previous: EngineTask[], added: EngineTask[]): EngineTask[] {
+  const known = new Map(previous.map((task) => [task.id, task]))
+  const ids = new Set(added.map((task) => task.id))
+  return [
+    ...added.map((task) => known.get(task.id) ?? task),
+    ...previous.filter((task) => !ids.has(task.id)),
+  ]
+}
 
 export function HomeScreen() {
   const desktop = isDesktopApp()
@@ -56,6 +70,7 @@ export function HomeScreen() {
     key: number
   } | null>(null)
   const [diagnoseId, setDiagnoseId] = useState<string | null>(null)
+  const [detailId, setDetailId] = useState<string | null>(null)
   const [tasks, setTasks] = useState<EngineTask[]>([])
   const [progress, setProgress] = useState<Record<string, EngineProgress>>({})
   const [storage, setStorage] = useState<StorageInfo | null>(null)
@@ -159,7 +174,7 @@ export function HomeScreen() {
 
   // Task mới (thêm từ hộp Tải cả kênh) lên đầu danh sách.
   const showTask = useCallback((task: EngineTask) => {
-    setTasks((previous) => [task, ...previous.filter((item) => item.id !== task.id)])
+    setTasks((previous) => putFirst(previous, [task]))
     setScreenState("data")
   }, [])
   const channel = useChannelFlow(showTask)
@@ -176,8 +191,7 @@ export function HomeScreen() {
   const { setOpen: setBatchOpen } = batch
   // Task vừa thêm theo lô: lên đầu danh sách (thứ tự chạy do hàng đợi ở app quyết).
   const addTasks = (added: EngineTask[]) => {
-    const ids = new Set(added.map((task) => task.id))
-    setTasks((previous) => [...added, ...previous.filter((task) => !ids.has(task.id))])
+    setTasks((previous) => putFirst(previous, added))
     if (added.length) setScreenState("data")
     refreshStorage()
   }
@@ -240,10 +254,7 @@ export function HomeScreen() {
     setAddError(null)
     try {
       const task = await addDownload(payload)
-      setTasks((previous) => [
-        task,
-        ...previous.filter((item) => item.id !== task.id),
-      ])
+      setTasks((previous) => putFirst(previous, [task]))
       setScreenState("data")
       setAddOpen(false)
       refreshStorage()
@@ -271,10 +282,7 @@ export function HomeScreen() {
     setMediaError(null)
     try {
       const task = await addMediaDownload(payload)
-      setTasks((previous) => [
-        task,
-        ...previous.filter((item) => item.id !== task.id),
-      ])
+      setTasks((previous) => putFirst(previous, [task]))
       setScreenState("data")
       setMediaOpen(false)
       refreshStorage()
@@ -341,6 +349,7 @@ export function HomeScreen() {
         onResume={resume}
         onRemove={remove}
         onDiagnose={setDiagnoseId}
+        onDetails={setDetailId}
         onSettings={() => {
           setSettingsFocus(null)
           setSettingsOpen(true)
@@ -393,6 +402,19 @@ export function HomeScreen() {
         onChannel={openChannelWith}
       />
       <ChannelFlow desktop={desktop} flow={channel} />
+      <DetailFlow
+        taskId={detailId}
+        onClose={() => setDetailId(null)}
+        desktop={desktop}
+        items={items}
+        tasks={tasks}
+        progress={progress}
+        onDropped={dropTask}
+        onSettings={() => {
+          setSettingsFocus(null)
+          setSettingsOpen(true)
+        }}
+      />
       <DoctorDialog
         item={diagnoseItem}
         open={diagnoseItem !== null}
