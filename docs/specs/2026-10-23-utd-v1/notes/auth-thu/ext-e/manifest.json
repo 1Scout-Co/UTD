@@ -1,0 +1,3 @@
+{ "manifest_version": 3, "name": "THU quyen ca mien (*.utd.test)", "version": "0.0.1",
+  "permissions": ["cookies"], "host_permissions": ["http://*.utd.test/*"],
+  "background": { "service_worker": "sw.js" } }
