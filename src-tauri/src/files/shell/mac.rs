@@ -53,6 +53,11 @@ pub fn open_folder(folder: &Path) -> Result<(), String> {
     open_with(&[folder.as_os_str()])
 }
 
+/// Mở trang web bằng trình duyệt mặc định (`files::open_web_page` đã kiểm chỉ http/https).
+pub fn open_web_page(url: &str) -> Result<(), String> {
+    open_with(&[OsStr::new(url)])
+}
+
 /// Mở Finder ở thư mục chứa file và chọn sẵn file đó.
 pub fn select_in_folder(file: &Path) -> Result<(), String> {
     open_with(&[OsStr::new("-R"), file.as_os_str()])

@@ -19,5 +19,12 @@
   "noLinks": { "message": "此页面上没有可下载的链接。" },
   "tooManyLinks": { "message": "单次发送的链接过多。" },
   "openedForChannel": { "message": "已打开 UTD 以下载整个频道。" },
-  "openedForLinks": { "message": "已打开 UTD 以选择链接。" }
+  "openedForLinks": { "message": "已打开 UTD 以选择链接。" },
+  "authSiteSwitch": { "message": "在此网站使用登录" },
+  "authUse": { "message": "使用我的登录" },
+  "authResume": { "message": "继续 ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "敏感网站：每次下载都需点击允许。" },
+  "authDenied": { "message": "浏览器未允许。" },
+  "authDisabled": { "message": "已在 UTD 设置中关闭。" },
+  "authResumed": { "message": "已继续下载。" }
 }

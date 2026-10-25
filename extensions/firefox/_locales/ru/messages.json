@@ -19,5 +19,12 @@
   "noLinks": { "message": "На этой странице не найдено ссылок для скачивания." },
   "tooManyLinks": { "message": "Слишком много ссылок за одну отправку." },
   "openedForChannel": { "message": "UTD открыт для скачивания всего канала." },
-  "openedForLinks": { "message": "UTD открыт для выбора ссылок." }
+  "openedForLinks": { "message": "UTD открыт для выбора ссылок." },
+  "authSiteSwitch": { "message": "Вход на этом сайте" },
+  "authUse": { "message": "Использовать мой вход" },
+  "authResume": { "message": "Продолжить ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "Важный сайт: разрешайте каждую загрузку вручную." },
+  "authDenied": { "message": "Браузер не разрешил." },
+  "authDisabled": { "message": "Выключено в настройках UTD." },
+  "authResumed": { "message": "Загрузки продолжены." }
 }

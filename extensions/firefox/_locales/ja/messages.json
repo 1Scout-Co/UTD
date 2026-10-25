@@ -19,5 +19,12 @@
   "noLinks": { "message": "このページにダウンロードできるリンクが見つかりません。" },
   "tooManyLinks": { "message": "一度に送信するリンクが多すぎます。" },
   "openedForChannel": { "message": "チャンネル全体をダウンロードするためにUTDを開きました。" },
-  "openedForLinks": { "message": "リンクを選択するためにUTDを開きました。" }
+  "openedForLinks": { "message": "リンクを選択するためにUTDを開きました。" },
+  "authSiteSwitch": { "message": "このサイトでログインを使う" },
+  "authUse": { "message": "自分のログインを使う" },
+  "authResume": { "message": "再開 ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "重要なサイト：ダウンロードのたびに許可が必要です。" },
+  "authDenied": { "message": "ブラウザーで許可されませんでした。" },
+  "authDisabled": { "message": "UTD の設定でオフになっています。" },
+  "authResumed": { "message": "ダウンロードを再開しました。" }
 }

@@ -19,5 +19,12 @@
   "noLinks": { "message": "이 페이지에서 다운로드할 수 있는 링크를 찾지 못했습니다." },
   "tooManyLinks": { "message": "한 번에 보내는 링크가 너무 많습니다." },
   "openedForChannel": { "message": "채널 전체를 다운로드하도록 UTD를 열었습니다." },
-  "openedForLinks": { "message": "링크를 선택하도록 UTD를 열었습니다." }
+  "openedForLinks": { "message": "링크를 선택하도록 UTD를 열었습니다." },
+  "authSiteSwitch": { "message": "이 사이트에서 로그인 사용" },
+  "authUse": { "message": "내 로그인 사용" },
+  "authResume": { "message": "계속 ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "민감한 사이트: 다운로드할 때마다 허용해야 합니다." },
+  "authDenied": { "message": "브라우저가 허용하지 않았습니다." },
+  "authDisabled": { "message": "UTD 설정에서 꺼져 있습니다." },
+  "authResumed": { "message": "다운로드를 계속합니다." }
 }

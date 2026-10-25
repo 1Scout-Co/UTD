@@ -34,6 +34,8 @@ export interface BatchDialogProps {
   initialUrls?: string[]
   /** Link gom trên trang: link không rõ là file thì bỏ tick sẵn. */
   fromBrowser?: boolean
+  /** Trang gửi lô đã được cho phép đăng nhập: chỉ link cùng trang kèm cookie (app kiểm). */
+  authGrant?: string
   onAdded: (tasks: EngineTask[]) => void
 }
 
@@ -54,6 +56,7 @@ function useSubmit(props: BatchDialogProps, setText: (text: string) => void, set
         quality,
         later,
         destDir: destDir ?? undefined,
+        authGrant: props.authGrant,
       })
       props.onAdded(result.tasks)
       if (result.failed.length === 0) {

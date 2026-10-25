@@ -19,5 +19,12 @@
   "noLinks": { "message": "Không thấy link tải được trên trang." },
   "tooManyLinks": { "message": "Quá nhiều link trong một lần gửi." },
   "openedForChannel": { "message": "Đã mở UTD để tải cả kênh." },
-  "openedForLinks": { "message": "Đã mở UTD để chọn link." }
+  "openedForLinks": { "message": "Đã mở UTD để chọn link." },
+  "authSiteSwitch": { "message": "Đăng nhập trên trang này" },
+  "authUse": { "message": "Dùng đăng nhập" },
+  "authResume": { "message": "Tiếp tục ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "Trang nhạy cảm: mỗi lần tải phải bấm cho phép." },
+  "authDenied": { "message": "Trình duyệt chưa cho phép." },
+  "authDisabled": { "message": "Đang tắt trong Cài đặt UTD." },
+  "authResumed": { "message": "Đã tiếp tục tải." }
 }

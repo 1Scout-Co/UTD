@@ -19,5 +19,12 @@
   "noLinks": { "message": "Bu sayfada indirilebilir bağlantı bulunamadı." },
   "tooManyLinks": { "message": "Tek gönderimde çok fazla bağlantı var." },
   "openedForChannel": { "message": "Kanalın tamamını indirmek için UTD açıldı." },
-  "openedForLinks": { "message": "Bağlantıları seçmek için UTD açıldı." }
+  "openedForLinks": { "message": "Bağlantıları seçmek için UTD açıldı." },
+  "authSiteSwitch": { "message": "Bu sitede oturum" },
+  "authUse": { "message": "Oturumumu kullan" },
+  "authResume": { "message": "Devam et ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "Hassas site: her indirmeye siz izin verin." },
+  "authDenied": { "message": "Tarayıcı izin vermedi." },
+  "authDisabled": { "message": "UTD Ayarlarında kapalı." },
+  "authResumed": { "message": "İndirmeler devam ediyor." }
 }

@@ -79,6 +79,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 )
             else:
                 self.send_plain(200, BODY, [("Content-Type", "video/mp4"), ("Accept-Ranges", "bytes"), ("Set-Cookie", "rot=1; Path=/")])
+        elif self.path.startswith("/slow.bin"):
+            # File 24 MiB gửi chậm (để tắt app giữa chừng), cũng chỉ trả khi có sid=ok.
+            if not logged_in:
+                self.send_plain(302, headers=[("Location", "/login")])
+                return
+            total = 24 * 1024 * 1024
+            start, end = 0, total - 1
+            rng = self.headers.get("Range")
+            status = 200
+            if rng and rng.startswith("bytes="):
+                first, _, last = rng[6:].partition("-")
+                start = int(first)
+                end = min(int(last), total - 1) if last else total - 1
+                status = 206
+            self.send_response(status)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(end - start + 1))
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            import time
+            position = start
+            try:
+                while position <= end:
+                    size = min(64 * 1024, end - position + 1)
+                    self.wfile.write(bytes((position + i) % 251 for i in range(size)))
+                    position += size
+                    time.sleep(0.05)
+            except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+                pass
         elif self.path.startswith("/hop.mp4"):
             self.send_plain(302, headers=[("Location", f"http://localhost:{PORT}/file.mp4")])
         elif self.path.startswith("/page"):

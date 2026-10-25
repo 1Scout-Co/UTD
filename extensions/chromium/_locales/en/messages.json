@@ -19,5 +19,12 @@
   "noLinks": { "message": "No downloadable links found on this page." },
   "tooManyLinks": { "message": "Too many links in one send." },
   "openedForChannel": { "message": "Opened UTD to download the whole channel." },
-  "openedForLinks": { "message": "Opened UTD to pick the links." }
+  "openedForLinks": { "message": "Opened UTD to pick the links." },
+  "authSiteSwitch": { "message": "Sign-in on this site" },
+  "authUse": { "message": "Use my sign-in" },
+  "authResume": { "message": "Resume ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "Sensitive site: allow each download yourself." },
+  "authDenied": { "message": "The browser didn't allow it." },
+  "authDisabled": { "message": "Turned off in UTD Settings." },
+  "authResumed": { "message": "Downloads resumed." }
 }

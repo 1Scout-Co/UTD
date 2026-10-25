@@ -54,6 +54,7 @@ export function HomeScreen() {
   const [mediaRequest, setMediaRequest] = useState<{
     url: string
     key: number
+    authGrant?: string
   } | null>(null)
   const [diagnoseId, setDiagnoseId] = useState<string | null>(null)
   const [tasks, setTasks] = useState<EngineTask[]>([])
@@ -184,21 +185,21 @@ export function HomeScreen() {
 
   // Mã `channel_page:` của app (kể cả link rút gọn trỏ tới kênh) mở thẳng hộp Tải cả kênh.
   const openChannelWith = useCallback(
-    (url: string) => {
+    (url: string, authGrant?: string) => {
       setAddOpen(false)
       setSettingsOpen(false)
       setMediaOpen(false)
       setBatchOpen(false)
-      openChannel(url)
+      openChannel(url, authGrant)
     },
     [openChannel, setBatchOpen],
   )
 
   // Link trang video ⇒ hộp Tải media; link kênh (TikTok @user, kênh/playlist YouTube) ⇒ hộp Tải cả kênh.
   const openMediaWith = useCallback(
-    (url: string) => {
+    (url: string, authGrant?: string) => {
       if (isChannelPage(url)) {
-        openChannelWith(url)
+        openChannelWith(url, authGrant)
         return
       }
       setAddOpen(false)
@@ -206,7 +207,7 @@ export function HomeScreen() {
       setBatchOpen(false)
       setChannelOpen(false)
       setMediaError(null)
-      setMediaRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1 }))
+      setMediaRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1, authGrant }))
       setMediaOpen(true)
     },
     [openChannelWith, setBatchOpen, setChannelOpen],
@@ -368,6 +369,7 @@ export function HomeScreen() {
         defaultDir={defaultDir}
         initialUrls={batch.urls}
         fromBrowser={batch.fromBrowser}
+        authGrant={batch.authGrant}
         onAdded={addTasks}
       />
       <AddDownloadDialog
@@ -384,6 +386,7 @@ export function HomeScreen() {
       <MediaPickerDialog
         key={`media-${mediaRequest?.key ?? 0}`}
         initialUrl={mediaRequest?.url}
+        authGrant={mediaRequest?.authGrant}
         open={mediaOpen}
         onOpenChange={setMediaOpen}
         desktop={desktop}

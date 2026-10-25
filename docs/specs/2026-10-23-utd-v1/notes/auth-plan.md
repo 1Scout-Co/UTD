@@ -405,6 +405,64 @@ Hộp hỏi quyền là của trình duyệt, tự theo ngôn ngữ trình duy�
     `cargo clippy` 3 crate `-D warnings`, `pnpm lint`.
   - macOS chưa chạy. Phần chỉ-Windows đều gắn `#[cfg(windows)]`; phần còn lại là code chung.
 
+#### Kết quả GĐ1 (2026-10-25, nhánh này)
+
+Đã làm:
+- **SPEC (Q9):** S-14, S-63 theo luồng đăng nhập; thêm S-70..S-73; AC-18 ghi rõ cookie chỉ đọc trong cú bấm.
+- **Engine (`utd-engine/src/auth.rs`):**
+  - `CookieJar` chỉ ở RAM, đi theo `DownloadControl::cookies` của từng lượt chạy.
+  - Journal v4 chỉ ghi `auth_sites`. Task có `auth_sites` mà thiếu cookie thì dừng `auth.required` trước khi gửi
+    yêu cầu nào.
+  - Có cookie thì `Transport` tự theo chuyển hướng, tính lại `Cookie` từng bước, gộp `Set-Cookie`; 401/403 ⇒
+    `auth.expired` ngay (không thử 8 lượt).
+  - Chuyển hướng về trang đăng nhập ⇒ `auth.required` / `auth.expired`.
+- **App (`src-tauri/src/auth/`):**
+  - Lần cho phép (`Grant`) gắn task, thả khi xong/xoá.
+  - `psl` 2.1.242; mẫu quyền `*://*.site/*`; miền nhạy cảm (Q10).
+  - Kiểm cookie: đúng trang, trần 300 cookie / 64 KiB.
+  - Pipe cookie cho yt-dlp (PID, `loaded`).
+  - IPC/native host bản 2: `auth`, `auth-pending`, `auth-renew`, sự kiện `utd://auth-granted`.
+  - Nối vào tải file, lô link (chỉ link cùng trang), Tải media (Phân tích, resolve, đường tải nhanh, yt-dlp
+    tải), Tải cả kênh.
+  - `--user-agent` của trình duyệt; Q7 (bỏ `final_url` khi xong).
+  - Lệnh Cài đặt; lệnh `open_web_page` (chỉ http/https).
+- **Tiện ích:**
+  - `optional_permissions` / `optional_host_permissions`.
+  - Đọc cookie trong cú bấm, theo kho cookie của tab; bỏ Strict khi chéo trang; Firefox FPI thử lại với
+    `firstPartyDomain`.
+  - Popup S-70/S-71: Dùng đăng nhập / Tiếp tục (n), công tắc theo trang.
+  - 7 câu mới × 16 ngôn ngữ.
+- **Giao diện:**
+  - S-14 trong hộp Tải media và S-63 trong Tải cả kênh: tự phân tích/liệt kê lại khi popup cho phép.
+  - S-72: nhãn "Cần đăng nhập" + Doctor "Mở trang".
+  - S-73 trong Cài đặt.
+  - 18 khoá mới + 5 câu cũ sửa × 16 ngôn ngữ. `scripts/i18n-check.mjs` quét thêm mã `auth.*`.
+
+Khác kế hoạch (cố ý):
+- SameSite chỉ lọc ở tiện ích lúc đọc; engine không lọc thêm.
+- Engine không gộp trường `formats[].cookies` của yt-dlp: định dạng có trích dẫn kiểu Python, engine tự gộp
+  `Set-Cookie` khi tải. Xem lại nếu có trang cần.
+- Huy hiệu "!" trên biểu tượng tiện ích (§8.1, cải tiến nhỏ) để GĐ2.
+- Firefox < 128 không có `optional_host_permissions`: popup báo "Trình duyệt chưa cho phép" (S-71), phần còn lại
+  chạy như cũ.
+- macOS: pipe cookie cho yt-dlp báo `auth.pipe` tới khi có FIFO (GĐ2). Tải file trực tiếp kèm cookie vẫn chạy.
+- Task cần đăng nhập đang ở trạng thái `failed` với mã `auth.*`. Khi ghép nhánh khôi phục: đổi sang
+  `RecoveryWait::Login` (Phụ lục B).
+
+Kiểm (Windows):
+- `cargo test` app 222 (+ 1 yt-dlp thật `#[ignore]` chạy tay: đạt), engine 159 (thêm `auth` 7 unit + 7 tích hợp).
+- `clippy` 3 crate `-D warnings`; `pnpm lint` (eslint + i18n 601 khoá); `tsc`; `pnpm build` (JS 190,9 / 200 kB).
+- e2e toàn bộ 76/76 (gồm `sign-in.spec.ts` 4 bài mới; bài S-63 cũ sửa theo SPEC mới). `ui-check` đạt.
+- Thử thật:
+  - `auth-thu/ext-auth.cjs`: tiện ích trong Chromium 156.
+  - `auth-thu/auth-e2e.py`: trọn luồng trên app debug — đăng nhập, khởi động lại giữa chừng, cho phép lại, không
+    sót cookie mồi.
+
+Chưa làm, cần chủ dự án:
+- Thử với tài khoản thật: YouTube giới hạn tuổi, file Google Drive riêng (Q6).
+- Cần nạp tiện ích bản mới và chạy bản UTD mới. Native host đang đăng ký trên máy là của bản 0.1.0, chưa hiểu tin
+  bản 2.
+
 ### 9.2 File sẽ sửa (GĐ0–1)
 
 - **Extension:** `extensions/{chromium,firefox}/`

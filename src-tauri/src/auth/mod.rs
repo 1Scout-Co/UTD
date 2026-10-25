@@ -26,7 +26,7 @@ const IDLE_GRANT: Duration = Duration::from_secs(30 * 60);
 pub(crate) const MAX_COOKIE_BYTES: usize = 64 * 1024;
 const MAX_USER_AGENT: usize = 512;
 /// Cài đặt (S-73): "0" = tắt "Dùng đăng nhập của trình duyệt". Mặc định bật (câu Q2).
-pub(crate) const ENABLED_SETTING: &str = "auth.browser";
+pub(crate) const ENABLED_SETTING: &str = "browser_sign_in";
 
 /// Phần `auth` trong tin nhắn của tiện ích.
 #[derive(Debug, Deserialize)]

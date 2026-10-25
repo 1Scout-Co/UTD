@@ -19,5 +19,12 @@
   "noLinks": { "message": "Nenhum link para download encontrado nesta página." },
   "tooManyLinks": { "message": "Links demais em um único envio." },
   "openedForChannel": { "message": "O UTD foi aberto para baixar o canal inteiro." },
-  "openedForLinks": { "message": "O UTD foi aberto para escolher os links." }
+  "openedForLinks": { "message": "O UTD foi aberto para escolher os links." },
+  "authSiteSwitch": { "message": "Login neste site" },
+  "authUse": { "message": "Usar meu login" },
+  "authResume": { "message": "Retomar ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "Site sensível: permita cada download você mesmo." },
+  "authDenied": { "message": "O navegador não permitiu." },
+  "authDisabled": { "message": "Desativado nas configurações do UTD." },
+  "authResumed": { "message": "Downloads retomados." }
 }

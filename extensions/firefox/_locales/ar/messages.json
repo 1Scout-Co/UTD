@@ -19,5 +19,12 @@
   "noLinks": { "message": "لم يُعثر على روابط قابلة للتنزيل في هذه الصفحة." },
   "tooManyLinks": { "message": "عدد الروابط كبير جدًا لإرسالها دفعة واحدة." },
   "openedForChannel": { "message": "تم فتح UTD لتنزيل القناة كاملة." },
-  "openedForLinks": { "message": "تم فتح UTD لاختيار الروابط." }
+  "openedForLinks": { "message": "تم فتح UTD لاختيار الروابط." },
+  "authSiteSwitch": { "message": "تسجيل الدخول في هذا الموقع" },
+  "authUse": { "message": "استخدم تسجيل دخولي" },
+  "authResume": { "message": "استئناف ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "موقع حساس: اسمح بكل تنزيل بنفسك." },
+  "authDenied": { "message": "لم يسمح المتصفح بذلك." },
+  "authDisabled": { "message": "متوقف في إعدادات UTD." },
+  "authResumed": { "message": "تم استئناف التنزيلات." }
 }

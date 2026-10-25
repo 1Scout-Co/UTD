@@ -257,3 +257,25 @@ async fn cookies_the_server_sets_are_used_for_later_requests() {
         "{later:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_real_file_under_a_login_path_still_downloads() {
+    let data = Arc::new(payload(MIB));
+    let body = data.clone();
+    // Đường dẫn có chữ `login` nhưng trả file thật (không phải trang HTML): không phải trang đăng nhập.
+    let server = Server::start(Arc::new(move |request: &Req| {
+        if request.path == "/dl" {
+            return Reply::redirect("/files/login/app.zip");
+        }
+        serve_file(request, &body, &FileOpts::default())
+    }))
+    .await;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (_journal, engine) = engine(directory.path(), options(2, 4));
+    let request = DownloadRequest::new(server.url("/dl"), downloads(directory.path()));
+    let outcome = engine
+        .download(request, DownloadControl::new())
+        .await
+        .expect("download");
+    assert!(outcome.is_completed(), "unexpected outcome: {outcome:?}");
+}

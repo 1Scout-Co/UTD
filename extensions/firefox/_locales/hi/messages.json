@@ -19,5 +19,12 @@
   "noLinks": { "message": "इस पेज पर डाउनलोड करने योग्य कोई लिंक नहीं मिला।" },
   "tooManyLinks": { "message": "एक बार में भेजने के लिए बहुत ज़्यादा लिंक हैं।" },
   "openedForChannel": { "message": "पूरा चैनल डाउनलोड करने के लिए UTD खोला गया।" },
-  "openedForLinks": { "message": "लिंक चुनने के लिए UTD खोला गया।" }
+  "openedForLinks": { "message": "लिंक चुनने के लिए UTD खोला गया।" },
+  "authSiteSwitch": { "message": "इस साइट पर साइन-इन" },
+  "authUse": { "message": "मेरा साइन-इन इस्तेमाल करें" },
+  "authResume": { "message": "जारी रखें ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "संवेदनशील साइट: हर डाउनलोड पर अनुमति दें।" },
+  "authDenied": { "message": "ब्राउज़र ने अनुमति नहीं दी।" },
+  "authDisabled": { "message": "UTD सेटिंग्स में बंद है।" },
+  "authResumed": { "message": "डाउनलोड फिर शुरू हुए।" }
 }

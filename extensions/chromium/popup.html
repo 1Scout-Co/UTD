@@ -71,10 +71,43 @@
         border-radius: 10px;
         background: #fff;
       }
+      .card + .card {
+        margin-top: 8px;
+      }
+      .site {
+        margin: 0 0 8px;
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      button.secondary {
+        color: var(--primary);
+        background: #e8f1fc;
+      }
+      label {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 12px;
+        cursor: pointer;
+      }
+      [hidden] {
+        display: none !important;
+      }
     </style>
   </head>
   <body>
     <header><strong>utd</strong><span>desktop</span></header>
+    <!-- S-70 / S-71: trang đang mở có việc chờ đăng nhập, hoặc bật/tắt đăng nhập cho trang. -->
+    <div class="card" id="auth" data-s="S-70" hidden>
+      <p class="site" id="auth-site"></p>
+      <button id="auth-use" type="button" hidden></button>
+      <label><input id="auth-switch" type="checkbox" /><span data-i18n="authSiteSwitch">Sign-in on this site</span></label>
+      <p id="auth-status"></p>
+    </div>
     <div class="card">
       <button id="send" type="button" data-i18n="sendPage">Download this page with UTD</button>
       <p id="status" data-i18n="hint">Right-click a link or video to download it quickly.</p>

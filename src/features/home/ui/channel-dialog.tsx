@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 
 import { AlertCircle, Download, FolderOpen, RotateCw } from "lucide-react"
 
@@ -25,8 +25,10 @@ import {
   toggleEntry,
   visibleEntries,
 } from "../model/channel"
+import { commandCode, needsSignIn } from "../model/sign-in"
 import type { AddMediaPayload } from "../model/types"
 import { ChannelCard, EntryList, FilterBar, QualityPicker } from "./channel-parts"
+import { SignInNotice, useAuthGranted } from "./sign-in-notice"
 import { useChannelListing } from "./use-channel-listing"
 
 /**
@@ -39,15 +41,27 @@ export function ChannelDialog({
   onOpenChange,
   desktop,
   url,
+  authGrant,
   onStart,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   desktop: boolean
   url: string
+  /** Kênh riêng tư (S-63): lần cho phép đăng nhập từ trình duyệt, không phải cookie. */
+  authGrant?: string
   onStart: (payloads: AddMediaPayload[]) => void
 }) {
-  const listing = useChannelListing(url, open && desktop)
+  const [grant, setGrant] = useState<string | null>(authGrant ?? null)
+  const listing = useChannelListing(url, open && desktop, grant)
+  const errorCode = commandCode(listing.error)
+  const signIn =
+    Boolean(listing.profile?.private) ||
+    errorCode === "channel.private_all" ||
+    needsSignIn(errorCode)
+  // Popup tiện ích vừa cho phép trang của kênh: liệt kê lại với đăng nhập.
+  const regrant = useCallback((fresh: string) => setGrant(fresh), [])
+  useAuthGranted(open && signIn, url, regrant)
   const [filter, setFilter] = useState(DEFAULT_FILTER)
   const [selection, setSelection] = useState(DEFAULT_SELECTION)
   const [qualityId, setQualityId] = useState(CHANNEL_QUALITIES[0].id)
@@ -71,7 +85,8 @@ export function ChannelDialog({
 
   const start = () => {
     const quality = CHANNEL_QUALITIES.find((item) => item.id === qualityId) ?? CHANNEL_QUALITIES[0]
-    onStart(channelPayloads(picked, quality, listing.head?.key ?? null, ownFolder ? folder : null))
+    const payloads = channelPayloads(picked, quality, listing.head?.key ?? null, ownFolder ? folder : null)
+    onStart(payloads.map((payload) => ({ ...payload, authGrant: grant ?? undefined })))
   }
 
   return (
@@ -94,9 +109,7 @@ export function ChannelDialog({
               onStop={listing.stop}
             />
           ) : null}
-          {listing.profile?.private ? (
-            <Notice text={t("channel.private")} />
-          ) : null}
+          {signIn ? <SignInNotice url={url} screen={null} /> : null}
 
           {entries.length > 0 ? (
             <>

@@ -19,5 +19,12 @@
   "noLinks": { "message": "此頁面上沒有可下載的連結。" },
   "tooManyLinks": { "message": "單次傳送的連結過多。" },
   "openedForChannel": { "message": "已開啟 UTD 以下載整個頻道。" },
-  "openedForLinks": { "message": "已開啟 UTD 以選擇連結。" }
+  "openedForLinks": { "message": "已開啟 UTD 以選擇連結。" },
+  "authSiteSwitch": { "message": "在此網站使用登入" },
+  "authUse": { "message": "使用我的登入" },
+  "authResume": { "message": "繼續 ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "敏感網站：每次下載都需點擊允許。" },
+  "authDenied": { "message": "瀏覽器未允許。" },
+  "authDisabled": { "message": "已在 UTD 設定中關閉。" },
+  "authResumed": { "message": "已繼續下載。" }
 }

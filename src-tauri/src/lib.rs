@@ -246,6 +246,7 @@ pub fn run() {
             commands::reset_default_download_dir,
             commands::disk_space,
             files::open_download,
+            files::open_web_page,
             files::reveal_download,
             files::rename_download,
             files::move_download,

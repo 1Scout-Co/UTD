@@ -19,5 +19,12 @@
   "noLinks": { "message": "Aucun lien téléchargeable trouvé sur cette page." },
   "tooManyLinks": { "message": "Trop de liens en un seul envoi." },
   "openedForChannel": { "message": "UTD est ouvert pour télécharger toute la chaîne." },
-  "openedForLinks": { "message": "UTD est ouvert pour choisir les liens." }
+  "openedForLinks": { "message": "UTD est ouvert pour choisir les liens." },
+  "authSiteSwitch": { "message": "Connexion sur ce site" },
+  "authUse": { "message": "Utiliser ma connexion" },
+  "authResume": { "message": "Reprendre ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "Site sensible : autorisez chaque téléchargement vous-même." },
+  "authDenied": { "message": "Le navigateur ne l’a pas autorisé." },
+  "authDisabled": { "message": "Désactivé dans les paramètres d’UTD." },
+  "authResumed": { "message": "Téléchargements repris." }
 }

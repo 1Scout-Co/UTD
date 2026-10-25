@@ -1,5 +1,6 @@
 import { errorText, t, type MessageKey } from "@/shared/i18n/i18n"
 
+import { needsSignIn } from "./sign-in"
 import type { DownloadItem } from "./types"
 
 export type DoctorCategory =
@@ -16,6 +17,8 @@ export interface DoctorReport {
   steps: string[]
   retryable: boolean
   category: DoctorCategory
+  /** S-72: cho phép trang trong popup tiện ích là tải tiếp được; hộp có nút "Mở trang". */
+  signIn: boolean
 }
 
 // Mỗi chẩn đoán có 3 chuỗi trong file dịch: doctor.<id>.title, .summary (khi lỗi không kèm câu nào),
@@ -26,6 +29,7 @@ type ReportId =
   | "limited"
   | "network"
   | "access"
+  | "signIn"
   | "gone"
   | "drm"
   | "tool"
@@ -42,6 +46,7 @@ const REPORTS: Record<ReportId, { retryable: boolean; category: DoctorCategory }
   limited: { retryable: true, category: "network" },
   network: { retryable: true, category: "network" },
   access: { retryable: false, category: "access" },
+  signIn: { retryable: false, category: "access" },
   gone: { retryable: false, category: "access" },
   drm: { retryable: false, category: "security" },
   tool: { retryable: true, category: "tool" },
@@ -61,10 +66,7 @@ const EXACT: Record<string, ReportId> = {
   "media.rate_limited": "limited",
   "http.408": "network",
   "media.network": "network",
-  "http.401": "access",
-  "http.403": "access",
   "media.forbidden": "access",
-  "media.login": "access",
   "http.404": "gone",
   "http.410": "gone",
   "media.not_found": "gone",
@@ -79,6 +81,7 @@ const EXACT: Record<string, ReportId> = {
 
 function reportOf(item: DownloadItem, code: string): ReportId {
   if (EXACT[code] === "guard") return "guard"
+  if (needsSignIn(code)) return "signIn"
   if (code.startsWith("verify.") || item.hashState === "mismatch") return "hash"
   if (EXACT[code]) return EXACT[code]
   if (code.startsWith("network.")) return "network"
@@ -99,5 +102,6 @@ export function diagnose(item: DownloadItem): DoctorReport {
     steps: t(key("steps")).split("\n"),
     retryable: REPORTS[id].retryable && !quarantined,
     category: REPORTS[id].category,
+    signIn: id === "signIn",
   }
 }

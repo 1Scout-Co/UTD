@@ -10,9 +10,11 @@ export async function listChannel(
   url: string,
   listingId: string,
   onEvent: (event: ListingEvent) => void,
+  authGrant?: string | null,
 ): Promise<void> {
   const channel = new Channel<ListingEvent>(onEvent)
-  await invoke("channel_list", { url, listingId, onEvent: channel })
+  const args = { url, listingId, onEvent: channel }
+  await invoke("channel_list", authGrant ? { ...args, authGrant } : args)
 }
 
 /** Dừng lượt liệt kê (nút Dừng, đóng hộp); video đã nhận vẫn dùng được. */

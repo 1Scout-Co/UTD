@@ -19,5 +19,12 @@
   "noLinks": { "message": "ไม่พบลิงก์ที่ดาวน์โหลดได้ในหน้านี้" },
   "tooManyLinks": { "message": "ลิงก์มากเกินไปสำหรับการส่งครั้งเดียว" },
   "openedForChannel": { "message": "เปิด UTD เพื่อดาวน์โหลดทั้งช่องแล้ว" },
-  "openedForLinks": { "message": "เปิด UTD เพื่อเลือกลิงก์แล้ว" }
+  "openedForLinks": { "message": "เปิด UTD เพื่อเลือกลิงก์แล้ว" },
+  "authSiteSwitch": { "message": "ใช้การลงชื่อเข้าใช้ในเว็บนี้" },
+  "authUse": { "message": "ใช้การลงชื่อเข้าใช้ของฉัน" },
+  "authResume": { "message": "ดำเนินการต่อ ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "เว็บที่ละเอียดอ่อน: ต้องกดอนุญาตทุกครั้งที่ดาวน์โหลด" },
+  "authDenied": { "message": "เบราว์เซอร์ไม่อนุญาต" },
+  "authDisabled": { "message": "ปิดอยู่ในการตั้งค่า UTD" },
+  "authResumed": { "message": "ดาวน์โหลดต่อแล้ว" }
 }

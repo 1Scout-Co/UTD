@@ -420,13 +420,15 @@ test('S-60: kênh dài liệt kê dần, Dừng giữ phần đã nhận', async
   await expect(dialog).not.toBeVisible()
 })
 
-test('S-63: tài khoản riêng tư báo rõ, không vượt bảo vệ', async ({ page }) => {
+test('S-63: tài khoản riêng tư báo rõ, chỉ cách đăng nhập qua trình duyệt, không vượt bảo vệ', async ({ page }) => {
   await page.addInitScript(mockDesktop, 'private')
   await page.goto('/')
   const dialog = await openFromAdd(page)
   await expect(dialog.locator('[data-s="S-63"]')).toBeVisible()
-  await expect(dialog.getByText('Tài khoản riêng tư: UTD chưa dùng cookie')).toBeVisible()
-  await expect(dialog.getByRole('alert')).toContainText('Tài khoản riêng tư')
+  // 2026-10-25: UTD dùng đăng nhập của trình duyệt khi người dùng cho phép trong popup tiện ích.
+  await expect(dialog.getByText('Bấm biểu tượng UTD trên trình duyệt › Dùng đăng nhập.').first()).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Mở trang' })).toBeVisible()
+  await expect(dialog.getByRole('alert').filter({ hasText: 'Tài khoản riêng tư' })).toBeVisible()
   await expect(dialog.getByRole('button', { name: 'Thử lại' })).toBeVisible()
   await expect(dialog.getByRole('button', { name: 'Tải 0 video' })).toBeDisabled()
   expect((await axe(page)).violations).toEqual([])

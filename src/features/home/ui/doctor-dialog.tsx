@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Check,
   Copy,
+  ExternalLink,
   RefreshCw,
   ShieldAlert,
   Stethoscope,
@@ -21,6 +22,7 @@ import {
 } from "@/components/ui/dialog"
 import { t } from "@/shared/i18n/i18n"
 
+import { openWebPage } from "../api/downloads"
 import { diagnose, type DoctorCategory } from "../model/doctor"
 import type { DownloadItem } from "../model/types"
 
@@ -145,6 +147,20 @@ export function DoctorDialog({
             >
               {t("app.close")}
             </Button>
+            {report.signIn && item.url ? (
+              <Button
+                type="button"
+                data-s="S-72"
+                onClick={() => {
+                  void openWebPage(item.url ?? "").catch((reason: unknown) =>
+                    console.error("UTD open page:", reason),
+                  )
+                }}
+              >
+                <ExternalLink />
+                {t("auth.openPage")}
+              </Button>
+            ) : null}
             {report.retryable ? (
               <Button
                 type="button"

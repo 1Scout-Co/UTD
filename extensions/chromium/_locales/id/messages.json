@@ -19,5 +19,12 @@
   "noLinks": { "message": "Tidak ada tautan yang dapat diunduh di halaman ini." },
   "tooManyLinks": { "message": "Terlalu banyak tautan dalam satu kiriman." },
   "openedForChannel": { "message": "UTD dibuka untuk mengunduh seluruh channel." },
-  "openedForLinks": { "message": "UTD dibuka untuk memilih tautan." }
+  "openedForLinks": { "message": "UTD dibuka untuk memilih tautan." },
+  "authSiteSwitch": { "message": "Login di situs ini" },
+  "authUse": { "message": "Pakai login saya" },
+  "authResume": { "message": "Lanjutkan ($COUNT$)", "placeholders": { "count": { "content": "$1" } } },
+  "authSensitive": { "message": "Situs sensitif: izinkan setiap kali mengunduh." },
+  "authDenied": { "message": "Browser tidak mengizinkan." },
+  "authDisabled": { "message": "Dimatikan di Pengaturan UTD." },
+  "authResumed": { "message": "Unduhan dilanjutkan." }
 }

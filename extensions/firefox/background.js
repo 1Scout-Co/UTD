@@ -55,11 +55,109 @@ const VIDEO_PAGES = [
   /^(www\.)?bilibili\.com\/video\/\w+/,
 ]
 
-async function sendToUtd(payload) {
-  let response
+// --- Đăng nhập của trình duyệt (docs/specs/2026-10-23-utd-v1/notes/auth-plan.md §4) ---
+// Cookie chỉ được đọc ở đây, bên trong cú bấm của người dùng: menu chuột phải (trang đã cho phép) hoặc nút
+// trong popup. Tin nhắn từ app không bao giờ dẫn tới việc đọc cookie. Không lưu cookie ở đâu cả.
+const MAX_COOKIES = 300
+const MAX_COOKIE_BYTES = 64 * 1024
+
+const hostOf = (url) => {
   try {
-    response = await api.runtime.sendNativeMessage(HOST, payload)
+    return new URL(url).hostname.toLowerCase()
   } catch {
+    return ""
+  }
+}
+
+const within = (host, site) => host === site || host.endsWith(`.${site}`)
+
+/** Trang (tên miền gốc) đã được cho phép phủ `host`: quyền `*://*.google.com/*` phủ drive.google.com. */
+async function grantedSite(host) {
+  if (!host || !api.cookies) return null
+  const { origins = [] } = await api.permissions.getAll()
+  for (const origin of origins) {
+    const match = /^\*:\/\/(\*\.)?([^/*]+)\/\*$/.exec(origin)
+    if (match && (match[2] === host || (match[1] && within(host, match[2])))) return match[2]
+  }
+  return null
+}
+
+/** Kho cookie của tab: container/cửa sổ riêng tư (Firefox), ẩn danh (Chrome). */
+async function storeOf(tab) {
+  if (tab?.cookieStoreId) return tab.cookieStoreId
+  const stores = await api.cookies.getAllCookieStores()
+  return stores.find((store) => store.tabIds.includes(tab?.id))?.id
+}
+
+/**
+ * Cookie áp cho các link `urls` (không trùng, trần 300 cookie / 64 KiB). Chéo trang (`crossSite`) thì bỏ
+ * cookie SameSite=Strict như trình duyệt khi điều hướng. Không nêu `partitionKey` ⇒ chỉ cookie của trang
+ * chính, không phải cookie nhúng.
+ */
+async function readCookies(site, urls, tab, crossSite) {
+  const storeId = await storeOf(tab)
+  const picked = new Map()
+  let bytes = 0
+  for (const url of urls) {
+    const query = storeId ? { url, storeId } : { url }
+    let cookies = []
+    try {
+      cookies = await api.cookies.getAll(query)
+    } catch {
+      // Firefox bật cách ly bên thứ nhất (privacy.firstparty.isolate) thì phải nêu firstPartyDomain.
+      cookies = await api.cookies.getAll({ ...query, firstPartyDomain: site }).catch(() => [])
+    }
+    for (const cookie of cookies) {
+      const key = `${cookie.name}\t${cookie.domain}\t${cookie.path}`
+      if ((crossSite && cookie.sameSite === "strict") || picked.has(key)) continue
+      bytes += cookie.name.length + cookie.value.length
+      if (picked.size >= MAX_COOKIES || bytes > MAX_COOKIE_BYTES) return [...picked.values()]
+      picked.set(key, {
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        hostOnly: cookie.hostOnly,
+        path: cookie.path,
+        secure: cookie.secure,
+        expires: cookie.session ? null : Math.floor(cookie.expirationDate ?? 0) || null,
+      })
+    }
+  }
+  return [...picked.values()]
+}
+
+/**
+ * Phần `auth` của tin nhắn tải khi trang của link đã được cho phép (và không phải trang nhạy cảm: những
+ * trang đó mỗi lượt phải bấm trong popup). Chưa cho phép ⇒ `null`, không đọc cookie nào.
+ */
+async function authFor(targetUrl, pageUrl, tab) {
+  const site = await grantedSite(hostOf(targetUrl))
+  if (!site) return null
+  const key = `sensitive:${site}`
+  if ((await api.storage.local.get(key))[key]) return null
+  const sameSite = within(hostOf(pageUrl ?? ""), site)
+  const urls = sameSite && pageUrl && pageUrl !== targetUrl ? [targetUrl, pageUrl] : [targetUrl]
+  const cookies = await readCookies(site, urls, tab, !sameSite)
+  return cookies.length > 0 ? { site, cookies, userAgent: navigator.userAgent } : null
+}
+
+/** Tin nhắn bản 1 như cũ; có cookie thì bản 2 (UTD cũ không hiểu bản 2 nên chỉ dùng khi cần). */
+function withAuth(payload, auth) {
+  return auth ? { ...payload, version: 2, auth } : payload
+}
+
+/** Gửi một tin sang native host, trả nguyên trả lời (hoặc `null` khi không nối được). */
+async function sendNative(payload) {
+  try {
+    return await api.runtime.sendNativeMessage(HOST, payload)
+  } catch {
+    return null
+  }
+}
+
+async function sendToUtd(payload) {
+  const response = await sendNative(payload)
+  if (response === null) {
     // Chưa đăng ký native host hoặc trình duyệt chặn: lỗi của trình duyệt khó hiểu, báo câu chung.
     return fail(t("notConnected"))
   }
@@ -121,16 +219,13 @@ function pickUrl(info, tab) {
   )
 }
 
-function download(info, tab) {
+async function download(info, tab) {
   const url = pickUrl(info, tab)
   if (!url) return
-  void sendToUtd({
-    version: 1,
-    type: "download",
-    url,
-    pageUrl: tab?.url ?? null,
-    suggestedName: null,
-  })
+  const auth = await authFor(url, tab?.url, tab).catch(() => null)
+  await sendToUtd(
+    withAuth({ version: 1, type: "download", url, pageUrl: tab?.url ?? null, suggestedName: null }, auth),
+  )
 }
 
 // Chạy trong trang (scripting.executeScript): phải tự đủ, không dùng biến ngoài.
@@ -223,7 +318,9 @@ async function downloadAll(info, tab) {
     await fail(t("noLinks"))
     return
   }
-  await sendToUtd({ version: 1, type: "batch", urls, pageUrl: tab.url })
+  // Cookie của trang đang mở; UTD chỉ dùng cho link cùng trang.
+  const auth = await authFor(tab.url, tab.url, tab).catch(() => null)
+  await sendToUtd(withAuth({ version: 1, type: "batch", urls, pageUrl: tab.url }, auth))
 }
 
 api.runtime.onInstalled.addListener(() => void installMenus())
@@ -232,8 +329,20 @@ void installMenus()
 
 api.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === MENU_ALL) void downloadAll(info, tab)
-  else download(info, tab)
+  else void download(info, tab)
 })
+
+/** Popup bấm "Dùng đăng nhập" / "Tiếp tục": quyền đã có (popup vừa xin); đọc cookie cho tab và việc chờ. */
+async function renew({ tabId, site, urls }) {
+  const tab = await api.tabs.get(tabId)
+  if (!tab?.url || !(await grantedSite(hostOf(tab.url)))) return { ok: false, message: "auth.denied" }
+  const links = [tab.url, ...(Array.isArray(urls) ? urls : [])].filter(
+    (url) => typeof url === "string" && within(hostOf(url), site),
+  )
+  const cookies = await readCookies(site, [...new Set(links)].slice(0, 21), tab, false)
+  const auth = { site, cookies, userAgent: navigator.userAgent }
+  return (await sendNative({ version: 2, type: "auth-renew", url: tab.url, auth })) ?? { ok: false }
+}
 
 // Chỉ nhận lệnh từ popup của chính tiện ích: không từ trang web, content script hay tiện ích khác (sau này
 // lệnh có thể kèm cookie, notes/auth-plan.md §4.3).
@@ -248,13 +357,25 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, message: t("notHttp") })
       return false
     }
-    sendToUtd({
-      version: 1,
-      type: "download",
-      url,
-      pageUrl: url,
-      suggestedName: null,
-    }).then(sendResponse)
+    api.tabs
+      .get(message.tabId)
+      .catch(() => null)
+      .then((tab) => authFor(url, url, tab).catch(() => null))
+      .then((auth) =>
+        sendToUtd(withAuth({ version: 1, type: "download", url, pageUrl: url, suggestedName: null }, auth)),
+      )
+      .then(sendResponse)
+    return true
+  }
+  // Popup vừa mở: tab có việc chờ đăng nhập không (không đọc cookie).
+  if (message?.type === "utd.auth-pending" && typeof message.url === "string") {
+    sendNative({ version: 2, type: "auth-pending", url: message.url }).then(sendResponse)
+    return true
+  }
+  if (message?.type === "utd.auth-renew" && typeof message.site === "string") {
+    renew(message)
+      .catch(() => ({ ok: false }))
+      .then(sendResponse)
     return true
   }
   return false

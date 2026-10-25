@@ -278,8 +278,10 @@ impl DownloadEngine {
                 return self.fail(task, error, &control);
             }
         };
-        // Máy chủ đưa về trang đăng nhập thay vì trả file.
-        if is_login_redirect(&url, &probe.url) {
+        // Máy chủ đưa về trang đăng nhập (trang HTML, không phải file đính kèm) thay vì trả file. File thật
+        // nằm dưới đường dẫn có chữ `login` vẫn tải như thường.
+        let landed_on_page = !probe.attachment && probe.content_type.as_deref().is_none_or(is_html_type);
+        if landed_on_page && is_login_redirect(&url, &probe.url) {
             let error = if transport.has_cookies() { auth_expired() } else { auth_required() };
             return self.fail(task, error, &control);
         }

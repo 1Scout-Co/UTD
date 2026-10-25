@@ -120,6 +120,7 @@ export function mapEngineTask(
     hashState: task.hashState,
     note: task.error?.message,
     errorCode: task.error?.code,
+    url: task.url,
     tone: KIND_TONE[kind],
     date: formatDate(created.getTime()),
     time: formatTime(created.getTime()),
