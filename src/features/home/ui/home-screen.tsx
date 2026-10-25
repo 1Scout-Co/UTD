@@ -431,6 +431,7 @@ export function HomeScreen() {
           setDetailId(null)
           setRelinkId(id)
         }}
+        onRestart={restart}
         onSettings={() => {
           setSettingsFocus(null)
           setSettingsOpen(true)

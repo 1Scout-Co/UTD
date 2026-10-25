@@ -301,6 +301,30 @@ test('S-21: file bị cách ly không có nút Thử lại, việc chính là m�
   expect((await calls(page, 'reveal_download')).at(-1)?.args).toEqual({ taskId: 't1' })
 })
 
+test('S-21: link bị từ chối ⇒ "Cập nhật link…" như Doctor, mở hộp cập nhật link', async ({ page }) => {
+  const refused = task('failed', {
+    error: { class: 'user', code: 'http.403', message: 'HTTP 403' },
+    recovery: { wait: 'link', attempts: 0, progress: 150 * MB },
+  })
+  const dialog = await open(page, { list_downloads: [refused], download_detail: detail(refused) })
+  const screen = dialog.locator('[data-s="S-21"]')
+  await screen.getByRole('button', { name: 'Cập nhật link…' }).click()
+  await expect(page.getByRole('dialog', { name: 'Cập nhật link' })).toBeVisible()
+  // Hộp Chi tiết (tiêu đề là tên file) đã đóng; hộp Cập nhật link cũng mang data-s="S-21" nên tìm theo tên.
+  await expect(page.getByRole('dialog', { name: 'ubuntu.iso' })).toBeHidden()
+})
+
+test('S-21: file trên máy chủ đã đổi ⇒ "Tải lại từ đầu", không có "Cập nhật link…"', async ({ page }) => {
+  const changed = task('failed', {
+    error: { class: 'permanent', code: 'file.changed', message: 'The file changed on the server.' },
+  })
+  const dialog = await open(page, { list_downloads: [changed], download_detail: detail(changed) })
+  const screen = dialog.locator('[data-s="S-21"]')
+  await expect(screen.getByRole('button', { name: 'Cập nhật link…' })).toHaveCount(0)
+  await screen.getByRole('button', { name: 'Tải lại từ đầu' }).click()
+  expect((await calls(page, 'restart_download')).at(-1)?.args).toEqual({ taskId: 't1' })
+})
+
 test('S-15: a11y — màn chi tiết đang tải', async ({ page }) => {
   const running = task('downloading')
   await open(page, { list_downloads: [running], download_detail: detail(running) })
