@@ -796,11 +796,10 @@ impl Watch<'_> {
         tokio::pin!(work);
         let since = Instant::now();
         let idle_at = since + self.idle;
+        // Hỏi đều mỗi nhịp từ lúc bắt đầu: mạng đổi thì biết ngay; tới hạn treo đã có đủ hai nhịp để xét.
         let recheck = self.stall.map_or(NET_RECHECK, stall_recheck);
-        // Nhịp hỏi đầu sớm hơn hạn treo một nhịp: tới hạn đã có đủ hai nhịp để xét.
-        let first = self.stall.map_or(recheck, |stall| stall.saturating_sub(recheck));
-        let mut check_at = (since + first).min(idle_at);
-        let mut heard_from = since.max(check_at - recheck);
+        let mut check_at = (since + recheck).min(idle_at);
+        let mut heard_from = since;
         let mut heard_before = false;
         loop {
             tokio::select! {

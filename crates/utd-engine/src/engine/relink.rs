@@ -78,12 +78,11 @@ pub(crate) async fn verify(
         etag: probe.etag.clone(),
         last_modified: probe.last_modified.clone(),
     };
-    if old.comparable(&new) {
-        return if old.differs(&new) {
-            Err(LinkError::Changed)
-        } else {
-            Ok(probe)
-        };
+    // Link khác nên kiểm chặt hơn lúc tải tiếp cùng link: validator cái giống cái khác thì so byte.
+    match old.agrees(&new) {
+        Some(true) => return Ok(probe),
+        Some(false) => return Err(LinkError::Changed),
+        None => {}
     }
     let windows = sample_windows(segments);
     if windows.is_empty() {

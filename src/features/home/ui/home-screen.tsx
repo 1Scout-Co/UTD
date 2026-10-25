@@ -20,6 +20,7 @@ import { formatBytes } from "@/shared/i18n/format"
 import { t } from "@/shared/i18n/i18n"
 
 import { mapEngineTask } from "../model/download-mapper"
+import { restartDownload } from "../api/recover"
 import { isChannelPage } from "../model/media-pages"
 import { demoDownloads, demoStorage } from "../model/mock-data"
 import type {
@@ -35,6 +36,7 @@ import { BatchDialog } from "./batch-dialog"
 import { ChannelFlow, useChannelFlow } from "./channel-flow"
 import { DoctorDialog } from "./doctor-dialog"
 import { MediaPickerDialog, useMediaRequests } from "./media-picker-dialog"
+import { RefreshLinkDialog } from "./refresh-link-dialog"
 import { SettingsDialog } from "./settings-dialog"
 import { ToolsAutoCard } from "./tools-auto"
 import { useBatchFlow } from "./use-batch-flow"
@@ -56,6 +58,8 @@ export function HomeScreen() {
     key: number
   } | null>(null)
   const [diagnoseId, setDiagnoseId] = useState<string | null>(null)
+  // Hộp "Cập nhật link" (menu chuột phải hoặc Doctor).
+  const [relinkId, setRelinkId] = useState<string | null>(null)
   const [tasks, setTasks] = useState<EngineTask[]>([])
   const [progress, setProgress] = useState<Record<string, EngineProgress>>({})
   const [storage, setStorage] = useState<StorageInfo | null>(null)
@@ -140,6 +144,10 @@ export function HomeScreen() {
   const diagnoseItem = diagnoseId
     ? (items.find((item) => item.id === diagnoseId) ?? null)
     : null
+  const relinkItem = relinkId
+    ? (items.find((item) => item.id === relinkId) ?? null)
+    : null
+  const closeRelink = useCallback(() => setRelinkId(null), [])
 
   const storageSummary = desktop
     ? storage && storage.totalBytes > 0
@@ -297,6 +305,14 @@ export function HomeScreen() {
     )
   }
 
+  // File trên máy chủ đã đổi / `.part` bị xoá: bỏ phần đã tải, tải lại từ đầu.
+  const restart = (taskId: string) => {
+    if (!desktop) return
+    void restartDownload(taskId).catch((error) =>
+      console.error("UTD restart:", error),
+    )
+  }
+
   const remove = (taskId: string) => {
     if (!desktop) return
     if (
@@ -341,6 +357,7 @@ export function HomeScreen() {
         onResume={resume}
         onRemove={remove}
         onDiagnose={setDiagnoseId}
+        onRefreshLink={setRelinkId}
         onSettings={() => {
           setSettingsFocus(null)
           setSettingsOpen(true)
@@ -403,6 +420,19 @@ export function HomeScreen() {
           resume(id)
           setDiagnoseId(null)
         }}
+        onRefreshLink={(id) => {
+          setDiagnoseId(null)
+          setRelinkId(id)
+        }}
+        onRestart={(id) => {
+          restart(id)
+          setDiagnoseId(null)
+        }}
+      />
+      <RefreshLinkDialog
+        item={relinkItem}
+        desktop={desktop}
+        onClose={closeRelink}
       />
       <SettingsDialog
         open={settingsOpen}

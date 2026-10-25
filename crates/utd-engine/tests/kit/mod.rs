@@ -5,7 +5,7 @@
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -68,6 +68,47 @@ pub struct Reply {
     pub delay: Option<Duration>,
     /// Đợt rớt mạng dùng chung: mọi phản hồi mang nó cùng im trong cùng một khoảng.
     pub outage: Option<Arc<Outage>>,
+    /// Đóng kết nối ngay, không trả lời gì (mạng đang rớt: kết nối bị reset).
+    pub reset: bool,
+    /// Công tắc mạng: `Switch::cut` (sau lúc tạo phản hồi) ⇒ đóng kết nối giữa chừng.
+    pub switch: Option<(Arc<Switch>, u64)>,
+}
+
+/// Công tắc mạng dùng chung cho bài thử chaos: `cut` cắt mọi phản hồi đang gửi (rớt Wi-Fi, đổi mạng),
+/// `set_down(true)` thì yêu cầu mới bị đóng ngay không trả lời tới khi bật lại.
+#[derive(Default)]
+pub struct Switch {
+    generation: AtomicU64,
+    down: AtomicBool,
+}
+
+impl Switch {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub fn cut(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn set_down(&self, down: bool) {
+        self.down.store(down, Ordering::SeqCst);
+        if down {
+            self.cut();
+        }
+    }
+
+    pub fn is_down(&self) -> bool {
+        self.down.load(Ordering::SeqCst)
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    fn cut_since(&self, generation: u64) -> bool {
+        self.generation() != generation
+    }
 }
 
 /// Mạng rớt cả loạt (Wi-Fi chuyển điểm phát, modem khởi động lại): mọi phản hồi mang cùng một
@@ -126,7 +167,28 @@ impl Reply {
             stall_after: None,
             delay: None,
             outage: None,
+            reset: false,
+            switch: None,
         }
+    }
+
+    /// Đóng kết nối ngay, không trả lời.
+    pub fn reset() -> Self {
+        Self {
+            reset: true,
+            ..Self::new(0)
+        }
+    }
+
+    /// Phản hồi bị cắt khi công tắc mạng `cut` sau lúc này.
+    pub fn on(mut self, switch: &Arc<Switch>) -> Self {
+        self.switch = Some((switch.clone(), switch.generation()));
+        self
+    }
+
+    pub fn rate(mut self, bytes_per_second: u64) -> Self {
+        self.rate = Some(bytes_per_second);
+        self
     }
 
     pub fn header(mut self, name: &str, value: impl Into<String>) -> Self {
@@ -250,6 +312,9 @@ async fn serve_connection(mut stream: TcpStream, shared: Shared, id: usize) {
 
 /// Trả `false` khi kết nối phải đóng.
 async fn write_reply(stream: &mut TcpStream, reply: &Reply, head: bool) -> bool {
+    if reply.reset {
+        return false;
+    }
     if let Some(delay) = reply.delay {
         sleep(delay).await;
     }
@@ -285,6 +350,13 @@ async fn write_reply(stream: &mut TcpStream, reply: &Reply, head: bool) -> bool 
     while written < limit {
         if let Some(outage) = &reply.outage {
             outage.hold().await;
+        }
+        if reply
+            .switch
+            .as_ref()
+            .is_some_and(|(switch, generation)| switch.cut_since(*generation))
+        {
+            return false;
         }
         let end = (written + PIECE).min(limit);
         let piece = &reply.body[written..end];

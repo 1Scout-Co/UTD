@@ -768,12 +768,14 @@ impl DownloadEngine {
             .map(|runtime| (runtime.start(), runtime.downloaded()))
             .collect();
         let mut splits_left = MAX_SPLITS.min(MAX_SEGMENTS.saturating_sub(runtimes.len()));
+        let mut saving = Saving::new(&segments);
 
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
                     join_set.abort_all();
                     while join_set.join_next().await.is_some() {}
+                    saving.settle().await?;
                     self.checkpoint_segments(task, &runtimes, &file).await?;
                     return Ok(SessionEnd::Paused);
                 }
@@ -788,6 +790,7 @@ impl DownloadEngine {
                         Some(Some(failure)) => {
                             join_set.abort_all();
                             while join_set.join_next().await.is_some() {}
+                            saving.settle().await?;
                             self.checkpoint_segments(task, &runtimes, &file).await?;
                             return Ok(SessionEnd::Failed(failure));
                         }
@@ -814,11 +817,17 @@ impl DownloadEngine {
                     if let Some(error) = stop {
                         join_set.abort_all();
                         while join_set.join_next().await.is_some() {}
+                        saving.settle().await?;
                         self.checkpoint_segments(task, &runtimes, &file).await?;
                         return Ok(SessionEnd::Failed(SegmentFailure::new(error)));
                     }
-                    if now.duration_since(last_checkpoint) >= self.options.checkpoint_interval {
-                        self.checkpoint_segments(task, &runtimes, &file).await?;
+                    // Checkpoint chạy nền (fsync rồi ghi journal); lượt trước chưa xong (đĩa chậm) thì để nhịp sau.
+                    if now.duration_since(last_checkpoint) >= self.options.checkpoint_interval
+                        && !saving.busy()
+                    {
+                        saving.settle().await?;
+                        saving.start(&self.journal, &file, &task.id, snapshot(&runtimes));
+                        task.updated_at = now_ms();
                         last_checkpoint = now;
                     }
                     let sample = Sample {
@@ -832,7 +841,8 @@ impl DownloadEngine {
                     }
                     let tails = self.fill_idle(&mut runtimes, controller.target());
                     if !tails.is_empty() {
-                        self.save_plan(task, &runtimes, &file).await?;
+                        saving.settle().await?;
+                        self.save_plan(task, &saving.durable_plan(&runtimes))?;
                     }
                     for tail in tails {
                         previous_balance.insert(tail.start(), 0);
@@ -856,7 +866,8 @@ impl DownloadEngine {
                             && let Some(tail) =
                                 split_slowest(&mut runtimes, &previous_balance, balance_elapsed)
                         {
-                            self.save_plan(task, &runtimes, &file).await?;
+                            saving.settle().await?;
+                            self.save_plan(task, &saving.durable_plan(&runtimes))?;
                             context.spawn(&mut join_set, &results_tx, tail);
                             pending_workers += 1;
                             splits_left -= 1;
@@ -871,6 +882,7 @@ impl DownloadEngine {
             }
         }
 
+        saving.settle().await?;
         self.checkpoint_segments(task, &runtimes, &file).await?;
         if cancel.is_cancelled() {
             return Ok(SessionEnd::Paused);
@@ -914,17 +926,9 @@ impl DownloadEngine {
         added
     }
 
-    /// Lưu cách chia đoạn mới (kèm byte đã có): fsync `.part` trước như mọi checkpoint.
-    async fn save_plan(
-        &self,
-        task: &mut DownloadTask,
-        runtimes: &[Arc<SegmentRuntime>],
-        file: &Arc<PartFile>,
-    ) -> Result<()> {
-        let plan: Vec<Segment> = runtimes.iter().map(|runtime| runtime.snapshot()).collect();
-        sync_part(file).await?;
-        self.journal.save_segments(&task.id, &plan)?;
-        task.downloaded_bytes = plan.iter().map(|segment| segment.downloaded).sum();
+    /// Lưu cách chia đoạn mới; `plan` chỉ kèm byte đã chắc nằm trên đĩa (`Saving::durable_plan`).
+    fn save_plan(&self, task: &mut DownloadTask, plan: &[Segment]) -> Result<()> {
+        self.journal.save_segments(&task.id, plan)?;
         task.updated_at = now_ms();
         Ok(())
     }
@@ -1037,17 +1041,14 @@ impl DownloadEngine {
     }
 
     /// Chụp tiến độ, fsync `.part`, rồi mới ghi journal: journal không bao giờ đi trước dữ liệu trên
-    /// đĩa (rút điện ngay sau đó vẫn tải tiếp đúng).
+    /// đĩa (rút điện ngay sau đó vẫn tải tiếp đúng). Checkpoint cuối lượt; giữa lượt dùng `Saving`.
     async fn checkpoint_segments(
         &self,
         task: &mut DownloadTask,
         runtimes: &[Arc<SegmentRuntime>],
         file: &Arc<PartFile>,
     ) -> Result<()> {
-        let segments: Vec<Segment> = runtimes
-            .iter()
-            .map(|runtime| runtime.snapshot())
-            .collect();
+        let segments = snapshot(runtimes);
         let downloaded = segments.iter().map(|segment| segment.downloaded).sum();
         sync_part(file).await?;
         self.journal.checkpoint(&task.id, &segments, downloaded)?;
@@ -1319,6 +1320,72 @@ fn reconcile_part(path: &Path, segments: &mut [Segment]) -> io::Result<u64> {
         }
     }
     Ok(dropped)
+}
+
+fn snapshot(runtimes: &[Arc<SegmentRuntime>]) -> Vec<Segment> {
+    runtimes.iter().map(|runtime| runtime.snapshot()).collect()
+}
+
+/// Checkpoint giữa lượt chạy nền: fsync `.part` rồi ghi journal, không chặn vòng lượt tải (đĩa chậm, USB).
+/// Nhớ byte chắc chắn đã nằm trên đĩa của mỗi đoạn để cách chia đoạn mới không nhận hơn.
+struct Saving {
+    handle: Option<tokio::task::JoinHandle<Result<Vec<Segment>>>>,
+    /// Theo byte đầu đoạn (không đổi khi tách đoạn): số byte đã fsync và journal đã nhận.
+    durable: HashMap<u64, u64>,
+}
+
+impl Saving {
+    fn new(saved: &[Segment]) -> Self {
+        Self {
+            handle: None,
+            durable: saved
+                .iter()
+                .map(|segment| (segment.start, segment.downloaded))
+                .collect(),
+        }
+    }
+
+    fn busy(&self) -> bool {
+        self.handle.as_ref().is_some_and(|handle| !handle.is_finished())
+    }
+
+    fn start(&mut self, journal: &Arc<Journal>, file: &Arc<PartFile>, task_id: &str, segments: Vec<Segment>) {
+        let (journal, file, task_id) = (journal.clone(), file.clone(), task_id.to_string());
+        self.handle = Some(tokio::task::spawn_blocking(move || {
+            let downloaded = segments.iter().map(|segment| segment.downloaded).sum();
+            file.sync()?;
+            journal.checkpoint(&task_id, &segments, downloaded)?;
+            Ok(segments)
+        }));
+    }
+
+    /// Chờ checkpoint đang chạy (nếu có) xong. Gọi trước mọi lần ghi cách chia đoạn và checkpoint cuối:
+    /// checkpoint cập nhật theo số thứ tự đoạn, ghi sau cách chia mới là lệch đoạn.
+    async fn settle(&mut self) -> Result<()> {
+        if let Some(handle) = self.handle.take() {
+            let saved = handle
+                .await
+                .map_err(|error| Error::Io(io::Error::other(error)))??;
+            self.durable = saved
+                .iter()
+                .map(|segment| (segment.start, segment.downloaded))
+                .collect();
+        }
+        Ok(())
+    }
+
+    /// Cách chia hiện tại, mỗi đoạn chỉ kèm byte đã chắc nằm trên đĩa (đoạn mới tách: 0).
+    fn durable_plan(&self, runtimes: &[Arc<SegmentRuntime>]) -> Vec<Segment> {
+        let mut plan = snapshot(runtimes);
+        for segment in &mut plan {
+            let durable = self.durable.get(&segment.start).copied().unwrap_or(0);
+            segment.downloaded = segment.downloaded.min(durable);
+            if segment.status == SegmentStatus::Done && !segment.is_done() {
+                segment.status = SegmentStatus::Active;
+            }
+        }
+        plan
+    }
 }
 
 async fn sync_part(file: &Arc<PartFile>) -> Result<()> {

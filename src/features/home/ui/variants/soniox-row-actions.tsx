@@ -5,6 +5,7 @@ import {
   FolderInput,
   FolderOpen,
   Link,
+  Link2,
   ListX,
   MoreHorizontal,
   Pause,
@@ -36,7 +37,7 @@ import type { DownloadItem, HomeScreenProps } from "../../model/types"
 /** Những gì một hàng cần để chạy lệnh: thao tác file (app desktop) + thao tác task có sẵn. */
 export type RowContext = Pick<
   HomeScreenProps,
-  "onPause" | "onResume" | "onRemove" | "onDiagnose"
+  "onPause" | "onResume" | "onRemove" | "onDiagnose" | "onRefreshLink"
 > & {
   desktop: boolean
   hasLink: (id: string) => boolean
@@ -103,7 +104,8 @@ function fileCommands(item: DownloadItem, ctx: RowContext): RowCommand[] {
 }
 
 function taskCommands(item: DownloadItem, ctx: RowContext): RowCommand[] {
-  const { id, status } = item
+  const { id, status, waiting } = item
+  const busy = status === "downloading" || status === "verifying"
   const pausable =
     status === "downloading" || status === "queued" || status === "verifying"
   const toggle: RowCommand = pausable
@@ -123,18 +125,26 @@ function taskCommands(item: DownloadItem, ctx: RowContext): RowCommand[] {
       }
   return [
     toggle,
+    // Đang chờ tự thử lại / chờ mạng / chờ chỗ trống: "Thử lại" chạy ngay.
     {
       key: "retry",
       label: t("menu.retry"),
       icon: RotateCcw,
-      disabled: !ctx.desktop || status !== "failed",
+      disabled: !ctx.desktop || (status !== "failed" && !waiting),
       run: () => ctx.onResume(id),
+    },
+    {
+      key: "refreshLink",
+      label: t("recover.menu"),
+      icon: Link2,
+      disabled: !ctx.desktop || !ctx.onRefreshLink || !item.relinkable || busy,
+      run: () => ctx.onRefreshLink?.(id),
     },
     {
       key: "diagnose",
       label: t("menu.diagnose"),
       icon: Stethoscope,
-      disabled: status !== "failed" && status !== "quarantined",
+      disabled: status !== "failed" && status !== "quarantined" && !waiting,
       run: () => ctx.onDiagnose(id),
     },
   ]

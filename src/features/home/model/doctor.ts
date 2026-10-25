@@ -10,12 +10,16 @@ export type DoctorCategory =
   | "disk"
   | "unknown"
 
+/** Nút chính của Doctor: Tiếp tục, Cập nhật link (link hết hạn), Tải lại từ đầu (file đổi / `.part` mất). */
+export type DoctorAction = "resume" | "refreshLink" | "restart"
+
 export interface DoctorReport {
   title: string
   summary: string
   steps: string[]
   retryable: boolean
   category: DoctorCategory
+  action: DoctorAction | null
 }
 
 // Mỗi chẩn đoán có 3 chuỗi trong file dịch: doctor.<id>.title, .summary (khi lỗi không kèm câu nào),
@@ -35,6 +39,18 @@ type ReportId =
   | "exists"
   | "unsupported"
   | "unknown"
+  // Cứu download (chuỗi ở recover.doctor.<id>.*): file đổi trên máy chủ, `.part` mất, ổ rút, ổ quá nhỏ.
+  | "changed"
+  | "partMissing"
+  | "unplugged"
+  | "tooSmall"
+
+const RECOVER_REPORTS: ReadonlySet<ReportId> = new Set([
+  "changed",
+  "partMissing",
+  "unplugged",
+  "tooSmall",
+])
 
 const REPORTS: Record<ReportId, { retryable: boolean; category: DoctorCategory }> = {
   guard: { retryable: false, category: "security" },
@@ -52,6 +68,10 @@ const REPORTS: Record<ReportId, { retryable: boolean; category: DoctorCategory }
   exists: { retryable: true, category: "access" },
   unsupported: { retryable: false, category: "tool" },
   unknown: { retryable: true, category: "unknown" },
+  changed: { retryable: false, category: "access" },
+  partMissing: { retryable: false, category: "disk" },
+  unplugged: { retryable: true, category: "disk" },
+  tooSmall: { retryable: false, category: "disk" },
 }
 
 const EXACT: Record<string, ReportId> = {
@@ -75,6 +95,10 @@ const EXACT: Record<string, ReportId> = {
   "media.no_output": "lostParts",
   "file.exists": "exists",
   "media.unsupported": "unsupported",
+  "file.changed": "changed",
+  "file.part_missing": "partMissing",
+  "disk.unplugged": "unplugged",
+  "disk.too_small": "tooSmall",
 }
 
 function reportOf(item: DownloadItem, code: string): ReportId {
@@ -87,17 +111,29 @@ function reportOf(item: DownloadItem, code: string): ReportId {
   return "unknown"
 }
 
+/** Link hết hạn / cần đăng nhập lại (401, 403, 407, 410) của download thường: dán link mới, giữ phần đã tải. */
+const LINK_REFUSED = new Set(["http.401", "http.403", "http.407", "http.410"])
+
+function actionOf(item: DownloadItem, id: ReportId, code: string, retryable: boolean) {
+  if (item.relinkable && LINK_REFUSED.has(code)) return "refreshLink"
+  if (id === "changed" || id === "partMissing") return "restart"
+  return retryable ? "resume" : null
+}
+
 export function diagnose(item: DownloadItem): DoctorReport {
   const code = item.errorCode ?? ""
   const id = reportOf(item, code)
+  const group = RECOVER_REPORTS.has(id) ? "recover.doctor" : "doctor"
   const key = (part: "title" | "summary" | "steps") =>
-    `doctor.${id}.${part}` as MessageKey
+    `${group}.${id}.${part}` as MessageKey
   const quarantined = id === "unknown" && item.status === "quarantined"
+  const retryable = REPORTS[id].retryable && !quarantined
   return {
     title: quarantined ? t("doctor.quarantined.title") : t(key("title")),
     summary: errorText(code, item.note) || t(key("summary")),
     steps: t(key("steps")).split("\n"),
-    retryable: REPORTS[id].retryable && !quarantined,
+    retryable,
     category: REPORTS[id].category,
+    action: quarantined ? null : actionOf(item, id, code, retryable),
   }
 }

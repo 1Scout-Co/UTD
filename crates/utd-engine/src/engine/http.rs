@@ -60,15 +60,9 @@ impl Validators {
         }
     }
 
-    /// Có validator nào so được (hai bên cùng có) không.
-    pub fn comparable(&self, other: &Self) -> bool {
-        (self.etag.is_some() && other.etag.is_some())
-            || (self.last_modified.is_some() && other.last_modified.is_some())
-    }
-
-    /// File đã đổi: có validator so được và MỌI validator so được đều khác. Một bên thiếu thì không kết
-    /// luận; ETag khác mà Last-Modified giống vẫn là một file (cụm máy chủ Apache gắn inode vào ETag).
-    pub fn differs(&self, other: &Self) -> bool {
+    /// `Some(true)`: mọi validator so được (hai bên cùng có) đều giống; `Some(false)`: đều khác; `None`:
+    /// không có gì để so, hoặc cái giống cái khác (ETag khác mà Last-Modified giống).
+    pub fn agrees(&self, other: &Self) -> Option<bool> {
         let etag = match (&self.etag, &other.etag) {
             (Some(left), Some(right)) => Some(strong(left) == strong(right)),
             _ => None,
@@ -78,10 +72,16 @@ impl Validators {
             _ => None,
         };
         match (etag, modified) {
-            (None, None) => false,
-            (Some(same), None) | (None, Some(same)) => !same,
-            (Some(etag), Some(modified)) => !etag && !modified,
+            (None, None) => None,
+            (Some(same), None) | (None, Some(same)) => Some(same),
+            (Some(etag), Some(modified)) => (etag == modified).then_some(etag),
         }
+    }
+
+    /// File (cùng link) đã đổi: mọi validator so được đều khác. Một bên thiếu thì không kết luận; ETag khác
+    /// mà Last-Modified giống vẫn là một file (cụm máy chủ Apache gắn inode vào ETag).
+    pub fn differs(&self, other: &Self) -> bool {
+        self.agrees(other) == Some(false)
     }
 }
 
@@ -392,7 +392,9 @@ mod tests {
         assert!(!of(Some("\"a\""), lm).differs(&of(Some("\"b\""), lm)), "inode khác, cùng file");
         assert!(of(Some("\"a\""), lm).differs(&of(Some("\"b\""), later)));
         assert!(!of(Some("\"a\""), None).differs(&of(None, lm)), "không so được thì không kết luận");
-        assert!(!of(None, None).comparable(&of(Some("\"a\""), lm)));
+        assert_eq!(of(None, None).agrees(&of(Some("\"a\""), lm)), None);
+        assert_eq!(of(Some("\"a\""), lm).agrees(&of(Some("\"b\""), lm)), None, "cái giống cái khác");
+        assert_eq!(of(Some("\"a\""), lm).agrees(&of(Some("W/\"a\""), lm)), Some(true));
     }
 
     #[test]
