@@ -546,7 +546,7 @@ pub(crate) fn spawn_run(
     }
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let event_app = app.clone();
-    tauri::async_runtime::spawn(async move {
+    let forwarder = tauri::async_runtime::spawn(async move {
         while let Some(event) = receiver.recv().await {
             emit_engine_event(&event_app, event);
         }
@@ -562,6 +562,9 @@ pub(crate) fn spawn_run(
         } else {
             engine.run_new(&task_id, control, allow_rename).await
         };
+        // Lượt chạy xong thì mọi bản sao `events` đã bỏ: chờ phát hết sự kiện của engine rồi mới báo trạng
+        // thái tự cứu, kẻo "lỗi" của engine tới giao diện sau "chờ thử lại". Có hạn để không giữ chỗ hàng đợi.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), forwarder).await;
         let failure = result.err().map(|error| error.to_string());
         if let Some(message) = &failure {
             let _ = app.emit(

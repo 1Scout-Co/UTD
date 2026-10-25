@@ -12,7 +12,7 @@ use crate::model::{
 };
 use crate::{Error, Result};
 
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 
 struct Migration {
     version: u32,
@@ -96,8 +96,9 @@ const MIGRATIONS: &[Migration] = &[
         "#,
     },
     Migration {
-        version: 4,
+        version: 5,
         // Tự cứu download: chờ thử lại / chờ mạng / chờ chỗ trống / chờ link mới (JSON `Recovery`).
+        // Số 5: nhánh màn chi tiết đã dùng v4 (bảng task_events); ghép thì giữ cả hai.
         sql: r#"
             ALTER TABLE tasks ADD COLUMN recovery_json TEXT;
         "#,

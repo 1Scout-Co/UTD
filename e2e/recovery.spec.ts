@@ -78,6 +78,13 @@ test('S-01: download chờ tự thử lại / chờ mạng / chờ chỗ trống
   await expect(page.locator('tr[data-row-id="full"]')).toContainText(/Ổ đầy · cần trống thêm .+ · tự tải tiếp khi đủ chỗ/)
   await page.screenshot({ path: test.info().outputPath('cho-tu-thu-lai.png') })
 
+  // Cửa sổ hẹp (cột "Còn lại" ẩn): giờ hẹn nằm dưới tốc độ, không ghép thành "còn Thử lại …".
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await expect(busy).toContainText(/Thử lại \d{2}:\d{2}/)
+  await expect(busy).not.toContainText('Còn Thử lại')
+  await expect(busy).not.toContainText('còn Thử lại')
+  await page.setViewportSize({ width: 1920, height: 1080 })
+
   // Đang chờ: Tạm dừng để thôi tự chạy lại, Thử lại để chạy ngay.
   await openMenu(page, 'ubuntu-26.04.iso')
   await expect(page.getByRole('menuitem', { name: 'Tạm dừng' })).toBeEnabled()

@@ -173,7 +173,8 @@ function SpeedCell({ item }: { item: DownloadItem }) {
       </div>
       {item.eta ? (
         <div className="text-xs whitespace-nowrap text-muted-foreground @5xl:hidden">
-          {t("table.etaLeft", { eta: item.eta })}
+          {/* Đang chờ tự cứu: "Thử lại 14:32" / "Chờ mạng" là giờ hẹn, không phải thời gian còn lại. */}
+          {item.waiting ? item.eta : t("table.etaLeft", { eta: item.eta })}
         </div>
       ) : null}
     </td>
