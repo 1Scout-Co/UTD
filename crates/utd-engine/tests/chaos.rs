@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write as _};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -171,21 +171,30 @@ async fn a_hundred_network_drops_still_end_byte_exact() {
         .expect("enqueue");
 
     let drops = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    // Luồng hệ điều hành riêng: chung runtime với engine thì máy bận (cả bộ chaos chạy song song) làm
+    // các nhịp ngủ ngắn trễ dần, lịch rớt mạng giãn ra và tải xong trước khi đủ 100 lần.
     let driver = {
-        let (switch, route, drops) = (switch.clone(), route.clone(), drops.clone());
-        tokio::spawn(async move {
+        let (switch, route, drops, stop) = (switch.clone(), route.clone(), drops.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let pause = |ms: u64| std::thread::sleep(Duration::from_millis(ms));
             let mut dice = Dice::new("network");
-            sleep(Duration::from_millis(400)).await;
+            pause(400);
             for drop in 1..=100usize {
-                sleep(Duration::from_millis(dice.between(60, 150))).await;
-                // Mỗi 25 lần một lần mất mạng lâu (modem khởi động lại): không còn route.
+                if stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                pause(dice.between(60, 150));
+                // Mỗi 25 lần một lần mất mạng lâu (modem khởi động lại): không còn route. 6 s dư hẳn lúc
+                // engine kết luận mất mạng (dò route mỗi 1 s, 3 s không route ⇒ `network.offline`), để
+                // app thấy vẫn chưa có mạng và chờ mạng thay vì hẹn thử lại.
                 let long = drop % 25 == 0;
                 switch.set_down(true);
                 if long {
                     route.set(None);
-                    sleep(Duration::from_millis(3_600)).await;
+                    pause(6_000);
                 } else {
-                    sleep(Duration::from_millis(dice.between(40, 120))).await;
+                    pause(dice.between(40, 120));
                 }
                 // Mỗi 10 lần đổi mạng (Wi-Fi↔4G): IP nguồn khác.
                 let address = if drop % 20 < 10 { WIFI } else { MOBILE };
@@ -200,7 +209,8 @@ async fn a_hundred_network_drops_still_end_byte_exact() {
     let (done, failures) = run_like_the_app(&engine, &journal, &task.id, &route).await;
     let elapsed = started.elapsed();
     let dropped = drops.load(Ordering::SeqCst);
-    driver.abort();
+    stop.store(true, Ordering::SeqCst);
+    driver.join().expect("network driver");
     eprintln!(
         "chaos network: {dropped} drops in {elapsed:?}, {} runs ended early: {failures:?}",
         failures.len()
@@ -461,7 +471,7 @@ async fn twenty_kills_and_five_power_cuts_keep_the_file_byte_exact() {
     drop(child);
     let task = task_by_name(directory.path(), name);
 
-    let mut lost_seconds: Vec<f64> = Vec::new();
+    let mut kills: Vec<(u64, f64)> = Vec::new();
     for _ in 0..20 {
         let before = saved_bytes(directory.path(), &task.id);
         let mut child = Child::spawn(directory.path(), &url, name);
@@ -470,10 +480,18 @@ async fn twenty_kills_and_five_power_cuts_keep_the_file_byte_exact() {
         let child = child.kill();
         assert!(child.done.is_none(), "finished too early: make the payload bigger");
         let saved = saved_bytes(directory.path(), &task.id);
-        let lost = child.last().saturating_sub(saved);
-        let rate = child.rate().max(1.0);
-        lost_seconds.push(lost as f64 / rate);
+        kills.push((child.last().saturating_sub(saved), child.rate()));
     }
+    // Mốc tiến độ được gắn giờ lúc cha đọc: lượt nào chỉ kịp đọc một mốc (máy CI chậm, ngủ ngắn) thì
+    // không đo được tốc độ riêng ⇒ dùng tốc độ trung bình các lượt đo được (trước đây thành 1 B/s và
+    // 16 KiB mất trông như 16 384 s).
+    let measured: Vec<f64> = kills.iter().map(|(_, rate)| *rate).filter(|rate| *rate > 0.0).collect();
+    assert!(!measured.is_empty(), "no kill measured a download rate");
+    let average = measured.iter().sum::<f64>() / measured.len() as f64;
+    let lost_seconds: Vec<f64> = kills
+        .iter()
+        .map(|(lost, rate)| *lost as f64 / if *rate > 0.0 { *rate } else { average })
+        .collect();
     let worst = lost_seconds.iter().copied().fold(0.0, f64::max);
     eprintln!(
         "chaos kill: 20 kills, worst lost progress {worst:.2} s, per kill {:?}",

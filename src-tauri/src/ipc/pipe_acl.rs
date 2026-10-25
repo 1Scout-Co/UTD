@@ -113,11 +113,32 @@ mod tests {
 
     use uuid::Uuid;
     use windows::Win32::Security::Authorization::{
-        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertStringSidToSidW, GetSecurityInfo,
+        SE_KERNEL_OBJECT,
     };
-    use windows::Win32::Security::DACL_SECURITY_INFORMATION;
+    use windows::Win32::Security::{DACL_SECURITY_INFORMATION, PSID};
 
     use super::*;
+
+    /// SID dạng `S-1-…` của người được cấp quyền trong ACE cuối của DACL. SDDL viết tắt vài SID quen
+    /// (vd `LA` = tài khoản Administrator dựng sẵn — máy CI của GitHub chạy bằng tài khoản này), nên đổi
+    /// về dạng đầy đủ rồi mới so với SID của người dùng hiện tại.
+    fn trustee_sid(dacl: &str) -> String {
+        let trustee = dacl.trim_end_matches(')').rsplit(";;;").next().unwrap();
+        let mut sid = PSID::default();
+        // SAFETY: chuỗi SID hợp lệ; Windows cấp SID bằng LocalAlloc, giải phóng ngay dưới.
+        unsafe { ConvertStringSidToSidW(&HSTRING::from(trustee), &mut sid) }.unwrap();
+        let mut text = PWSTR::null();
+        // SAFETY: SID vừa được cấp ở trên.
+        unsafe { ConvertSidToStringSidW(sid, &mut text) }.unwrap();
+        // SAFETY: chuỗi kết thúc NUL do Windows vừa cấp; giải phóng chuỗi và SID đúng một lần.
+        let value = unsafe { text.to_string() }.unwrap();
+        unsafe {
+            LocalFree(Some(HLOCAL(text.0.cast())));
+            LocalFree(Some(HLOCAL(sid.0)));
+        }
+        value
+    }
 
     /// DACL đọc lại từ pipe, dạng SDDL.
     fn dacl_of(server: &NamedPipeServer) -> String {
@@ -172,7 +193,8 @@ mod tests {
             // Một ACE cho đúng người dùng; không Everyone (WD), ẩn danh (AN), Administrators (BA), SYSTEM (SY).
             let dacl = dacl_of(&server);
             assert!(dacl.starts_with("D:P(A;;"), "{dacl}");
-            assert!(dacl.ends_with(&format!(";;;{sid})")), "{dacl}");
+            assert_eq!(trustee_sid(&dacl), sid, "{dacl}");
+            assert!(trustee_sid("D:P(A;;FA;;;LA)").ends_with("-500"));
             assert_eq!(dacl.matches('(').count(), 1, "{dacl}");
 
             // Native host (cùng người dùng) mở được bằng đường dẫn như file.
