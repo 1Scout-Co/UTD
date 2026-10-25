@@ -17,6 +17,7 @@
   "menuAll": { "message": "تنزيل كل الروابط باستخدام UTD" },
   "readLinksFailed": { "message": "تعذّرت قراءة الروابط في هذه الصفحة." },
   "noLinks": { "message": "لم يُعثر على روابط قابلة للتنزيل في هذه الصفحة." },
+  "driveFolder": { "message": "هذا مجلد في Google Drive وليس ملفًا. افتح الملف في صفحته الخاصة ثم حاول مرة أخرى." },
   "tooManyLinks": { "message": "عدد الروابط كبير جدًا لإرسالها دفعة واحدة." },
   "openedForChannel": { "message": "تم فتح UTD لتنزيل القناة كاملة." },
   "openedForLinks": { "message": "تم فتح UTD لاختيار الروابط." },

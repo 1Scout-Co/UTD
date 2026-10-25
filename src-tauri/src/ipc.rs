@@ -81,6 +81,9 @@ fn route(request: &PipeRequest, token: &str) -> Route {
         Route::Media
     } else if crate::media_pages::is_channel_page(&request.url) {
         Route::Channel
+    } else if crate::media_pages::is_drive_folder(&request.url) {
+        // Không gắn vào download chờ link mới, không tạo dòng tải hỏng: báo cách làm.
+        Route::Reject(crate::media_pages::DRIVE_FOLDER)
     } else if let Some(links) = needs_confirm(request) {
         Route::Confirm(links)
     } else {
@@ -633,6 +636,13 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(route(&named, TOKEN), Route::Confirm(_)), "tên trình duyệt gợi ý");
+        assert_eq!(
+            route(&request(TOKEN, "https://drive.google.com/drive/my-drive"), TOKEN),
+            Route::Reject(crate::media_pages::DRIVE_FOLDER),
+            "Tải trang này trên thư mục Drive (bản thử thật 2026-10-25): báo cách làm, không tạo dòng tải"
+        );
+        let drive_file = "https://drive.google.com/file/d/1AbC/view";
+        assert!(!matches!(route(&request(TOKEN, drive_file), TOKEN), Route::Reject(_)));
         assert_eq!(
             route(&request(TOKEN, "https://www.youtube.com/"), TOKEN),
             Route::Download,

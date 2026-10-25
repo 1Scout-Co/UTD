@@ -748,6 +748,7 @@
   "err.channel.bad_key": "Invalid channel key or video id.",
   "err.batch.invalid": "The link list is invalid.",
   "err.batch.channel_link": "This is a channel link: paste it into Add URL to pick the channel's videos.",
+  "err.link.drive_folder": "This is a Google Drive folder, not a file. Open the file in its own page, then try again.",
   "err.update.disabled": "Auto-update isn't enabled in this build.",
   "err.update.latest": "You're on the latest version.",
   "err.update.bad_signature": "The update package's signature is wrong, so it was rejected. You're still on the current version.",

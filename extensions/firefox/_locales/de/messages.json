@@ -17,6 +17,7 @@
   "menuAll": { "message": "Alle Links mit UTD herunterladen" },
   "readLinksFailed": { "message": "Die Links auf dieser Seite konnten nicht gelesen werden." },
   "noLinks": { "message": "Keine herunterladbaren Links auf dieser Seite gefunden." },
+  "driveFolder": { "message": "Das ist ein Google-Drive-Ordner, keine Datei. Öffne die Datei auf einer eigenen Seite und versuche es erneut." },
   "tooManyLinks": { "message": "Zu viele Links auf einmal." },
   "openedForChannel": { "message": "UTD geöffnet, um den ganzen Kanal herunterzuladen." },
   "openedForLinks": { "message": "UTD geöffnet, um die Links auszuwählen." },

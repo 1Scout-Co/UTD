@@ -17,6 +17,7 @@
   "menuAll": { "message": "用 UTD 下載所有連結" },
   "readLinksFailed": { "message": "無法讀取此頁面上的連結。" },
   "noLinks": { "message": "此頁面上沒有可下載的連結。" },
+  "driveFolder": { "message": "這是 Google 雲端硬碟資料夾，不是檔案。請在獨立頁面開啟檔案，然後再試一次。" },
   "tooManyLinks": { "message": "單次傳送的連結過多。" },
   "openedForChannel": { "message": "已開啟 UTD 以下載整個頻道。" },
   "openedForLinks": { "message": "已開啟 UTD 以選擇連結。" },

@@ -732,6 +732,7 @@
   "err.channel.bad_key": "Kunci channel atau ID video tidak valid.",
   "err.batch.invalid": "Daftar tautan tidak valid.",
   "err.batch.channel_link": "Ini tautan channel: tempel di Tambah URL untuk memilih video channel tersebut.",
+  "err.link.drive_folder": "Ini folder Google Drive, bukan file. Buka file di halamannya sendiri, lalu coba lagi.",
   "err.update.disabled": "Build ini belum mengaktifkan pembaruan otomatis.",
   "err.update.latest": "Anda memakai versi terbaru.",
   "err.update.bad_signature": "Tanda tangan paket pembaruan salah, jadi paket ditolak. Anda tetap memakai versi saat ini.",

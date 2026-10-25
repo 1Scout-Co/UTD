@@ -21,7 +21,16 @@ const HOST_TEXT = {
   "Đã mở UTD để tải cả kênh": "openedForChannel",
   "Đã mở UTD để chọn link": "openedForLinks",
 }
-const fromHost = (text) => (HOST_TEXT[text] ? t(HOST_TEXT[text]) : text)
+// Câu có mã (`[mã] câu`, src-tauri/src/coded.rs): mã đã biết ⇒ chữ của tiện ích; mã khác ⇒ bỏ mã, giữ câu.
+const HOST_CODES = {
+  "link.drive_folder": "driveFolder",
+}
+const fromHost = (text) => {
+  if (HOST_TEXT[text]) return t(HOST_TEXT[text])
+  const coded = /^\[([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)\] ([\s\S]*)$/.exec(text)
+  if (!coded) return text
+  return HOST_CODES[coded[1]] ? t(HOST_CODES[coded[1]]) : coded[2]
+}
 
 // Lô "Tải tất cả link": UTD nhận tối đa 2000 link (src-tauri/src/batch.rs), tin nhắn native ≤ 1 MiB.
 const MAX_BATCH_LINKS = 2000

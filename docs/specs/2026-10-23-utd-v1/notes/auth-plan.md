@@ -478,6 +478,28 @@ Kiểm (Windows):
 - Thêm bài thử: engine `a_sign_in_wait_takes_a_new_link_only_with_the_cookies`, unit `recovery` (mã đăng nhập ⇒
   `Link`, task con và `auth.pipe` thì không), app `a_sign_in_after_restart_waits_like_an_expired_link`.
 
+#### Thử thật trên Chrome của chủ dự án (2026-10-25, bản release từ nhánh này)
+
+- **Lỗi 1 — không hỏi được quyền:** manifest khai `optional_host_permissions: ["http://*/*", "https://*/*"]` mà app
+  xin `*://*.google.com/*`; Chrome ném "Only permissions specified in the manifest may be requested.", popup nuốt
+  lỗi và chỉ báo "Trình duyệt chưa cho phép". `ext-auth.cjs` không bắt được vì bản "đã cho phép" khai sẵn quyền.
+  - Sửa: hai manifest khai `["*://*/*"]` (phiên chính sửa, đã thử: chủ dự án cho phép google.com thành công).
+  - Popup hiện đúng câu lỗi của trình duyệt khi `permissions.request` ném lỗi.
+  - Bài thử: Rust `both_extensions_may_request_every_pattern_utd_asks_for` (mẫu `permission_pattern` sinh ra phải
+    nằm trong manifest cả hai trình duyệt); e2e `extension-permissions.spec.ts` chạy tiện ích thật trong Chromium,
+    xin `cookies` + mẫu của app trong cú bấm ⇒ Chrome hỏi (không ném lỗi); cả hai bài đỏ với manifest cũ.
+- **Lỗi 2 — trang thư mục Drive:** Drive mở file xem trước đè lên `drive.google.com/drive/my-drive`, địa chỉ tab
+  không đổi; "Tải trang này" gửi link thư mục ⇒ 3 dòng tải "my-drive" lỗi.
+  - Sửa: `media_pages::is_drive_folder` (`drive.google.com/` và `/drive/…`) ⇒ mã `link.drive_folder` "Mở file ở
+    trang riêng rồi thử lại", ở mọi đường (IPC trả lỗi trước khi gắn link, Thêm URL, lô link); tiện ích đổi câu có
+    mã sang chữ của nó (16 ngôn ngữ).
+  - Còn mở: tìm id file đang xem trước trong DOM của Drive để tải thẳng; đường `drive.google.com/file/d/…/view`
+    qua yt-dlp có cookie chưa thử thật.
+- `auth-e2e.py` chạy lại trên bản release: đạt 6 bước, 0 file chứa cookie mồi; sửa cách đếm yêu cầu sau khi mở lại
+  (chỉ dòng `GET`/`HEAD`).
+- Trên máy này app do phiên AI mở thì Chrome không nối được (pipe/AppData của phiên bị cô lập): thử thật phải để
+  chủ dự án tự mở app.
+
 Chưa làm, cần chủ dự án:
 - Thử với tài khoản thật: YouTube giới hạn tuổi, file Google Drive riêng (Q6).
 - Cần nạp tiện ích bản mới và chạy bản UTD mới. Native host đang đăng ký trên máy là của bản 0.1.0, chưa hiểu tin

@@ -748,6 +748,7 @@
   "err.channel.bad_key": "Geçersiz kanal anahtarı veya video kimliği.",
   "err.batch.invalid": "Bağlantı listesi geçersiz.",
   "err.batch.channel_link": "Bu bir kanal bağlantısı: kanalın videolarını seçmek için “URL ekle” alanına yapıştırın.",
+  "err.link.drive_folder": "Bu bir Google Drive klasörü, dosya değil. Dosyayı kendi sayfasında açıp tekrar deneyin.",
   "err.update.disabled": "Bu derlemede otomatik güncelleme açık değil.",
   "err.update.latest": "En son sürümü kullanıyorsunuz.",
   "err.update.bad_signature": "Güncelleme paketinin imzası hatalı olduğu için reddedildi. Geçerli sürümü kullanmaya devam ediyorsunuz.",

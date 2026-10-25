@@ -66,8 +66,9 @@ button.addEventListener("click", async () => {
 // Popup chỉ hỏi UTD trang này có việc chờ không; cookie chỉ được đọc sau khi người dùng bấm.
 let pending = null
 
-function showAuthError(code) {
-  authStatus.textContent = t(AUTH_ERRORS[code] ?? "authDenied")
+/** `detail`: câu lỗi thật của trình duyệt (vd mẫu quyền không có trong manifest), hiện thay câu chung. */
+function showAuthError(code, detail) {
+  authStatus.textContent = detail || t(AUTH_ERRORS[code] ?? "authDenied")
   authStatus.className = "error"
   authCard.dataset.s = "S-71"
 }
@@ -94,20 +95,26 @@ async function loadAuth(tab) {
   }
 }
 
-/** Phải gọi ngay trong cú bấm (trước mọi `await` khác): trình duyệt chỉ hỏi quyền khi người dùng vừa bấm. */
+/**
+ * Phải gọi ngay trong cú bấm (trước mọi `await` khác): trình duyệt chỉ hỏi quyền khi người dùng vừa bấm.
+ * `true` = đã cho phép; `false` = người dùng từ chối; chuỗi = trình duyệt ném lỗi (câu lỗi của nó).
+ */
 function askPermission() {
   return api.permissions
     .request({ permissions: ["cookies"], origins: [pending.origin] })
-    .catch(() => false)
+    .catch((error) => String(error?.message || error))
+}
+
+/** Không được phép thì báo (câu lỗi thật nếu có) và bỏ tick. */
+function refused(granted) {
+  if (granted === true) return false
+  showAuthError("auth.denied", typeof granted === "string" ? granted : null)
+  authSwitch.checked = false
+  return true
 }
 
 authUse.addEventListener("click", async () => {
-  const granted = await askPermission()
-  if (!granted) {
-    showAuthError("auth.denied")
-    authSwitch.checked = false
-    return
-  }
+  if (refused(await askPermission())) return
   authSwitch.checked = true
   authUse.disabled = true
   await api.storage.local.set({ [`sensitive:${pending.site}`]: Boolean(pending.sensitive) })
@@ -127,12 +134,7 @@ authUse.addEventListener("click", async () => {
 
 authSwitch.addEventListener("change", async () => {
   if (authSwitch.checked) {
-    const granted = await askPermission()
-    authSwitch.checked = granted
-    if (!granted) {
-      showAuthError("auth.denied")
-      return
-    }
+    if (refused(await askPermission())) return
     await api.storage.local.set({ [`sensitive:${pending.site}`]: Boolean(pending.sensitive) })
   } else {
     await api.permissions.remove({ origins: [pending.origin] }).catch(() => false)

@@ -138,6 +138,16 @@ pub fn is_channel_page(raw: &str) -> bool {
     matches_site(raw, CHANNEL_SITES)
 }
 
+/// Trang thư mục/danh sách Google Drive (`/drive/my-drive`, `/drive/folders/…`): không phải file. Drive mở file xem
+/// trước đè lên trang này mà không đổi địa chỉ, nên "Tải trang này" từng gửi nhầm link thư mục (bản thử thật
+/// 2026-10-25): báo cách làm, không tạo dòng tải hỏng.
+pub fn is_drive_folder(raw: &str) -> bool {
+    matches_site(raw, &[("drive.google.com", drive_folder)])
+}
+
+pub const DRIVE_FOLDER: &str =
+    "[link.drive_folder] Đây là thư mục Google Drive, không phải file. Mở file ở trang riêng rồi thử lại.";
+
 fn matches_site(raw: &str, sites: &[(&str, Rule)]) -> bool {
     let Ok(url) = utd_engine::validate_url(raw.trim()) else {
         return false;
@@ -219,6 +229,10 @@ fn is_file_name(part: &str) -> bool {
 
 fn is_digits(part: &str) -> bool {
     !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn drive_folder(page: &Page<'_>) -> bool {
+    !page.has(0) || page.at(0) == "drive"
 }
 
 fn short_link(page: &Page<'_>) -> bool {
@@ -507,6 +521,28 @@ mod tests {
         "not a url",
         "",
     ];
+
+    #[test]
+    fn drive_folders_are_not_files() {
+        for url in [
+            "https://drive.google.com/drive/my-drive",
+            "https://drive.google.com/drive/u/0/my-drive",
+            "https://drive.google.com/drive/folders/1AbC?usp=sharing",
+            "https://drive.google.com/drive/shared-with-me",
+            "https://drive.google.com/",
+        ] {
+            assert!(is_drive_folder(url), "{url}");
+        }
+        for url in [
+            "https://drive.google.com/file/d/1AbC/view?usp=sharing",
+            "https://drive.google.com/uc?id=1AbC&export=download",
+            "https://drive.usercontent.google.com/download?id=1AbC",
+            "https://docs.google.com/drive/my-drive",
+            "https://example.com/drive/my-drive",
+        ] {
+            assert!(!is_drive_folder(url), "{url}");
+        }
+    }
 
     #[test]
     fn channel_pages_open_the_channel_flow() {

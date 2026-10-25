@@ -17,6 +17,7 @@
   "menuAll": { "message": "UTD로 모든 링크 다운로드" },
   "readLinksFailed": { "message": "이 페이지의 링크를 읽을 수 없습니다." },
   "noLinks": { "message": "이 페이지에서 다운로드할 수 있는 링크를 찾지 못했습니다." },
+  "driveFolder": { "message": "Google 드라이브 폴더이며 파일이 아닙니다. 파일을 별도 페이지에서 연 다음 다시 시도하세요." },
   "tooManyLinks": { "message": "한 번에 보내는 링크가 너무 많습니다." },
   "openedForChannel": { "message": "채널 전체를 다운로드하도록 UTD를 열었습니다." },
   "openedForLinks": { "message": "링크를 선택하도록 UTD를 열었습니다." },

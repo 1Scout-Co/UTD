@@ -60,6 +60,9 @@ pub(crate) fn enqueue_download(
     if crate::media_pages::is_channel_page(&input.url) {
         return Err(crate::media_pages::channel_page_error(&input.url));
     }
+    if crate::media_pages::is_drive_folder(&input.url) {
+        return Err(crate::media_pages::DRIVE_FOLDER.into());
+    }
     let dest_dir = download_dir_for(&app, input.dest_dir.as_deref())?;
     let place = if input.later { Place::Back } else { Place::Front };
     let grant = signed_in(&app, input.auth_grant.as_deref(), &input.url);

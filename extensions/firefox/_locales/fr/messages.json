@@ -17,6 +17,7 @@
   "menuAll": { "message": "Télécharger tous les liens avec UTD" },
   "readLinksFailed": { "message": "Impossible de lire les liens de cette page." },
   "noLinks": { "message": "Aucun lien téléchargeable trouvé sur cette page." },
+  "driveFolder": { "message": "Ceci est un dossier Google Drive, pas un fichier. Ouvrez le fichier sur sa propre page, puis réessayez." },
   "tooManyLinks": { "message": "Trop de liens en un seul envoi." },
   "openedForChannel": { "message": "UTD est ouvert pour télécharger toute la chaîne." },
   "openedForLinks": { "message": "UTD est ouvert pour choisir les liens." },

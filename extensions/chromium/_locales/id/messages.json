@@ -17,6 +17,7 @@
   "menuAll": { "message": "Unduh semua tautan dengan UTD" },
   "readLinksFailed": { "message": "Gagal membaca tautan di halaman ini." },
   "noLinks": { "message": "Tidak ada tautan yang dapat diunduh di halaman ini." },
+  "driveFolder": { "message": "Ini folder Google Drive, bukan file. Buka file di halamannya sendiri, lalu coba lagi." },
   "tooManyLinks": { "message": "Terlalu banyak tautan dalam satu kiriman." },
   "openedForChannel": { "message": "UTD dibuka untuk mengunduh seluruh channel." },
   "openedForLinks": { "message": "UTD dibuka untuk memilih tautan." },

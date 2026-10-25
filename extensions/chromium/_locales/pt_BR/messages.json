@@ -17,6 +17,7 @@
   "menuAll": { "message": "Baixar todos os links com o UTD" },
   "readLinksFailed": { "message": "Não foi possível ler os links desta página." },
   "noLinks": { "message": "Nenhum link para download encontrado nesta página." },
+  "driveFolder": { "message": "Esta é uma pasta do Google Drive, não um arquivo. Abra o arquivo em uma página própria e tente novamente." },
   "tooManyLinks": { "message": "Links demais em um único envio." },
   "openedForChannel": { "message": "O UTD foi aberto para baixar o canal inteiro." },
   "openedForLinks": { "message": "O UTD foi aberto para escolher os links." },

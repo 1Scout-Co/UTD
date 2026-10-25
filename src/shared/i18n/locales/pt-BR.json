@@ -764,6 +764,7 @@
   "err.channel.bad_key": "Chave do canal ou ID do vídeo inválido.",
   "err.batch.invalid": "A lista de links é inválida.",
   "err.batch.channel_link": "Este é um link de canal: cole-o em Adicionar URL para escolher os vídeos do canal.",
+  "err.link.drive_folder": "Esta é uma pasta do Google Drive, não um arquivo. Abra o arquivo em uma página própria e tente novamente.",
   "err.update.disabled": "Esta versão não tem atualização automática ativada.",
   "err.update.latest": "Você já está na versão mais recente.",
   "err.update.bad_signature": "A assinatura do pacote de atualização é inválida, por isso ele foi recusado. Você continua na versão atual.",

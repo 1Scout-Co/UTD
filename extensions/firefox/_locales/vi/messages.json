@@ -17,6 +17,7 @@
   "menuAll": { "message": "Tải tất cả link bằng UTD" },
   "readLinksFailed": { "message": "Không đọc được link trên trang này." },
   "noLinks": { "message": "Không thấy link tải được trên trang." },
+  "driveFolder": { "message": "Đây là thư mục Google Drive, không phải file. Mở file ở trang riêng rồi thử lại." },
   "tooManyLinks": { "message": "Quá nhiều link trong một lần gửi." },
   "openedForChannel": { "message": "Đã mở UTD để tải cả kênh." },
   "openedForLinks": { "message": "Đã mở UTD để chọn link." },

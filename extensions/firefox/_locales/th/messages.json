@@ -17,6 +17,7 @@
   "menuAll": { "message": "ดาวน์โหลดลิงก์ทั้งหมดด้วย UTD" },
   "readLinksFailed": { "message": "อ่านลิงก์ในหน้านี้ไม่ได้" },
   "noLinks": { "message": "ไม่พบลิงก์ที่ดาวน์โหลดได้ในหน้านี้" },
+  "driveFolder": { "message": "นี่คือโฟลเดอร์ Google ไดรฟ์ ไม่ใช่ไฟล์ เปิดไฟล์ในหน้าของไฟล์นั้นแล้วลองอีกครั้ง" },
   "tooManyLinks": { "message": "ลิงก์มากเกินไปสำหรับการส่งครั้งเดียว" },
   "openedForChannel": { "message": "เปิด UTD เพื่อดาวน์โหลดทั้งช่องแล้ว" },
   "openedForLinks": { "message": "เปิด UTD เพื่อเลือกลิงก์แล้ว" },

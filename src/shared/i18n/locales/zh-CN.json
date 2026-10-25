@@ -732,6 +732,7 @@
   "err.channel.bad_key": "频道标识或视频 ID 无效。",
   "err.batch.invalid": "链接列表无效。",
   "err.batch.channel_link": "这是频道链接：请粘贴到“添加 URL”中以选择频道的视频。",
+  "err.link.drive_folder": "这是 Google 云端硬盘文件夹，不是文件。请在单独的页面中打开文件，然后重试。",
   "err.update.disabled": "此版本未启用自动更新。",
   "err.update.latest": "已是最新版本。",
   "err.update.bad_signature": "更新包签名错误，已被拒绝。你仍在使用当前版本。",

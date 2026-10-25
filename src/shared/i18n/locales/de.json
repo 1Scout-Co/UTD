@@ -748,6 +748,7 @@
   "err.channel.bad_key": "Ungültiger Kanalschlüssel oder ungültige Video-ID.",
   "err.batch.invalid": "Die Linkliste ist ungültig.",
   "err.batch.channel_link": "Das ist ein Kanallink: in „URL hinzufügen“ einfügen, um die Videos des Kanals auszuwählen.",
+  "err.link.drive_folder": "Das ist ein Google-Drive-Ordner, keine Datei. Öffne die Datei auf einer eigenen Seite und versuche es erneut.",
   "err.update.disabled": "Automatische Updates sind in diesem Build nicht aktiviert.",
   "err.update.latest": "Die neueste Version ist installiert.",
   "err.update.bad_signature": "Die Signatur des Updatepakets ist falsch, daher wurde es abgelehnt. Die aktuelle Version bleibt installiert.",

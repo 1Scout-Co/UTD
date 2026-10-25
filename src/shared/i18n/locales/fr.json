@@ -764,6 +764,7 @@
   "err.channel.bad_key": "Clé de chaîne ou identifiant de vidéo non valide.",
   "err.batch.invalid": "La liste de liens n’est pas valide.",
   "err.batch.channel_link": "C’est un lien de chaîne : collez-le dans « Ajouter une URL » pour choisir les vidéos de la chaîne.",
+  "err.link.drive_folder": "Ceci est un dossier Google Drive, pas un fichier. Ouvrez le fichier sur sa propre page, puis réessayez.",
   "err.update.disabled": "La mise à jour automatique n’est pas activée dans cette version.",
   "err.update.latest": "Vous avez la dernière version.",
   "err.update.bad_signature": "La signature du paquet de mise à jour est incorrecte : il a été rejeté. Vous restez sur la version actuelle.",

@@ -12,6 +12,14 @@ import sys
 import time
 
 app, data, downloads, site_log = sys.argv[1:5]
+
+
+def site_requests():
+    """Số yêu cầu trang thử đã nhận (dòng `GET …`/`HEAD …` authsite.py in ra)."""
+    with open(site_log, encoding="utf-8", errors="replace") as log:
+        return sum(1 for line in log if line.startswith(("GET ", "HEAD ")))
+
+
 BASE = "http://127.0.0.1:8768"
 PAGE = BASE + "/page"
 CANARY = "UTDCANARYe2e" + str(int(time.time()))
@@ -102,12 +110,13 @@ try:
     print("  đang tải:", wait(slow_url, lambda t: t["bytes"] > 2 * 1024 * 1024, 30))
     proc.kill()
     proc.wait()
-    lines_before = len(open(site_log, encoding="utf-8", errors="replace").read().splitlines())
+    # Đếm dòng yêu cầu (GET/HEAD) của trang thử, không đếm traceback ConnectionResetError lúc giết app.
+    time.sleep(1)
+    requests_before = site_requests()
     proc = start()
     after = wait(slow_url, lambda t: t["status"] == "failed", 30)
     time.sleep(1)
-    lines_after = len(open(site_log, encoding="utf-8", errors="replace").read().splitlines())
-    print("  mở lại app:", after, "yêu cầu mới tới trang:", lines_after - lines_before)
+    print("  mở lại app:", after, "yêu cầu mới tới trang:", site_requests() - requests_before)
 
     # 5. Popup "Tiếp tục": tải nốt từ phần đã có.
     print("5 popup hỏi:", native({"version": 2, "type": "auth-pending", "url": PAGE}).get("auth", {}).get("pending"))

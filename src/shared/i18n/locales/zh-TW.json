@@ -732,6 +732,7 @@
   "err.channel.bad_key": "頻道識別碼或影片 ID 無效。",
   "err.batch.invalid": "連結清單無效。",
   "err.batch.channel_link": "這是頻道連結：請貼到「新增 URL」以選擇頻道的影片。",
+  "err.link.drive_folder": "這是 Google 雲端硬碟資料夾，不是檔案。請在獨立頁面開啟檔案，然後再試一次。",
   "err.update.disabled": "此版本未啟用自動更新。",
   "err.update.latest": "已是最新版本。",
   "err.update.bad_signature": "更新套件簽章錯誤，已遭拒絕。您仍在使用目前版本。",

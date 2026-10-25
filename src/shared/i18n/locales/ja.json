@@ -732,6 +732,7 @@
   "err.channel.bad_key": "チャンネルキーまたは動画IDが無効です。",
   "err.batch.invalid": "リンクの一覧が無効です。",
   "err.batch.channel_link": "これはチャンネルのリンクです。「URLを追加」に貼り付けて、チャンネルの動画を選択してください。",
+  "err.link.drive_folder": "これは Google ドライブのフォルダで、ファイルではありません。ファイルを単独のページで開いてから、もう一度お試しください。",
   "err.update.disabled": "このビルドでは自動アップデートが有効になっていません。",
   "err.update.latest": "最新バージョンを使用しています。",
   "err.update.bad_signature": "アップデートパッケージの署名が正しくないため、拒否しました。現在のバージョンを引き続き使用できます。",

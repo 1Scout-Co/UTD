@@ -764,6 +764,7 @@
   "err.channel.bad_key": "Clave de canal o ID de vídeo no válidos.",
   "err.batch.invalid": "La lista de enlaces no es válida.",
   "err.batch.channel_link": "Es un enlace de canal: pégalo en Añadir URL para elegir los vídeos del canal.",
+  "err.link.drive_folder": "Esta es una carpeta de Google Drive, no un archivo. Abre el archivo en su propia página y vuelve a intentarlo.",
   "err.update.disabled": "Esta versión no tiene activada la actualización automática.",
   "err.update.latest": "Ya tienes la última versión.",
   "err.update.bad_signature": "La firma del paquete de actualización no es válida, así que se ha rechazado. Sigues con la versión actual.",

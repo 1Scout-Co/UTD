@@ -6,7 +6,7 @@
   "description": "__MSG_extDescription__",
   "permissions": ["contextMenus", "nativeMessaging", "storage", "activeTab", "scripting"],
   "optional_permissions": ["cookies"],
-  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "optional_host_permissions": ["*://*/*"],
   "background": {
     "scripts": ["background.js"]
   },

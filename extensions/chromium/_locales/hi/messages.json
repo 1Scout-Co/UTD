@@ -17,6 +17,7 @@
   "menuAll": { "message": "सभी लिंक UTD से डाउनलोड करें" },
   "readLinksFailed": { "message": "इस पेज के लिंक पढ़े नहीं जा सके।" },
   "noLinks": { "message": "इस पेज पर डाउनलोड करने योग्य कोई लिंक नहीं मिला।" },
+  "driveFolder": { "message": "यह Google Drive फ़ोल्डर है, फ़ाइल नहीं। फ़ाइल को उसके अपने पेज पर खोलें, फिर दोबारा कोशिश करें।" },
   "tooManyLinks": { "message": "एक बार में भेजने के लिए बहुत ज़्यादा लिंक हैं।" },
   "openedForChannel": { "message": "पूरा चैनल डाउनलोड करने के लिए UTD खोला गया।" },
   "openedForLinks": { "message": "लिंक चुनने के लिए UTD खोला गया।" },

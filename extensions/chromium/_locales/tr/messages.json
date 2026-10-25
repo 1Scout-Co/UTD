@@ -17,6 +17,7 @@
   "menuAll": { "message": "Tüm bağlantıları UTD ile indir" },
   "readLinksFailed": { "message": "Bu sayfadaki bağlantılar okunamadı." },
   "noLinks": { "message": "Bu sayfada indirilebilir bağlantı bulunamadı." },
+  "driveFolder": { "message": "Bu bir Google Drive klasörü, dosya değil. Dosyayı kendi sayfasında açıp tekrar deneyin." },
   "tooManyLinks": { "message": "Tek gönderimde çok fazla bağlantı var." },
   "openedForChannel": { "message": "Kanalın tamamını indirmek için UTD açıldı." },
   "openedForLinks": { "message": "Bağlantıları seçmek için UTD açıldı." },

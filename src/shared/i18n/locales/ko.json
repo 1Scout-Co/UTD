@@ -732,6 +732,7 @@
   "err.channel.bad_key": "채널 키 또는 동영상 ID가 올바르지 않습니다.",
   "err.batch.invalid": "링크 목록이 올바르지 않습니다.",
   "err.batch.channel_link": "채널 링크입니다. ‘URL 추가’에 붙여넣어 채널의 동영상을 선택하세요.",
+  "err.link.drive_folder": "Google 드라이브 폴더이며 파일이 아닙니다. 파일을 별도 페이지에서 연 다음 다시 시도하세요.",
   "err.update.disabled": "이 빌드는 자동 업데이트가 켜져 있지 않습니다.",
   "err.update.latest": "최신 버전을 사용 중입니다.",
   "err.update.bad_signature": "업데이트 패키지의 서명이 올바르지 않아 거부되었습니다. 현재 버전을 계속 사용합니다.",

@@ -732,6 +732,7 @@
   "err.channel.bad_key": "Khoá kênh hoặc id video không hợp lệ.",
   "err.batch.invalid": "Danh sách link không hợp lệ.",
   "err.batch.channel_link": "Đây là link kênh: dán vào ô Thêm URL để chọn video của kênh.",
+  "err.link.drive_folder": "Đây là thư mục Google Drive, không phải file. Mở file ở trang riêng rồi thử lại.",
   "err.update.disabled": "Bản này chưa bật tự cập nhật.",
   "err.update.latest": "Bạn đang dùng bản mới nhất.",
   "err.update.bad_signature": "Gói cập nhật sai chữ ký nên đã bị từ chối. Bạn vẫn dùng bản hiện tại.",

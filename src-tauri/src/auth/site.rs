@@ -109,6 +109,51 @@ mod tests {
         assert_eq!(permission_pattern("intranet"), "*://intranet/*");
     }
 
+    /// Mẫu quyền `declared` (manifest) có chứa trọn mẫu `requested` không, theo luật match pattern của Chrome:
+    /// `permissions.request` chỉ nhận mẫu nằm gọn trong một mẫu đã khai, không thì ném lỗi.
+    fn covers(declared: &str, requested: &str) -> bool {
+        let split = |pattern: &str| -> (String, String, String) {
+            let (scheme, rest) = pattern.split_once("://").expect("scheme");
+            let (host, path) = rest.split_once('/').expect("path");
+            (scheme.into(), host.into(), format!("/{path}"))
+        };
+        let (declared_scheme, declared_host, declared_path) = split(declared);
+        let (scheme, host, path) = split(requested);
+        let scheme_ok = declared_scheme == "*" || (declared_scheme == scheme && scheme != "*");
+        let host_ok = declared_host == "*"
+            || declared_host == host
+            || declared_host.strip_prefix("*.").is_some_and(|base| {
+                let host = host.strip_prefix("*.").unwrap_or(&host);
+                host == base || host.ends_with(&format!(".{base}"))
+            });
+        let path_ok = declared_path == "/*" || declared_path == path;
+        scheme_ok && host_ok && path_ok
+    }
+
+    #[test]
+    fn both_extensions_may_request_every_pattern_utd_asks_for() {
+        assert!(!covers("http://*/*", "*://*.google.com/*"), "lỗi bản thử thật 2026-10-25");
+        for manifest in [
+            include_str!("../../../extensions/chromium/manifest.json"),
+            include_str!("../../../extensions/firefox/manifest.json"),
+        ] {
+            let manifest: serde_json::Value = serde_json::from_str(manifest).expect("manifest");
+            let declared: Vec<&str> = manifest["optional_host_permissions"]
+                .as_array()
+                .expect("optional_host_permissions")
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect();
+            for site in ["google.com", "dropbox.com", "127.0.0.1", "[::1]", "localhost"] {
+                let pattern = permission_pattern(site);
+                assert!(
+                    declared.iter().any(|declared| covers(declared, &pattern)),
+                    "{pattern} không nằm trong {declared:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn cookies_belong_to_their_site_only() {
         assert!(owns("google.com", ".google.com"));

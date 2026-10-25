@@ -17,6 +17,7 @@
   "menuAll": { "message": "用 UTD 下载所有链接" },
   "readLinksFailed": { "message": "无法读取此页面上的链接。" },
   "noLinks": { "message": "此页面上没有可下载的链接。" },
+  "driveFolder": { "message": "这是 Google 云端硬盘文件夹，不是文件。请在单独的页面中打开文件，然后重试。" },
   "tooManyLinks": { "message": "单次发送的链接过多。" },
   "openedForChannel": { "message": "已打开 UTD 以下载整个频道。" },
   "openedForLinks": { "message": "已打开 UTD 以选择链接。" },
