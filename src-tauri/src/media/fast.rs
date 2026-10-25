@@ -52,11 +52,12 @@ fn job_urls(job: &MediaJob) -> Vec<&str> {
         .collect()
 }
 
-pub(super) struct YtDlp<'a>(pub &'a MediaTools);
+/// yt-dlp thật; có lần cho phép thì kèm cookie của trang (pipe).
+pub(super) struct YtDlp<'a>(pub &'a MediaTools, pub Option<&'a crate::auth::Grant>);
 
 impl Resolver for YtDlp<'_> {
     fn resolve<'a>(&'a self, url: &'a str, selector: &'a str) -> ResolveFuture<'a> {
-        Box::pin(resolve::resolve(self.0, url, selector))
+        Box::pin(resolve::resolve(self.0, url, selector, self.1))
     }
 }
 
@@ -70,6 +71,9 @@ pub(super) struct Fast<'a> {
     pub cancel: CancellationToken,
     /// Lúc job bắt đầu chạy: mốc của log `media.timing`.
     pub started: Instant,
+    /// Cookie đăng nhập của task (chỉ ở RAM) cho các task con: engine chỉ gửi tới đúng miền, nên luồng
+    /// googlevideo… không nhận cookie nào.
+    pub cookies: Option<Arc<utd_engine::auth::CookieJar>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -479,7 +483,7 @@ fn spawn_parts(
             cancel: siblings.child_token(),
             events: Some(events.clone()),
             initial_connections,
-            cookies: None,
+            cookies: fast.cookies.clone(),
         };
         workers.spawn(async move { engine.resume(&id, control).await });
     }

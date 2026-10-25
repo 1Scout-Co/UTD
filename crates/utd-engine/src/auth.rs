@@ -179,6 +179,37 @@ impl CookieJar {
         Some(value)
     }
 
+    /// Nội dung cookies.txt (Netscape) cho yt-dlp, chỉ trong bộ nhớ: app đưa qua named pipe, không ghi đĩa
+    /// (notes/auth-plan.md §5.1). Cookie cả miền ghi `.miền` + `TRUE` như MozillaCookieJar đòi; cookie
+    /// phiên ghi hạn 0.
+    pub fn netscape(&self) -> Zeroizing<String> {
+        let mut text = Zeroizing::new(String::from("# Netscape HTTP Cookie File\n"));
+        for cookie in self.lock().iter() {
+            if !cookie.host_only {
+                text.push('.');
+            }
+            text.push_str(&cookie.domain);
+            text.push_str(if cookie.host_only {
+                "\tFALSE\t"
+            } else {
+                "\tTRUE\t"
+            });
+            text.push_str(&cookie.path);
+            text.push_str(if cookie.secure {
+                "\tTRUE\t"
+            } else {
+                "\tFALSE\t"
+            });
+            text.push_str(&cookie.expires.unwrap_or(0).max(0).to_string());
+            text.push('\t');
+            text.push_str(&cookie.name);
+            text.push('\t');
+            text.push_str(&cookie.value);
+            text.push('\n');
+        }
+        text
+    }
+
     /// Gộp `Set-Cookie` máy chủ trả cho yêu cầu tới `url` (RFC 6265 §5.2–5.3, phần cần cho tải file).
     pub fn absorb<'a>(&self, url: &Url, set_cookies: impl IntoIterator<Item = &'a HeaderValue>) {
         let Some(host) = host_of(url) else {
@@ -486,6 +517,19 @@ mod tests {
         let plain = Url::parse("http://example.com/a").unwrap();
         jar.absorb(&plain, [HeaderValue::from_static("s=1; Secure")].iter());
         assert_eq!(header(&jar, "https://example.com/a"), None);
+    }
+
+    #[test]
+    fn writes_a_netscape_cookie_file_for_yt_dlp() {
+        let mut dated = cookie("dated", "example.com", true, "/a", false);
+        dated.expires = Some(2_000_000_000);
+        let jar = CookieJar::new([cookie("SID", ".google.com", false, "/", true), dated]);
+        assert_eq!(
+            jar.netscape().as_str(),
+            "# Netscape HTTP Cookie File\n\
+             .google.com\tTRUE\t/\tTRUE\t0\tSID\tv-SID\n\
+             example.com\tFALSE\t/a\tFALSE\t2000000000\tdated\tv-dated\n"
+        );
     }
 
     #[test]

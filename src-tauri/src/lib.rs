@@ -1,5 +1,6 @@
 #[cfg(target_os = "macos")]
 mod app_nap;
+mod auth;
 mod batch;
 mod browser_integration;
 mod coded;
@@ -224,6 +225,7 @@ pub fn run() {
                 journal,
                 running,
                 queue: queue.clone(),
+                auth: Arc::default(),
             });
             queue.start(Arc::new(queue::AppRuntime(app.handle().clone())));
             // Task media chờ công cụ tự tải nằm trong hàng mà không giữ chỗ: công cụ xong thì chạy.
@@ -262,6 +264,9 @@ pub fn run() {
             media::add_media_download,
             media::channel::channel_list,
             media::channel::channel_list_cancel,
+            auth::settings::auth_status,
+            auth::settings::set_auth_enabled,
+            auth::settings::forget_auth_cookies,
             media_pages::take_media_request,
             batch::take_batch_request,
             batch::add_batch_downloads,

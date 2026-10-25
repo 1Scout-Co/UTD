@@ -399,6 +399,7 @@ impl Lab {
             ffmpeg: Some(self.ffmpeg.clone()),
             cancel,
             started: Instant::now(),
+            cookies: None,
         }
     }
 

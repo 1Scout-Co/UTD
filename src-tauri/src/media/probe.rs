@@ -4,7 +4,14 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::time::{timeout, Duration};
 
-use crate::media::{auto, probe_cache, resolve, tools, yt_dlp_command};
+use crate::media::{
+    auto, probe_cache, resolve, run_signed, sign_in_pipe_error, tools, yt_dlp_signed,
+};
+
+/// Lỗi có mã ⇒ câu "[mã] lời" như các lỗi Phân tích khác (giao diện dịch theo mã).
+fn coded(error: utd_engine::TaskError) -> ProbeFailure {
+    ProbeFailure::from(format!("[{}] {}", error.code, error.message))
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,12 +80,14 @@ impl From<String> for ProbeFailure {
 }
 
 /// `ffmpeg_available`: có ffmpeg, hoặc app đang tự tải (lúc bấm Tải thì task chờ ffmpeg xong).
+/// `grant`: đăng nhập của trình duyệt cho trang này (S-14), cookie qua pipe.
 pub async fn probe(
     tools: &tools::MediaTools,
     url: &str,
     ffmpeg_available: bool,
+    grant: Option<&crate::auth::Grant>,
 ) -> Result<MediaProbeResult, ProbeFailure> {
-    let mut command = yt_dlp_command(tools);
+    let (mut command, pipe) = yt_dlp_signed(tools, grant).map_err(coded)?;
     command
         .args([
             "--encoding",
@@ -99,10 +108,14 @@ pub async fn probe(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = timeout(Duration::from_secs(45), command.output())
+    let (output, cookies_read) = timeout(Duration::from_secs(45), run_signed(command, pipe.as_ref()))
         .await
         .map_err(|_| "[probe.timeout] Nguồn media phản hồi quá lâu.".to_string())?
         .map_err(|error| format!("[media.spawn] Không chạy được yt-dlp: {error}"))?;
+    // Có đăng nhập mà yt-dlp không đọc cookie: kết quả là của người chưa đăng nhập, không dùng.
+    if !cookies_read {
+        return Err(coded(sign_in_pipe_error()));
+    }
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ProbeFailure {
@@ -561,7 +574,7 @@ pub(super) fn classify_stderr(stderr: &str) -> String {
         || message.contains("cookies")
         || message.contains("not a bot")
     {
-        return "[media.login] Nguồn này cần đăng nhập hoặc cookie. UTD chưa gửi cookie ở bản này.".into();
+        return "[media.login] Nguồn này cần đăng nhập.".into();
     }
     if message.contains("unsupported url") || message.contains("no video formats found") {
         return "[probe.unsupported] URL này chưa được hỗ trợ hoặc không có định dạng tải được.".into();

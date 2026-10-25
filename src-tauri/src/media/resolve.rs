@@ -8,7 +8,9 @@ use serde_json::Value;
 use tokio::time::timeout;
 use utd_engine::{validate_url, ErrorClass, TaskError};
 
-use crate::media::{ffmpeg_location, runner, tools, yt_dlp_command};
+use crate::media::{
+    ffmpeg_location, run_signed, runner, sign_in_pipe_error, tools, yt_dlp_signed,
+};
 
 /// YouTube bóp tốc độ yêu cầu Range lớn: mỗi yêu cầu xin tối đa chừng này khi yt-dlp không nói.
 pub(super) const DEFAULT_CHUNK: u64 = 10 * 1024 * 1024;
@@ -111,8 +113,9 @@ pub(super) async fn resolve(
     tools: &tools::MediaTools,
     url: &str,
     selector: &str,
+    grant: Option<&crate::auth::Grant>,
 ) -> Result<Resolved, TaskError> {
-    let mut command = yt_dlp_command(tools);
+    let (mut command, pipe) = yt_dlp_signed(tools, grant)?;
     command.args([
         "--encoding",
         "utf-8",
@@ -134,10 +137,13 @@ pub(super) async fn resolve(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = timeout(RESOLVE_TIMEOUT, command.output())
+    let (output, cookies_read) = timeout(RESOLVE_TIMEOUT, run_signed(command, pipe.as_ref()))
         .await
         .map_err(|_| failure("media.network", "Nguồn media phản hồi quá lâu."))?
         .map_err(|error| failure("media.spawn", &format!("Không chạy được yt-dlp: {error}")))?;
+    if !cookies_read {
+        return Err(sign_in_pipe_error());
+    }
     if !output.status.success() {
         return Err(runner::classify_failure(&String::from_utf8_lossy(
             &output.stderr,

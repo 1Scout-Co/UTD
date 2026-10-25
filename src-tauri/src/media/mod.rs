@@ -66,6 +66,9 @@ pub struct AddMediaInput {
     pub subfolder: Option<String>,
     /// Tải cả kênh: video này của kênh nào, để lần sau "Tải video mới" bỏ qua.
     pub channel: Option<channel::ChannelPick>,
+    /// Lần cho phép đăng nhập (src/auth) đi kèm hộp Tải media / lô link: yt-dlp và engine dùng cookie đó.
+    #[serde(default)]
+    pub auth_grant: Option<String>,
 }
 
 impl AddMediaInput {
@@ -82,6 +85,7 @@ impl AddMediaInput {
             later: false,
             subfolder: None,
             channel: None,
+            auth_grant: None,
         }
     }
 }
@@ -181,8 +185,13 @@ pub(crate) async fn interactive_tools(auto: Option<&Auto>) -> Result<tools::Medi
 /// Phân tích một link (hộp Tải media). yt-dlp lỗi kiểu extractor ⇒ kiểm bản mới, có thì cài rồi phân
 /// tích lại một lần.
 #[tauri::command]
-pub async fn media_probe(app: AppHandle, url: String) -> Result<probe::MediaProbeResult, String> {
+pub async fn media_probe(
+    app: AppHandle,
+    url: String,
+    auth_grant: Option<String>,
+) -> Result<probe::MediaProbeResult, String> {
     let url = validate_url(&url).map_err(|error| error.to_string())?;
+    let grant = crate::commands::signed_in(&app, auth_grant.as_deref(), url.as_str());
     let auto = auto_tools(&app);
     let mut retried = false;
     loop {
@@ -191,10 +200,16 @@ pub async fn media_probe(app: AppHandle, url: String) -> Result<probe::MediaProb
             || auto
                 .as_ref()
                 .is_some_and(|auto| auto.will_install(sources::Tool::Ffmpeg));
-        let failure = match probe::probe(&tools, url.as_str(), ffmpeg).await {
+        let failure = match probe::probe(&tools, url.as_str(), ffmpeg, grant.as_deref()).await {
             Ok(result) => return Ok(result),
             Err(failure) => failure,
         };
+        // S-14: popup tiện ích đếm hộp này vào việc chờ đăng nhập của trang.
+        if (failure.message.starts_with("[media.login]") || failure.message.starts_with("[auth."))
+            && let Some(site) = crate::auth::site::of_url(url.as_str())
+        {
+            app.state::<AppState>().auth.wait_dialog(&site, url.as_str());
+        }
         let refreshed = match &auto {
             Some(auto) if !retried && failure.outdated => {
                 auto.refresh_after_failure(&tools.yt_dlp_version).await
@@ -233,7 +248,11 @@ fn enqueue_media(app: AppHandle, mut input: AddMediaInput) -> Result<DownloadTas
     let destination = with_subfolder(folder, input.subfolder.as_deref())?;
     let place = if input.later { Place::Back } else { Place::Front };
     let pick = input.channel.take();
-    let task = create_media(&journal, &destination, input)?;
+    let grant = crate::commands::signed_in(&app, input.auth_grant.as_deref(), &input.url);
+    let task = create_media(&journal, &destination, input, grant.as_deref())?;
+    if let Some(grant) = &grant {
+        app.state::<AppState>().auth.bind(&task.id, &grant.id);
+    }
     if let Err(error) = queue.submit(vec![Entry::new(task.id.clone())], place) {
         let _ = journal.delete_task(&task.id);
         return Err(error);
@@ -251,6 +270,7 @@ pub(crate) fn create_media(
     journal: &Journal,
     destination: &Path,
     input: AddMediaInput,
+    grant: Option<&crate::auth::Grant>,
 ) -> Result<DownloadTask, String> {
     let url = validate_url(&input.url).map_err(|error| error.to_string())?;
     let choice = checked_choice(&input)?;
@@ -280,6 +300,9 @@ pub(crate) fn create_media(
     task.kind = TaskKind::Media;
     task.status = TaskStatus::Queued;
     task.hash_state = HashState::Unavailable;
+    if let Some(grant) = grant {
+        task.auth_sites = vec![grant.site.clone()];
+    }
     task.validate().map_err(|error| error.to_string())?;
     journal.save_task(&task).map_err(|error| error.to_string())?;
 
@@ -381,7 +404,7 @@ pub(crate) fn spawn_media_run(
         return Err("download is already running".into());
     }
     tauri::async_runtime::spawn(async move {
-        if let Err(message) = runner::run(app.clone(), journal, task_id.clone(), cancel).await {
+        if let Err(message) = runner::run(app.clone(), journal.clone(), task_id.clone(), cancel).await {
             let _ = app.emit(
                 ERROR_EVENT,
                 BridgeError {
@@ -389,6 +412,12 @@ pub(crate) fn spawn_media_run(
                     message,
                 },
             );
+        }
+        // Xong rồi thì không giữ cookie cho task này nữa (notes/auth-plan.md §6).
+        if let Ok(Some(task)) = journal.load_task(&task_id)
+            && task.status == TaskStatus::Completed
+        {
+            app.state::<AppState>().auth.release(&task_id);
         }
         running.remove(&task_id);
         crate::queue::finished(&app, &task_id);
@@ -477,6 +506,62 @@ pub(crate) fn yt_dlp_command(tools: &tools::MediaTools) -> tokio::process::Comma
     let mut command = tokio_command(&tools.yt_dlp);
     command.args(isolation_args(tools)).args(js_runtime_args(tools));
     command
+}
+
+/// Lệnh yt-dlp kèm đăng nhập nếu có lần cho phép: cookie qua named pipe (`auth::pipe`, không ghi đĩa) và
+/// User-Agent của trình duyệt (có trang gắn phiên với User-Agent). Người gọi chạy bằng `run_signed` (báo PID
+/// cho pipe) hoặc tự `allow(pid)` ngay sau khi sinh.
+pub(crate) fn yt_dlp_signed(
+    tools: &tools::MediaTools,
+    grant: Option<&crate::auth::Grant>,
+) -> Result<(tokio::process::Command, Option<crate::auth::pipe::CookiePipe>), utd_engine::TaskError> {
+    let mut command = yt_dlp_command(tools);
+    let Some(grant) = grant else {
+        return Ok((command, None));
+    };
+    let pipe = crate::auth::pipe::open(&grant.jar).map_err(|error| {
+        log::warn!("cookie pipe for yt-dlp failed: {error}");
+        sign_in_pipe_error()
+    })?;
+    command.arg("--cookies").arg(pipe.path());
+    if let Some(agent) = &grant.user_agent {
+        command.arg("--user-agent").arg(agent);
+    }
+    Ok((command, Some(pipe)))
+}
+
+/// yt-dlp không nhận được cookie (pipe lỗi, hoặc yt-dlp bỏ qua không báo): không bao giờ tải tiếp như chưa
+/// đăng nhập (notes/auth-plan.md §5.1).
+pub(crate) fn sign_in_pipe_error() -> utd_engine::TaskError {
+    utd_engine::TaskError {
+        class: utd_engine::ErrorClass::User,
+        code: "auth.pipe".into(),
+        message: "UTD không đưa được đăng nhập cho yt-dlp.".into(),
+    }
+}
+
+/// Như `Command::output`, nhưng báo PID cho pipe cookie ngay khi sinh. `Ok((output, false))` = có pipe mà
+/// yt-dlp không đọc cookie: kết quả không đáng tin.
+pub(crate) async fn run_signed(
+    mut command: tokio::process::Command,
+    pipe: Option<&crate::auth::pipe::CookiePipe>,
+) -> std::io::Result<(std::process::Output, bool)> {
+    let child = command.spawn()?;
+    if let (Some(pipe), Some(pid)) = (pipe, child.id()) {
+        pipe.allow(pid);
+    }
+    let output = child.wait_with_output().await?;
+    let Some(pipe) = pipe else {
+        return Ok((output, true));
+    };
+    // Cờ bật ở tác vụ phục vụ pipe ngay khi yt-dlp đọc xong; chờ chút cho lượt rất nhanh.
+    for _ in 0..15 {
+        if pipe.loaded() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    Ok((output, pipe.loaded()))
 }
 
 /// Không nạp file cấu hình (của người dùng, cạnh exe, của bản cài qua WinGet/Scoop) và plugin ngoài: một

@@ -17,7 +17,7 @@ use crate::media::finish::{
 use crate::media::preset::{self, Settled};
 use crate::media::sources::Tool;
 use crate::media::{
-    auto_tools, fast, ffmpeg_location, kill_tree, tools, yt_dlp_command,
+    auto_tools, fast, ffmpeg_location, kill_tree, sign_in_pipe_error, tools, yt_dlp_signed,
 };
 use crate::state::AppState;
 
@@ -133,9 +133,17 @@ async fn attempt(
     };
     let elapsed = started.elapsed().as_millis();
     log::info!("media.timing task={task_id} tools ms={elapsed}");
+    // Cần đăng nhập mà không còn cookie (vd vừa mở lại app): chờ người dùng cho phép lại (S-72), không
+    // chạy yt-dlp như người chưa đăng nhập.
+    let grant = app.state::<AppState>().auth.for_task(task_id);
+    if !task.auth_sites.is_empty() && grant.is_none() {
+        fail(&app, &journal, &mut task, utd_engine::auth::auth_required())?;
+        return Ok(Attempt::Done);
+    }
+    let grant = grant.as_deref();
     // Lô link (chất lượng chung): Phân tích lúc tới lượt, lấy selector thật và tên theo tiêu đề.
     // yt-dlp lỗi kiểu extractor lúc Phân tích ⇒ như lúc tải: kiểm bản mới, có thì chạy lại một lần.
-    let job = match preset::settle(&app, &journal, &mut task, job, &tools, &cancel).await? {
+    let job = match preset::settle(&app, &journal, &mut task, job, &tools, &cancel, grant).await? {
         Settled::Ready(job) => job,
         Settled::Stopped => return Ok(Attempt::Done),
         Settled::Outdated(message) => {
@@ -171,7 +179,7 @@ async fn attempt(
 
     // Luồng http(s) thường: engine UTD tự tải nhiều kết nối, nhanh hơn yt-dlp (một kết nối/luồng).
     // Lượt đầu dùng luồng của lần "Phân tích" nếu còn hạn; lấy link mới thì hỏi yt-dlp.
-    let resolver = fast::YtDlp(&tools);
+    let resolver = fast::YtDlp(&tools, grant);
     let fast_path = fast::Fast {
         engine: app.state::<AppState>().engine.clone(),
         journal: journal.clone(),
@@ -180,6 +188,7 @@ async fn attempt(
         ffmpeg: tools.ffmpeg.clone(),
         cancel: cancel.clone(),
         started,
+        cookies: grant.map(|grant| grant.jar.clone()),
     };
     match fast::run(&fast_path, &mut task, &job).await {
         Ok(fast::FastEnd::Handled) => return Ok(Attempt::Done),
@@ -219,7 +228,13 @@ async fn attempt(
         .replace('%', "%%");
     let template = format!("{stem}.%(ext)s");
 
-    let mut command = yt_dlp_command(&tools);
+    let (mut command, pipe) = match yt_dlp_signed(&tools, grant) {
+        Ok(signed) => signed,
+        Err(error) => {
+            fail(&app, &journal, &mut task, error)?;
+            return Ok(Attempt::Done);
+        }
+    };
     // --print ngầm bật --quiet nên phải bật lại --progress; --encoding giữ đường dẫn Unicode.
     command
         .arg("--encoding")
@@ -278,6 +293,9 @@ async fn attempt(
             return Ok(Attempt::Done);
         }
     };
+    if let (Some(pipe), Some(pid)) = (&pipe, child.id()) {
+        pipe.allow(pid);
+    }
     let stdout = child
         .stdout
         .take()
@@ -316,6 +334,16 @@ async fn attempt(
             message = receiver.recv() => {
                 match message {
                     Some(StreamMessage::Out(line)) => {
+                        // Có đăng nhập mà yt-dlp không đọc cookie (bỏ qua không báo): dừng trước byte
+                        // đầu, không tải như người chưa đăng nhập.
+                        if pipe.as_ref().is_some_and(|pipe| !pipe.loaded()) && parse_progress(&line).is_some() {
+                            kill_tree(&mut child).await;
+                            let _ = child.wait().await;
+                            out_task.abort();
+                            err_task.abort();
+                            fail(&app, &journal, &mut task, sign_in_pipe_error())?;
+                            return Ok(Attempt::Done);
+                        }
                         if let Some(progress) = parse_progress(&line) {
                             speed = progress.speed.unwrap_or(0);
                             let (part_downloaded, part_total) = parts.update(&progress);

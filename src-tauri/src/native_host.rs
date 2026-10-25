@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_URL_BYTES: usize = 8192;
 
-/// `type`: `download` (một link) hoặc `batch` (lô link "Tải tất cả link bằng UTD", trong `urls`).
-#[derive(Debug, Deserialize)]
+/// `type`: `download` (một link), `batch` (lô link "Tải tất cả link bằng UTD", trong `urls`); bản 2 thêm
+/// `auth-pending` (popup hỏi trang đang mở có task chờ đăng nhập không) và `auth-renew` (popup gửi cookie để
+/// tải tiếp). Không derive `Debug`: `auth` mang cookie.
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HostRequest {
     version: u32,
@@ -19,6 +21,9 @@ struct HostRequest {
     suggested_name: Option<String>,
     #[serde(default)]
     urls: Vec<String>,
+    /// Bản 2: cookie đăng nhập của trang, tiện ích đọc trong cú bấm. Chuyển nguyên, app kiểm (src/auth).
+    #[serde(default)]
+    auth: Option<serde_json::Value>,
 }
 
 fn is_web_url(value: &str) -> bool {
@@ -27,9 +32,10 @@ fn is_web_url(value: &str) -> bool {
 
 /// Tin nhắn từ trình duyệt ⇒ dòng JSON gửi qua pipe (chưa kèm token). App kiểm lại lần nữa (`ipc.rs`).
 fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
-    if request.version != 1 {
+    if !matches!(request.version, 1 | 2) {
         return Err("Yêu cầu từ trình duyệt không hợp lệ.".into());
     }
+    let auth = request.auth.clone().filter(|_| request.version >= 2);
     // Trang đang mở (để UTD mở đúng luồng media); bỏ qua nếu lạ thay vì từ chối cả yêu cầu.
     let page_url = request.page_url.as_deref().map(str::trim).filter(|page| is_web_url(page));
     match request.kind.as_str() {
@@ -47,6 +53,7 @@ fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
                 "url": url,
                 "suggestedName": suggested_name,
                 "pageUrl": page_url,
+                "auth": auth,
             }))
         }
         "batch" => {
@@ -66,7 +73,19 @@ fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
                 "url": page_url.unwrap_or(""),
                 "pageUrl": page_url,
                 "batch": urls,
+                "auth": auth,
             }))
+        }
+        // `url` là tab đang mở; `auth-renew` bắt buộc có cookie.
+        "auth-pending" | "auth-renew" if request.version >= 2 => {
+            let url = request.url.trim();
+            if !is_web_url(url) {
+                return Err("Chỉ hỗ trợ URL HTTP/HTTPS.".into());
+            }
+            if request.kind == "auth-renew" && auth.is_none() {
+                return Err("Yêu cầu từ trình duyệt không hợp lệ.".into());
+            }
+            Ok(serde_json::json!({ "url": url, "kind": request.kind, "auth": auth }))
         }
         _ => Err("Yêu cầu từ trình duyệt không hợp lệ.".into()),
     }
@@ -78,6 +97,9 @@ struct HostResponse {
     ok: bool,
     task_id: Option<String>,
     message: Option<String>,
+    /// Trả lời `auth-pending` / `auth-renew` (trang, số task chờ…), không có cookie.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth: Option<serde_json::Value>,
 }
 
 pub fn invoked() -> bool {
@@ -109,6 +131,7 @@ pub fn run() -> i32 {
                 ok: false,
                 task_id: None,
                 message: Some(message),
+                auth: None,
             });
             1
         }
@@ -182,6 +205,8 @@ fn exchange<S: Read + Write>(mut stream: S, payload: &str) -> Result<HostRespons
         ok: bool,
         task_id: Option<String>,
         message: Option<String>,
+        #[serde(default)]
+        auth: Option<serde_json::Value>,
     }
     let response: Response =
         serde_json::from_str(line.trim()).map_err(|_| "UTD trả về dữ liệu lạ.".to_string())?;
@@ -189,6 +214,7 @@ fn exchange<S: Read + Write>(mut stream: S, payload: &str) -> Result<HostRespons
         ok: response.ok,
         task_id: response.task_id,
         message: response.message,
+        auth: response.auth,
     })
 }
 
@@ -293,12 +319,42 @@ mod tests {
         .unwrap();
         assert_eq!(
             payload,
-            serde_json::json!({ "url": "https://example.com/a.zip", "suggestedName": null, "pageUrl": null })
+            serde_json::json!({ "url": "https://example.com/a.zip", "suggestedName": null, "pageUrl": null, "auth": null })
         );
         let bad = message(serde_json::json!({ "version": 1, "type": "download", "url": "file:///c:/x" }));
         assert!(pipe_payload(&bad).is_err());
-        let old = message(serde_json::json!({ "version": 2, "type": "download", "url": "https://a.b/c" }));
-        assert!(pipe_payload(&old).is_err());
+        let future = message(serde_json::json!({ "version": 3, "type": "download", "url": "https://a.b/c" }));
+        assert!(pipe_payload(&future).is_err());
+    }
+
+    /// Bản 2 chuyển nguyên phần `auth` cho app kiểm; bản 1 không mang cookie dù có gửi.
+    #[test]
+    fn version_two_carries_sign_in_requests() {
+        let auth = serde_json::json!({ "site": "google.com", "cookies": [{ "name": "SID", "value": "x", "domain": ".google.com" }] });
+        let link = |version: u32| {
+            pipe_payload(&message(serde_json::json!({
+                "version": version, "type": "download", "url": "https://drive.google.com/file/d/1/view", "auth": auth,
+            })))
+            .unwrap()
+        };
+        assert_eq!(link(2)["auth"], auth);
+        assert_eq!(link(1)["auth"], serde_json::Value::Null);
+
+        let pending = pipe_payload(&message(serde_json::json!({
+            "version": 2, "type": "auth-pending", "url": "https://drive.google.com/drive/my-drive",
+        })))
+        .unwrap();
+        assert_eq!(pending["kind"], "auth-pending");
+        assert_eq!(pending["url"], "https://drive.google.com/drive/my-drive");
+
+        let renew = |value: serde_json::Value| pipe_payload(&message(value));
+        assert!(renew(serde_json::json!({ "version": 2, "type": "auth-renew", "url": "https://drive.google.com/" })).is_err());
+        assert!(renew(serde_json::json!({ "version": 2, "type": "auth-renew", "url": "chrome://settings", "auth": auth })).is_err());
+        assert!(renew(serde_json::json!({ "version": 1, "type": "auth-renew", "url": "https://drive.google.com/", "auth": auth })).is_err());
+        assert_eq!(
+            renew(serde_json::json!({ "version": 2, "type": "auth-renew", "url": "https://drive.google.com/", "auth": auth })).unwrap()["auth"],
+            auth
+        );
     }
 
     #[test]
@@ -330,7 +386,7 @@ mod tests {
         for request in [
             serde_json::json!({ "version": 1, "type": "download", "url": format!("file:///c:/{secret}") }),
             serde_json::json!({ "version": 1, "type": "download", "url": format!("https://a.b/?t={secret}{}", "x".repeat(MAX_URL_BYTES)) }),
-            serde_json::json!({ "version": 2, "type": "download", "url": format!("https://a.b/?t={secret}") }),
+            serde_json::json!({ "version": 3, "type": "download", "url": format!("https://a.b/?t={secret}") }),
             serde_json::json!({ "version": 1, "type": secret, "url": "https://a.b/" }),
             serde_json::json!({ "version": 1, "type": "batch", "urls": [format!("javascript:{secret}")] }),
         ] {

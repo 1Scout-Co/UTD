@@ -26,6 +26,9 @@ pub struct AddDownloadInput {
     /// `true` ⇒ xếp cuối hàng đợi ("Thêm vào hàng đợi"); mặc định chen đầu hàng.
     #[serde(default)]
     pub later: bool,
+    /// Lần cho phép đăng nhập (src/auth) của cú bấm trên trình duyệt: task tải kèm cookie của trang đó.
+    #[serde(default)]
+    pub auth_grant: Option<String>,
 }
 
 /// Ngoài luồng giao diện: tạo/kiểm thư mục tải trên ổ mạng đang tắt có thể treo nhiều giây.
@@ -59,19 +62,38 @@ pub(crate) fn enqueue_download(
     }
     let dest_dir = download_dir_for(&app, input.dest_dir.as_deref())?;
     let place = if input.later { Place::Back } else { Place::Front };
-    let (task, entry) = create_download(&engine, &dest_dir, input)?;
+    let grant = signed_in(&app, input.auth_grant.as_deref(), &input.url);
+    let (task, entry) = create_download(&engine, &dest_dir, input, grant.as_deref())?;
+    if let (Some(grant), Some(state)) = (&grant, app.try_state::<AppState>()) {
+        state.auth.bind(&task.id, &grant.id);
+    }
     queue.submit(vec![entry], place)?;
     Ok(task)
 }
 
+/// Lần cho phép `grant_id` còn sống và đúng trang của `url` (lô link: link trang khác không kèm cookie).
+pub(crate) fn signed_in(
+    app: &AppHandle,
+    grant_id: Option<&str>,
+    url: &str,
+) -> Option<Arc<crate::auth::Grant>> {
+    let grant = app.try_state::<AppState>()?.auth.get(grant_id?)?;
+    (crate::auth::site::of_url(url).as_deref() == Some(grant.site.as_str())).then_some(grant)
+}
+
 /// Tạo task HTTP trong journal, chưa xếp hàng (`dest_dir` đã kiểm). Lô link dùng chung (batch.rs).
+/// Có lần cho phép ⇒ task ghi dấu cần đăng nhập ở trang đó và gắn với lần cho phép (cookie chỉ ở RAM).
 pub(crate) fn create_download(
     engine: &DownloadEngine,
     dest_dir: &Path,
     input: AddDownloadInput,
+    grant: Option<&crate::auth::Grant>,
 ) -> Result<(DownloadTask, Entry), String> {
     let allow_rename = input.file_name.is_none();
     let mut request = DownloadRequest::new(input.url, dest_dir.to_string_lossy().into_owned());
+    if let Some(grant) = grant {
+        request.auth_sites = vec![grant.site.clone()];
+    }
     request.file_name = input.file_name.filter(|value| !value.trim().is_empty());
     // Không gửi số kết nối ⇒ tự động (engine tự dò tới mức tối đa); có gửi thì chỉ là trần.
     let max_connections = engine.options().max_connections;
@@ -146,6 +168,7 @@ pub fn remove_download(
         return Err("pause the download before removing it".into());
     }
     state.queue.forget(&task_id);
+    state.auth.release(&task_id);
     remove_task(&state.journal, &task_id, delete_files.unwrap_or(false))
 }
 
@@ -537,18 +560,27 @@ pub(crate) fn spawn_run(
             emit_engine_event(&event_app, event);
         }
     });
+    let auth = app.state::<AppState>().auth.clone();
+    let journal = app.state::<AppState>().journal.clone();
     tauri::async_runtime::spawn(async move {
         let control = DownloadControl {
             cancel,
             events: Some(sender),
             initial_connections: None,
-            cookies: None,
+            // Chỉ ở RAM: mở lại app thì không còn, task cần đăng nhập dừng với `auth.required` (S-72).
+            cookies: auth.for_task(&task_id).map(|grant| grant.jar.clone()),
         };
         let result = if resume {
             engine.resume(&task_id, control).await
         } else {
             engine.run_new(&task_id, control, allow_rename).await
         };
+        if let Ok(outcome) = &result
+            && outcome.is_completed()
+        {
+            auth.release(&task_id);
+            crate::auth::flow::forget_signed_link(&journal, outcome.task());
+        }
         if let Err(error) = result {
             let _ = app.emit(
                 ERROR_EVENT,

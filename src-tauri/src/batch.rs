@@ -36,6 +36,10 @@ pub struct BatchInput {
     /// `true` ⇒ "Thêm vào hàng đợi" (cuối hàng); mặc định "Bắt đầu ngay" (chen đầu hàng, giữ thứ tự lô).
     #[serde(default)]
     pub later: bool,
+    /// Lần cho phép đăng nhập của trang gửi lô (`BatchRequest::auth_grant`): chỉ link cùng trang kèm cookie,
+    /// link sang trang khác tải không cookie (chống trang lạ mượn đăng nhập, notes/auth-plan.md §7 T8).
+    #[serde(default)]
+    pub auth_grant: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,18 +74,23 @@ fn add_batch(app: &AppHandle, input: BatchInput) -> Result<BatchResult, String> 
     let mut names = Names::default();
     let (mut tasks, mut entries, mut failed) = (Vec::new(), Vec::new(), Vec::new());
     for url in input.urls {
+        let grant = crate::commands::signed_in(app, input.auth_grant.as_deref(), &url);
         let made = if crate::media_pages::is_media_page(&url) {
-            let media = AddMediaInput::with_quality(url.clone(), quality.clone());
-            crate::media::create_media(&state.journal, &folder, media)
+            let mut media = AddMediaInput::with_quality(url.clone(), quality.clone());
+            media.auth_grant = grant.as_ref().map(|grant| grant.id.clone());
+            crate::media::create_media(&state.journal, &folder, media, grant.as_deref())
                 .map(|task| (Entry::new(task.id.clone()), task))
         } else if crate::media_pages::is_channel_page(&url) {
             // Không tải trang HTML của kênh: lô giữ lại link này kèm cách làm.
             Err(crate::media_pages::CHANNEL_IN_BATCH.to_string())
         } else {
-            add_file(&state, &folder, &mut names, url.clone())
+            add_file(&state, &folder, &mut names, url.clone(), grant.as_deref())
         };
         match made {
             Ok((entry, task)) => {
+                if let Some(grant) = &grant {
+                    state.auth.bind(&task.id, &grant.id);
+                }
                 entries.push(entry);
                 tasks.push(task);
             }
@@ -104,6 +113,7 @@ fn add_file(
     folder: &Path,
     names: &mut Names,
     url: String,
+    grant: Option<&crate::auth::Grant>,
 ) -> Result<(Entry, DownloadTask), String> {
     let input = AddDownloadInput {
         url,
@@ -112,8 +122,10 @@ fn add_file(
         connections: None,
         expected_sha256: None,
         later: false,
+        auth_grant: None,
     };
-    let (mut task, mut entry) = crate::commands::create_download(&state.engine, folder, input)?;
+    let (mut task, mut entry) =
+        crate::commands::create_download(&state.engine, folder, input, grant)?;
     let taken = |name: &str| names.used(name) || folder.join(name).exists();
     if taken(&task.file_name) {
         let name = free_name(&task.file_name, taken);
@@ -303,6 +315,7 @@ mod tests {
         let request = |link: &str| BatchRequest {
             urls: links(&[link]),
             page_url: None,
+            auth_grant: None,
         };
         assert!(pending.hold(&request("https://example.com/1.zip")));
         assert!(pending.hold(&request("https://example.com/2.zip")));

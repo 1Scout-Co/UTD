@@ -591,6 +591,7 @@ mod tests {
         let request = |url: &str| MediaRequest {
             url: url.into(),
             page_url: None,
+            auth_grant: None,
         };
         assert!(pending.hold(&request("https://youtu.be/a")));
         assert!(pending.hold(&request("https://youtu.be/b")));
