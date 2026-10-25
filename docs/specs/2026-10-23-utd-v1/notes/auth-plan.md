@@ -473,7 +473,8 @@ Kiểm (Windows):
   - Chẩn đoán (S-72) của download thường: nút chính "Cập nhật link…", thêm "Mở trang"; task media chỉ "Mở trang".
 - IPC: link có cảnh báo trước khi tải (S-22, `Route::Confirm`) mang lần cho phép của cú bấm sang hộp Thêm hàng loạt.
 - Bundle JS: main riêng 199,14 kB; ghép xong 200,09 kB / 200 kB (vượt 91 B) dù đã cắt: gộp ba hook nghe sự kiện
-  (`use-app-event.ts`), S-73 chỉ hiện số trang (đúng SPEC), công tắc lên đầu mục, bỏ icon `LogIn`. Chờ quyết.
+  (`use-app-event.ts`), S-73 chỉ hiện số trang (đúng SPEC), công tắc lên đầu mục, bỏ icon `LogIn`. Chủ dự án
+  cho nâng giới hạn lên 201 kB (2026-10-25, ghi trong AI_RULES.md).
 - Thêm bài thử: engine `a_sign_in_wait_takes_a_new_link_only_with_the_cookies`, unit `recovery` (mã đăng nhập ⇒
   `Link`, task con và `auth.pipe` thì không), app `a_sign_in_after_restart_waits_like_an_expired_link`.
 
