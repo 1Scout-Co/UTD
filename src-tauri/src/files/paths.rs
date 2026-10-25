@@ -9,18 +9,6 @@ use utd_engine::{DownloadTask, validate_file_name};
 
 use super::text;
 
-/// Đuôi hay bị dùng làm mồi: `hoa-don.pdf.exe` trông như PDF khi Windows ẩn đuôi.
-const DECOYS: [&str; 34] = [
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "odt", "jpg", "jpeg",
-    "png", "gif", "bmp", "webp", "svg", "heic", "mp3", "mp4", "m4a", "mkv", "avi", "mov", "wmv",
-    "wav", "flac", "zip", "rar", "7z", "iso", "html", "htm",
-];
-
-/// Cùng một danh sách với Download Guard, để đổi tên không lách được cách ly.
-pub(super) fn runs_code(extension: &str) -> bool {
-    safety::dangerous_extension(&extension.to_ascii_lowercase())
-}
-
 /// Đuôi file viết thường; rỗng khi không có đuôi.
 pub(super) fn extension_of(name: &str) -> String {
     Path::new(name)
@@ -30,45 +18,19 @@ pub(super) fn extension_of(name: &str) -> String {
         .to_lowercase()
 }
 
-/// Ký tự vô hình hoặc đảo chiều chữ (bidi): `phim\u{202E}4pm.exe` hiện thành `phimexe.mp4`.
-fn is_hidden_char(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{061C}'
-            | '\u{180E}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{2069}'
-            | '\u{FEFF}'
-            | '\u{FFF9}'..='\u{FFFB}'
-    )
-}
-
-/// Tên mới hợp lệ cho Windows và không giả dạng loại file khác. Trả tên đã bỏ khoảng trắng hai đầu.
+/// Tên mới hợp lệ cho Windows và không giả dạng loại file khác (cùng luật với cảnh báo trước khi tải:
+/// `safety::hidden_char`, `safety::spoofed_name`). Trả tên đã bỏ khoảng trắng hai đầu.
 pub(super) fn check_new_name(raw: &str) -> Result<String, String> {
     let name = raw.trim();
     if name.is_empty() {
         return Err(text::EMPTY_NAME.into());
     }
-    if name.chars().any(is_hidden_char) {
+    if name.chars().any(safety::hidden_char) {
         return Err(text::HIDDEN_CHARS.into());
     }
     validate_file_name(name).map_err(|_| text::BAD_NAME.to_string())?;
-    let parts: Vec<&str> = name.split('.').collect();
-    if let [.., last] = parts.as_slice()
-        && parts.len() >= 2
-        && runs_code(last)
-    {
-        let decoy = match parts.as_slice() {
-            [_, .., inner, _] => DECOYS.contains(&inner.trim().to_lowercase().as_str()),
-            _ => false,
-        };
-        // Nhiều khoảng trắng liền nhau đẩy đuôi thật ra khỏi chỗ nhìn thấy.
-        if decoy || name.contains("   ") {
-            return Err(text::SPOOFED.into());
-        }
+    if safety::spoofed_name(name) {
+        return Err(text::SPOOFED.into());
     }
     Ok(name.to_string())
 }
@@ -263,8 +225,9 @@ mod tests {
     fn extension_helpers() {
         assert_eq!(extension_of("Game.EXE"), "exe");
         assert_eq!(extension_of("README"), "");
-        assert!(runs_code("Ps1"));
-        assert!(!runs_code("zip"));
+        // Cùng danh sách với Download Guard, để đổi tên không lách được cách ly.
+        assert!(safety::dangerous_extension(&extension_of("x.Ps1")));
+        assert!(!safety::dangerous_extension(&extension_of("x.zip")));
     }
 
     #[test]

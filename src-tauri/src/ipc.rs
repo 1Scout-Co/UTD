@@ -25,6 +25,9 @@ struct PipeRequest {
     batch: Option<Vec<String>>,
 }
 
+/// Câu trả cho extension khi link cần người dùng xác nhận cảnh báo trước khi tải (S-22).
+const CONFIRM_NOTE: &str = "Đã mở UTD để xác nhận file này";
+
 /// Một dòng yêu cầu tối đa chừng này byte: lô `batch::MAX_LINKS` link (native host đã giới hạn 1 MiB).
 const MAX_REQUEST_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -38,6 +41,9 @@ enum Route {
     Batch(Vec<String>),
     /// Trang kênh: cùng sự kiện với trang video, giao diện nhận ra link kênh và mở hộp Tải cả kênh.
     Channel,
+    /// Link file có cảnh báo trước khi tải (S-22: loại chạy được, HTTP, tên giả…): không tự bắt đầu,
+    /// mở hộp Thêm hàng loạt với đúng link này để người dùng xem cảnh báo rồi quyết.
+    Confirm(Vec<String>),
     Download,
 }
 
@@ -55,9 +61,25 @@ fn route(request: &PipeRequest, token: &str) -> Route {
         Route::Media
     } else if crate::media_pages::is_channel_page(&request.url) {
         Route::Channel
+    } else if let Some(links) = needs_confirm(request) {
+        Route::Confirm(links)
     } else {
         Route::Download
     }
+}
+
+/// Link có cảnh báo (tên trình duyệt gợi ý, hoặc tên lấy từ link) và hợp lệ để mở hộp xác nhận.
+fn needs_confirm(request: &PipeRequest) -> Option<Vec<String>> {
+    let link = crate::preflight::LinkInput {
+        url: request.url.clone(),
+        final_url: None,
+        file_name: request.suggested_name.clone(),
+        content_type: None,
+    };
+    if crate::preflight::warnings_of(&link).is_empty() {
+        return None;
+    }
+    crate::batch::clean_links(std::slice::from_ref(&request.url)).ok()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -401,6 +423,14 @@ where
             crate::batch::open_batch_flow(&app, batch);
             PipeResponse::note(crate::batch::BATCH_NOTE)
         }
+        Route::Confirm(urls) => {
+            let batch = crate::events::BatchRequest {
+                urls,
+                page_url: crate::media_pages::clean_page_url(request.page_url),
+            };
+            crate::batch::open_batch_flow(&app, batch);
+            PipeResponse::note(CONFIRM_NOTE)
+        }
         Route::Download => {
             let input = crate::commands::AddDownloadInput {
                 url: request.url,
@@ -468,6 +498,19 @@ mod tests {
         );
         let file = "https://example.com/releases/app-1.2.3.zip";
         assert_eq!(route(&request(TOKEN, file), TOKEN), Route::Download);
+        let installer = "https://example.com/releases/setup.exe";
+        assert_eq!(
+            route(&request(TOKEN, installer), TOKEN),
+            Route::Confirm(vec![installer.into()]),
+            "file chạy được: hỏi trước (S-22), không tự tải"
+        );
+        let plain = "http://mirror.example.org/a.zip";
+        assert_eq!(route(&request(TOKEN, plain), TOKEN), Route::Confirm(vec![plain.into()]));
+        let named: PipeRequest = serde_json::from_value(serde_json::json!({
+            "token": TOKEN, "url": "https://example.com/dl?id=7", "suggestedName": "hoa-don.pdf.exe",
+        }))
+        .unwrap();
+        assert!(matches!(route(&named, TOKEN), Route::Confirm(_)), "tên trình duyệt gợi ý");
         assert_eq!(
             route(&request(TOKEN, "https://www.youtube.com/"), TOKEN),
             Route::Download,

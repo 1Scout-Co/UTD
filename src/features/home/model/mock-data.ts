@@ -7,7 +7,8 @@ import {
 } from "@/shared/i18n/format"
 import { t, type MessageKey } from "@/shared/i18n/i18n"
 
-import type { DownloadItem } from "./types"
+import type { DetailPart, DownloadDetail, TaskEvent } from "./detail"
+import type { DownloadItem, EngineSegment, EngineTaskStatus } from "./types"
 
 // Dữ liệu mẫu cho bản xem trước trên trình duyệt (không có app desktop). Chữ và số định dạng theo ngôn ngữ
 // đang chọn mỗi lần gọi.
@@ -177,6 +178,92 @@ export function demoDownloads(): DownloadItem[] {
     date: formatDate(item.sortTime),
     time: formatTime(item.sortTime),
   }))
+}
+
+/** Đoạn mẫu: chia đều, mỗi đoạn lệch quanh % chung một chút như nhiều kết nối chạy song song. */
+function demoSegments(total: number, count: number, percent: number, live: boolean): EngineSegment[] {
+  const size = Math.floor(total / count)
+  return Array.from({ length: count }, (_, index) => {
+    const start = index * size
+    const end = index === count - 1 ? total - 1 : start + size - 1
+    const length = end - start + 1
+    const share = Math.max(0, Math.min(1, percent / 100 + (((index * 7) % 5) - 2) * 0.3))
+    const downloaded = Math.round(length * share)
+    const status: EngineSegment["status"] =
+      downloaded >= length ? "done" : live && downloaded > 0 ? "active" : "pending"
+    return { index, start, end, downloaded, status }
+  })
+}
+
+const DEMO_STATUS: Record<DownloadItem["status"], EngineTaskStatus> = {
+  downloading: "downloading",
+  paused: "paused",
+  queued: "queued",
+  completed: "completed",
+  failed: "failed",
+  quarantined: "quarantined",
+  verifying: "verifying",
+}
+
+/** Chi tiết mẫu cho bản xem trước (S-15..S-21) dựng từ một dòng mẫu. */
+export function demoDetail(item: DownloadItem): DownloadDetail {
+  const status = DEMO_STATUS[item.status]
+  const total = item.sizeBytes
+  const live = status === "downloading"
+  const percent = status === "completed" ? 100 : item.progress
+  const downloaded = Math.round((total * percent) / 100)
+  const host = item.subtitle.split(" · ")[0] ?? "example.com"
+  const media = item.kind === "video"
+  const started = item.sortTime + 4000
+  const error = item.errorCode
+    ? { class: "transient" as const, code: item.errorCode, message: item.errorCode }
+    : null
+  const part = (role: DetailPart["role"], name: string, bytes: number): DetailPart => ({
+    id: `${item.id}-${role}`,
+    role,
+    fileName: name,
+    status,
+    totalBytes: bytes,
+    downloadedBytes: Math.round((bytes * percent) / 100),
+    segments: demoSegments(bytes, media ? 8 : (item.totalConnections ?? 8), percent, live),
+  })
+  const events: TaskEvent[] = [
+    { at: item.sortTime, status: "queued", downloadedBytes: 0 },
+    { at: started, status: "downloading", downloadedBytes: 0 },
+  ]
+  if (status !== "downloading" && status !== "queued") {
+    events.push({ at: started + 540_000, status, code: error?.code, downloadedBytes: downloaded })
+  }
+  return {
+    task: {
+      id: item.id,
+      url: `https://${host}/${encodeURIComponent(item.name)}`,
+      finalUrl: null,
+      fileName: item.name,
+      destDir: "D:\\Downloads\\UTD",
+      tempPath: `D:\\Downloads\\UTD\\${item.name}.part`,
+      kind: media ? "media" : "http",
+      status,
+      totalBytes: total,
+      downloadedBytes: downloaded,
+      etag: null,
+      lastModified: null,
+      expectedSha256: item.hash ? "3f6c".padEnd(64, "0") : null,
+      hashState: item.hashState ?? "pending",
+      connections: item.totalConnections ?? 16,
+      error,
+      createdAt: item.sortTime,
+      updatedAt: started,
+      completedAt: status === "completed" ? started + 540_000 : null,
+    },
+    parts: media
+      ? [part("video", `${item.name}.f399.mp4`, Math.round(total * 0.82)), part("audio", `${item.name}.f251.webm`, Math.round(total * 0.18))]
+      : [part("file", item.name, total)],
+    events,
+    targetPath: `D:\\Downloads\\UTD\\${item.name}`,
+    fileExists: status === "completed" ? true : null,
+    mediaTitle: media ? item.name : null,
+  }
 }
 
 /** Ổ đĩa mẫu ở thanh bên. */

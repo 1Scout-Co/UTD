@@ -198,13 +198,14 @@ function SonioxRow({
 }) {
   const eta =
     item.eta ?? (item.status === "queued" ? t("table.waiting") : undefined)
-  const open = groups[0]?.find((command) => command.key === "open")
+  // Nhấp đúp = việc mặc định (Chi tiết), như cửa sổ tiến độ của IDM.
+  const details = findCommand(groups, "details")
   return (
     <tr
       data-row-id={item.id}
       data-selected={selected || undefined}
       onClick={() => onSelect(item.id)}
-      onDoubleClick={() => (open && !open.disabled ? open.run() : undefined)}
+      onDoubleClick={() => (details && !details.disabled ? details.run() : undefined)}
       className={ROW}
     >
       <NameCell item={item} icon={icon} />
@@ -255,25 +256,33 @@ function EmptyResults({ onClear }: { onClear: () => void }) {
   )
 }
 
-/** F2 đổi tên hàng đang chọn (như Explorer/IDM), trừ khi đang gõ trong ô nhập hay đang mở hộp thoại/menu. */
-function useRenameShortcut(item: DownloadItem | undefined, ctx: RowContext) {
+function findCommand(groups: RowCommand[][], key: string) {
+  return groups.flat().find((command) => command.key === key)
+}
+
+// Phím tắt của hàng đang chọn (như Explorer/IDM): F2 đổi tên, Enter mở Chi tiết.
+const ROW_KEYS: Record<string, string> = { F2: "rename", Enter: "details" }
+
+/**
+ * Phím tắt cho hàng đang chọn, trừ khi đang gõ trong ô nhập, đang ở nút/link (Enter bấm nút đó) hay đang
+ * mở hộp thoại/menu.
+ */
+function useRowShortcuts(item: DownloadItem | undefined, ctx: RowContext) {
   useEffect(() => {
     if (!item) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "F2" || event.defaultPrevented) return
+      const key = ROW_KEYS[event.key]
+      if (!key || event.defaultPrevented || event.repeat) return
       const target = event.target instanceof Element ? event.target : null
-      if (
-        target?.closest(
-          "input, textarea, [contenteditable], [role=dialog], [role=menu]"
-        )
-      )
+      const busy =
+        "input, textarea, select, [contenteditable], [role=dialog], [role=menu]"
+      // Enter trên nút/link là bấm chính nút đó.
+      if (target?.closest(key === "details" ? `${busy}, button, a` : busy))
         return
-      const rename = rowCommands(item, ctx)[0]?.find(
-        (command) => command.key === "rename"
-      )
-      if (!rename || rename.disabled) return
+      const command = findCommand(rowCommands(item, ctx), key)
+      if (!command || command.disabled) return
       event.preventDefault()
-      rename.run()
+      command.run()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
@@ -385,7 +394,7 @@ export function SonioxTable({
     query
   )
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  useRenameShortcut(
+  useRowShortcuts(
     rows.find((row) => row.id === selectedId),
     ctx
   )

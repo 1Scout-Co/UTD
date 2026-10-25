@@ -61,7 +61,13 @@ export async function mockTauri(page: Page, responses: Responses) {
           listeners.set(event, [...(listeners.get(event) ?? []), Number(args.handler)])
           return args.handler
         }
-        return window.__utdResponses?.[cmd] ?? null
+        const response = window.__utdResponses?.[cmd]
+        // `PENDING` = lệnh chưa trả lời (màn đang tải); `failWith(câu)` = lệnh bị từ chối như Rust trả Err.
+        if (response && typeof response === 'object' && '__pending' in response) return new Promise(() => undefined)
+        if (response && typeof response === 'object' && '__error' in response) {
+          throw (response as { __error: string }).__error
+        }
+        return response ?? null
       },
     }
     window.__utdEmit = (event, payload) => {
@@ -69,6 +75,12 @@ export async function mockTauri(page: Page, responses: Responses) {
     }
   }, { ...DEFAULTS, ...responses })
 }
+
+/** Lệnh không bao giờ trả lời (để thấy trạng thái đang tải). */
+export const PENDING = { __pending: true }
+
+/** Lệnh trả lỗi (Rust `Err(câu)`). */
+export const failWith = (message: string) => ({ __error: message })
 
 /** Bắn sự kiện như app (`utd://…`). */
 export async function emitEvent(page: Page, event: string, payload: unknown) {
