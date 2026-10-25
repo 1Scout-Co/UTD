@@ -66,9 +66,8 @@ Sự cố nhỏ lúc kiểm (đã xử lý): lệnh `osascript` tới Finder là
 - Extension thật nạp vào trình duyệt (Load unpacked) rồi bấm chuột phải trên trang web — chưa làm để không sửa hồ sơ trình duyệt của chủ máy; đã thử đúng script/manifest mà trình duyệt sẽ chạy.
 - Hộp xin quyền thư mục Downloads: lúc tải vào `~/Downloads/UTD` macOS không hỏi gì (tải được), nên chưa chụp được hộp này.
 - Kéo-thả file/link vào cửa sổ.
-- Bản universal (x86_64) và job CI macOS chưa chạy thật (chưa push); bản arm64 dựng và chạy trên Mac thật.
-- Tự cập nhật trên mac (cần một bản phát hành thật có `latest.json` mới).
-- Thanh tiêu đề riêng (phiên điều phối đang làm): sẽ kiểm trên Mac khi ghép vào main.
+- Tự cập nhật trên mac từ bản này lên bản sau (cần bản phát hành mới hơn v0.1.0); hiện đã kiểm "Bạn đang dùng bản mới nhất" với `latest.json` thật.
+- Chạy bản universal trên Mac Intel (chỉ có Mac chip Apple; `lipo` xác nhận có cả `x86_64`).
 
 ## Lỗi nhỏ thấy trên Mac (chưa sửa, ngoài phạm vi hoặc để phiên khác)
 
@@ -88,11 +87,37 @@ Nhánh này tua nhanh lên `e847c4d`, kiểm lại trên Mac thật:
 - Tự tải công cụ với `UTD_DATA_DIR` rỗng + `UTD_TOOLS_OWN_ONLY=1` (bỏ qua Homebrew): mở app là tự tải đủ `yt-dlp` (yt-dlp_macos universal, 2026.10.21), `deno` 2.9.8 (aarch64), `ffmpeg`/`ffprobe` 9.0.2 của Martin Riedl (ký Developer ID) vào `<data>/bin`, có quyền chạy, không mang cờ quarantine; chạy `--version` cả bốn đều được.
 - **Lỗi tìm ra và đã sửa**: yt-dlp_macos (PyInstaller một file) đẻ một tiến trình con; giết tiến trình ngoài thì tiến trình con vẫn sống và vẫn ghi stdout (đo thật) ⇒ nút Dừng của Tải cả kênh trên Mac sẽ treo như lỗi Windows trước đây. Sửa: `tokio_command` đặt `process_group(0)`, `kill_tree` gửi `killpg(SIGKILL)` cho cả nhóm (`media/mod.rs`). Đo lại với yt-dlp_macos thật: tiến trình con chết theo, stdout đóng ngay. Test `kill_tree_also_stops_children_holding_the_pipe` giờ chạy cả Windows và macOS.
 - Socket Unix nhận đúng tin nhắn mới từ extension: lô link ("Đã mở UTD để chọn link") và link kênh TikTok ("Đã mở UTD để tải cả kênh").
-- **Chưa kiểm (Mac khoá màn hình lại lúc 16:49, không nhập mật khẩu)**: thanh tiêu đề (đèn giao thông thẳng hàng logo, kéo ở dải đầu, nhấp đúp theo cài đặt hệ thống, toàn màn hình, menu ⋯/chuột phải không lấn dải, hộp thoại vẫn kéo được, ảnh `titlebar-macos-*.png`), tải 1 video YouTube ra MP4 bằng bộ công cụ tự tải, hộp Thêm hàng loạt và Tải cả kênh (bấm Dừng thật trong app).
+- (Phần giao diện lúc đó chờ Mac mở khoá — đã kiểm ở mục dưới.) Danh sách cũ: thanh tiêu đề (đèn giao thông thẳng hàng logo, kéo ở dải đầu, nhấp đúp theo cài đặt hệ thống, toàn màn hình, menu ⋯/chuột phải không lấn dải, hộp thoại vẫn kéo được, ảnh `titlebar-macos-*.png`), tải 1 video YouTube ra MP4 bằng bộ công cụ tự tải, hộp Thêm hàng loạt và Tải cả kênh (bấm Dừng thật trong app).
+
+## Sau khi ghép bd1ef9c (v0.1.0) — giao diện trên Mac thật + bản phát hành
+
+Nhánh tua nhanh lên `origin/main` bd1ef9c, dựng `.app` trên Mac, chạy chế độ `UTD_DATA_DIR` + `UTD_TOOLS_OWN_ONLY=1`.
+
+Thanh tiêu đề (`ui-demos/titlebar-macos-*.png`):
+- **Lỗi tìm ra, đã sửa**: đèn giao thông cao hơn logo ~4pt (đo pixel: tâm đèn 16pt, tâm logo và dải 40px 20pt). Tauri dùng `trafficLightPosition.y` sao cho đỉnh đèn ≈ `y − 9`pt (đo `y:18` ⇒ đỉnh 9pt, `y:26` ⇒ 17pt), nên đổi `y:18 → y:22` (`tauri.macos.conf.json`): tâm đèn 19,5pt, đỉnh đèn trùng đỉnh chữ "utd" — ảnh `titlebar-macos-5-truoc-y18-lech` / `-6-sau-y22-thang-hang`. Ghi cả vào `notes/titlebar.md`.
+- Kéo ở dải trống của thanh: cửa sổ dời đúng (+100,+50) rồi về; kéo trong nội dung không dời. Đang mở hộp thoại (Thêm hàng loạt) vẫn kéo được, hộp vẫn mở.
+- Nhấp đúp (máy để mặc định, `AppleActionOnDoubleClick` chưa đặt): phóng to (0,30 – 1920×983, chừa thanh menu + Dock), nhấp lần nữa khôi phục. Không đổi cài đặt hệ thống để thử "thu nhỏ"/"không làm gì" (có test Rust riêng).
+- Toàn màn hình (⌃⌘F): đèn ẩn, logo về lề trái ~23pt, nội dung ngay dưới thanh, không chừa chỗ thừa; thoát về đúng cỡ cũ.
+- Cửa sổ không focus: đèn xám, logo mờ — `titlebar-macos-2-khong-focus`.
+- Menu chuột phải và menu ⋯ ở dòng trên cùng mở xuống dưới, không lấn lên dải 40px.
+- Chế độ tối: giao diện Soniox tự đặt bảng màu sáng (`[data-variant="soniox"]`) nên app không có chế độ tối để kiểm. **Lỗi tìm ra, đã sửa**: theme mặc định là "system" và phím D (ngoài ô nhập) đổi sáng/tối ⇒ máy để Dark Mode, hoặc lỡ gõ D, thì menu chuột phải/⋯ (vẽ ngoài khung Soniox) thành nền đen trên trang sáng — thấy cả ở bản v0.1.0. Sửa: `ThemeProvider` ghim sáng, tắt phím D (prop `hotkey` mới), khoá lưu mới `utd-theme` bỏ giá trị "dark" cũ (`src/main.tsx`, `src/components/theme-provider.tsx`).
+- **Lỗi tìm ra, đã sửa**: chuột phải vào chỗ trống hiện menu gốc của WebKit chỉ có "Reload" (bấm là tải lại cả giao diện). Sửa: chặn menu gốc ở mọi chỗ trừ ô nhập chữ (`src/shared/window/native-menu.ts`, gọi ở `main.tsx`); ô tìm vẫn có Cut/Copy/Paste, menu riêng của dòng vẫn chạy. Áp cả Windows (WebView2 có Back/Refresh/Print).
+
+Tính năng sau ghép:
+- Hộp **Thêm hàng loạt** mở bằng ⌘B; dán 3 link ⇒ tự đọc tên/kích thước, nhóm theo đuôi; "Bắt đầu ngay" chạy theo hàng đợi (1 tải, 1 chờ) — `macos-10-hang-loat.png`. (Một link bị bộ gõ tiếng Việt của Mac đổi "ER/tests" thành "Ẻ/tets" lúc tôi gõ giả lập — lỗi cách gõ thử, không phải app.)
+- **Tải 1 video ra MP4 bằng bộ công cụ tự tải**: Me at the zoo (AV1 + AAC, 19 s), có cờ quarantine.
+- **Tải cả kênh** (link @tiktok gửi từ "trình duyệt"): hộp tự mở, đọc kênh dần (602 → 1.227 video), 2 tiến trình yt-dlp (cha + con). Bấm **Dừng**: cả hai tiến trình biến mất trong 1 s (bản sửa `killpg` chạy đúng trong app), danh sách giữ phần đã đọc. Chọn 2 video ⇒ tải xong vào thư mục con `TikTok` (HEVC 1080×1920, 1:45 và 1:47, có cờ quarantine), không sót tiến trình — `macos-09-tai-ca-kenh.png`.
+- Tốc độ: có lúc ô Tốc độ ghi "0 MB/giây" khi đang tải — đã truy (dòng gỡ lỗi tạm, không commit): sự kiện tiến độ tới đều, tốc độ tức thời bằng 0 thật vì máy chủ Hetzner nghẽn (curl cùng lúc ~2 KB/s, sau đó trả 429). Không phải lỗi.
+
+Bản phát hành **v0.1.0** (tải từ Releases về Mac):
+- `UTD_0.1.0_universal.dmg` 14,5 MB: `shasum -a 256` khớp `SHA256SUMS.txt`; mount được, không hỏi điều khoản, có `UTD.app` + lối tắt `Applications`; `lipo -archs` = `x86_64 arm64`; `codesign -dv` = ad-hoc + hardened runtime, `codesign --verify --deep --strict` qua; `LSMinimumSystemVersion` 11.0. `latest.json` có `darwin-aarch64`, `darwin-x86_64` (cùng trỏ gói universal) và `windows-x86_64`.
+- Chép app ra thư mục thử, chạy với dữ liệu trống: lần đầu tự tải đủ yt-dlp/deno/ffmpeg/ffprobe; tải file 14,9 MB từ GitHub trong 1,5 s (16 kết nối, SHA256 khớp); tải video MP4; Cài đặt → Cập nhật → **Kiểm tra** ⇒ "Bạn đang dùng bản mới nhất.". (Một file thử từ Hetzner lỗi `http.429` — máy chủ chặn vì tôi tải nhiều; đã xoá vào Thùng rác qua app.)
+- Bản v0.1.0 còn 2 lỗi đã sửa trên nhánh này (đèn giao thông lệch 4pt, menu nền đen sau phím D/Dark Mode) và menu "Reload" — vào bản sau.
+
+Kiểm sau sửa: Mac + Windows (xem commit).
 
 ## Việc còn lại / gợi ý
 
-- Phiên (2) (tự tải công cụ): trên mac nút tải yt-dlp/ffmpeg hiện vẫn theo bảng Windows (`yt-dlp.exe`, `System32\tar.exe`) — phiên (2) đang làm bảng nguồn theo nền tảng; xem ghi chú bàn giao trong thư mục ghi chú chung. Người dùng mac tạm thời cài bằng `brew install yt-dlp ffmpeg` (UTD tự thấy).
 - Engine: với máy chủ giới hạn theo số kết nối (Hetzner speed test), 16 kết nối chậm hơn 8 kết nối gần một nửa — đáng để engine tự giảm số kết nối khi thêm kết nối không tăng tốc. Không riêng mac.
 - Chế độ thử `UTD_DATA_DIR` trên mac: dữ liệu WebKit (localStorage) vẫn dùng chung theo bundle id `app.utd.desktop` (Windows có `WEBVIEW2_USER_DATA_FOLDER`, mac chưa có cách tương đương đơn giản).
 - Đóng cửa sổ trên mac là thoát app (giống Windows hiện tại); người dùng mac quen app ở lại Dock — cân nhắc khi làm khay hệ thống.
