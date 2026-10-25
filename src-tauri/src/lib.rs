@@ -13,6 +13,7 @@ mod media;
 mod media_pages;
 pub mod native_host;
 mod queue;
+mod recover;
 mod state;
 mod titlebar;
 mod updater;
@@ -219,6 +220,7 @@ pub fn run() {
                 app_nap::watch(move || !running.is_empty() || auto.installs_missing());
             }
             app.manage(auto);
+            app.manage(recover::Recover::default());
             app.manage(AppState {
                 engine,
                 journal,
@@ -226,6 +228,8 @@ pub fn run() {
                 queue: queue.clone(),
             });
             queue.start(Arc::new(queue::AppRuntime(app.handle().clone())));
+            // Download chờ tự thử lại / chờ mạng / chờ chỗ trống: tới lúc thì vào lại hàng đợi.
+            recover::start(app.handle().clone());
             // Task media chờ công cụ tự tải nằm trong hàng mà không giữ chỗ: công cụ xong thì chạy.
             media::watch_tools_for_queue(app.handle());
             log::info!("UTD engine ready at {}", directory.display());
@@ -268,6 +272,9 @@ pub fn run() {
             queue::queue_settings,
             queue::set_queue_limit,
             commands::inspect_link,
+            recover::update_download_link,
+            recover::await_download_link,
+            recover::restart_download,
             updater::check_for_update,
             updater::install_update,
             updater::get_update_check,

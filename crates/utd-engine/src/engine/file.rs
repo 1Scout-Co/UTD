@@ -1,6 +1,17 @@
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+use crate::model::{ErrorClass, TaskError};
+
+/// Mã lỗi "đầy ổ" của hệ điều hành: Windows `ERROR_HANDLE_DISK_FULL`, `ERROR_DISK_FULL`,
+/// `ERROR_DISK_QUOTA_EXCEEDED`; Unix `ENOSPC`, `EDQUOT` (Linux 122, macOS 69).
+#[cfg(windows)]
+const DISK_FULL_CODES: &[i32] = &[39, 112, 1295];
+#[cfg(target_os = "macos")]
+const DISK_FULL_CODES: &[i32] = &[28, 69];
+#[cfg(all(unix, not(target_os = "macos")))]
+const DISK_FULL_CODES: &[i32] = &[28, 122];
 
 #[derive(Debug)]
 pub(crate) struct PartFile {
@@ -32,6 +43,12 @@ impl PartFile {
         Ok(())
     }
 
+    /// Đẩy mọi byte đã ghi xuống đĩa. Gọi TRƯỚC khi journal nhận tiến độ: rút điện thì journal không
+    /// bao giờ nói có đoạn mà byte của nó còn nằm trong bộ đệm.
+    pub fn sync(&self) -> io::Result<()> {
+        self.file.sync_data()
+    }
+
     pub fn write_at(&self, offset: u64, data: &[u8]) -> io::Result<()> {
         let mut written = 0usize;
         while written < data.len() {
@@ -46,6 +63,61 @@ impl PartFile {
         }
         Ok(())
     }
+}
+
+/// Đọc `buffer.len()` byte từ `offset` (thiếu thì trả số byte đọc được).
+pub(crate) fn read_at(file: &File, offset: u64, buffer: &mut [u8]) -> io::Result<usize> {
+    let mut filled = 0usize;
+    while filled < buffer.len() {
+        let count = read_at_once(file, &mut buffer[filled..], offset + filled as u64)?;
+        if count == 0 {
+            break;
+        }
+        filled += count;
+    }
+    Ok(filled)
+}
+
+/// Ổ đầy (kể cả hết hạn mức) hay lỗi ghi khác.
+pub(crate) fn is_disk_full(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::StorageFull
+        || error
+            .raw_os_error()
+            .is_some_and(|code| DISK_FULL_CODES.contains(&code))
+}
+
+/// Lỗi ghi file tạm → lỗi task: đầy ổ thì `disk.full` (app chờ có chỗ rồi tự chạy tiếp), còn lại
+/// `disk.write`.
+pub(crate) fn disk_failure(error: &io::Error) -> TaskError {
+    if is_disk_full(error) {
+        TaskError {
+            class: ErrorClass::User,
+            code: "disk.full".into(),
+            message: "The disk is full.".into(),
+        }
+    } else {
+        TaskError {
+            class: ErrorClass::Permanent,
+            code: "disk.write".into(),
+            message: "Could not write to the download file.".into(),
+        }
+    }
+}
+
+/// Gốc ổ chứa `folder` không còn (USB, ổ mạng đã rút): thư mục tải "mất" vì ổ, không phải bị xoá.
+pub(crate) fn volume_missing(folder: &Path) -> bool {
+    let root: PathBuf = if cfg!(target_os = "macos")
+        && let Ok(rest) = folder.strip_prefix("/Volumes")
+        && let Some(name) = rest.components().next()
+    {
+        Path::new("/Volumes").join(name)
+    } else {
+        folder
+            .components()
+            .take_while(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+            .collect()
+    };
+    !root.as_os_str().is_empty() && !root.exists()
 }
 
 pub(crate) fn target_path(dest_dir: &str, file_name: &str) -> PathBuf {
@@ -143,6 +215,18 @@ fn write_at(file: &File, data: &[u8], offset: u64) -> io::Result<usize> {
     file.write_at(data, offset)
 }
 
+#[cfg(windows)]
+fn read_at_once(file: &File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::windows::fs::FileExt;
+    file.seek_read(buffer, offset)
+}
+
+#[cfg(unix)]
+fn read_at_once(file: &File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+    file.read_at(buffer, offset)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +243,42 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(std::fs::read(&target).expect("target"), b"user file");
         assert_eq!(std::fs::read(&temp).expect("part"), b"downloaded");
+    }
+
+    #[test]
+    fn sorts_disk_full_from_other_write_errors() {
+        let full = io::Error::from_raw_os_error(DISK_FULL_CODES[0]);
+        assert_eq!(disk_failure(&full).code, "disk.full");
+        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+        assert_eq!(disk_failure(&denied).code, "disk.write");
+    }
+
+    #[test]
+    fn an_unplugged_drive_is_not_a_deleted_folder() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        assert!(!volume_missing(&directory.path().join("gone").join("deeper")));
+        #[cfg(windows)]
+        if let Some(drive) = (b'D'..=b'Z')
+            .map(|letter| format!("{}:\\", letter as char))
+            .find(|drive| !Path::new(drive).exists())
+        {
+            assert!(volume_missing(&Path::new(&drive).join("Phim")));
+        }
+    }
+
+    #[test]
+    fn reads_back_what_was_written() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("a.part");
+        let part = PartFile::open(&path, Some(16)).expect("open");
+        part.write_at(4, b"abcd").expect("write");
+        part.sync().expect("sync");
+        let file = File::open(&path).expect("reopen");
+        let mut buffer = [0u8; 6];
+        assert_eq!(read_at(&file, 3, &mut buffer).expect("read"), 6);
+        assert_eq!(&buffer, b" abcd ");
+        let mut tail = [0u8; 8];
+        assert_eq!(read_at(&file, 12, &mut tail).expect("read"), 4, "hết file thì dừng");
     }
 
     #[test]

@@ -7,12 +7,12 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::headers::RequestHeader;
 use crate::model::{
-    now_ms, validate_segments, DownloadTask, HashState, MediaJob, Segment, SegmentStatus,
+    now_ms, validate_segments, DownloadTask, HashState, MediaJob, Recovery, Segment, SegmentStatus,
     TaskError, TaskKind, TaskStatus,
 };
 use crate::{Error, Result};
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 
 struct Migration {
     version: u32,
@@ -95,12 +95,19 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX idx_tasks_parent ON tasks(parent_id);
         "#,
     },
+    Migration {
+        version: 4,
+        // Tự cứu download: chờ thử lại / chờ mạng / chờ chỗ trống / chờ link mới (JSON `Recovery`).
+        sql: r#"
+            ALTER TABLE tasks ADD COLUMN recovery_json TEXT;
+        "#,
+    },
 ];
 
 const TASK_COLUMNS: &str = "id, url, final_url, file_name, dest_dir, temp_path, kind, status, \
      total_bytes, downloaded_bytes, etag, last_modified, expected_sha256, hash_state, connections, \
      error_json, created_at, updated_at, completed_at, parent_id, max_request_bytes, \
-     request_headers_json";
+     request_headers_json, recovery_json";
 
 /// Danh sách cho giao diện, đếm trạng thái, khôi phục: chỉ task gốc (task con đi theo cha).
 const TOP_LEVEL: &str = "parent_id IS NULL";
@@ -130,7 +137,10 @@ impl Journal {
             });
         }
         conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0))?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // FULL: commit nào xong là nằm trên đĩa. Engine fsync `.part` trước mỗi checkpoint, nên journal
+        // không bao giờ nhận đoạn mà byte chưa xuống đĩa; đặt lại tiến độ cũng phải bền trước khi cắt file
+        // (rút điện giữa hai bước ⇒ journal cũ trỏ vào file đã cắt).
+        conn.pragma_update(None, "synchronous", "FULL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         if existed && version < SCHEMA_VERSION {
             conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
@@ -171,15 +181,20 @@ impl Journal {
         } else {
             Some(serde_json::to_string(&task.request_headers)?)
         };
+        let recovery_json = task
+            .recovery
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         let conn = self.conn()?;
         conn.execute(
             "INSERT INTO tasks (
                 id, url, final_url, file_name, dest_dir, temp_path, kind, status,
                 total_bytes, downloaded_bytes, etag, last_modified, expected_sha256,
                 hash_state, connections, error_json, created_at, updated_at, completed_at,
-                parent_id, max_request_bytes, request_headers_json
+                parent_id, max_request_bytes, request_headers_json, recovery_json
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                ?18, ?19, ?20, ?21, ?22)
+                ?18, ?19, ?20, ?21, ?22, ?23)
              ON CONFLICT(id) DO UPDATE SET
                 url = excluded.url,
                 final_url = excluded.final_url,
@@ -201,7 +216,8 @@ impl Journal {
                 completed_at = excluded.completed_at,
                 parent_id = excluded.parent_id,
                 max_request_bytes = excluded.max_request_bytes,
-                request_headers_json = excluded.request_headers_json",
+                request_headers_json = excluded.request_headers_json,
+                recovery_json = excluded.recovery_json",
             params![
                 &task.id,
                 &task.url,
@@ -225,6 +241,7 @@ impl Journal {
                 task.parent_id.as_deref(),
                 max_request_bytes,
                 headers_json,
+                recovery_json,
             ],
         )?;
         Ok(())
@@ -267,6 +284,20 @@ impl Journal {
             &format!(
                 "SELECT {{columns}} FROM tasks WHERE status IN ('queued', 'paused') AND {TOP_LEVEL}
                  ORDER BY created_at ASC"
+            ),
+            [],
+        )
+    }
+
+    /// Task gốc đang tạm dừng chờ tự chạy lại (thử lại, có mạng, có chỗ trống), theo giờ tạo.
+    pub fn waiting_tasks(&self) -> Result<Vec<DownloadTask>> {
+        let conn = self.conn()?;
+        collect_tasks(
+            &conn,
+            &format!(
+                "SELECT {{columns}} FROM tasks
+                 WHERE status = 'paused' AND recovery_json IS NOT NULL AND {TOP_LEVEL}
+                 ORDER BY created_at ASC, id ASC"
             ),
             [],
         )
@@ -589,6 +620,10 @@ fn task_from_row(row: &Row<'_>) -> Result<DownloadTask> {
         Some(json) => serde_json::from_str::<Vec<RequestHeader>>(&json)?,
         None => Vec::new(),
     };
+    // JSON hỏng (bản sau đổi dạng) chỉ làm mất lịch tự thử lại, không làm hỏng cả danh sách.
+    let recovery = row
+        .get::<_, Option<String>>(22)?
+        .and_then(|json| serde_json::from_str::<Recovery>(&json).ok());
     let task = DownloadTask {
         id: row.get(0)?,
         url: row.get(1)?,
@@ -612,6 +647,7 @@ fn task_from_row(row: &Row<'_>) -> Result<DownloadTask> {
         parent_id: row.get(19)?,
         max_request_bytes,
         request_headers,
+        recovery,
     };
     task.validate()?;
     Ok(task)

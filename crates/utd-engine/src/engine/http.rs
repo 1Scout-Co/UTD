@@ -9,7 +9,11 @@ use reqwest::{Method, Response, StatusCode};
 use url::Url;
 
 use super::transport::Transport;
-use crate::model::{validate_file_name, ErrorClass, TaskError};
+use crate::model::{validate_file_name, DownloadTask, ErrorClass, TaskError};
+use crate::recovery::MAX_SERVER_WAIT;
+
+/// HEAD chỉ để dò nhanh: máy chủ nhận kết nối rồi im thì thôi sớm, hỏi bằng GET.
+const HEAD_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub(crate) struct Probe {
     pub url: Url,
@@ -34,6 +38,59 @@ impl RequestFailure {
     }
 }
 
+/// ETag / Last-Modified của file: biết file trên máy chủ đã đổi chưa (AC-04), link mới có cùng file không.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Validators {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+impl Validators {
+    pub fn of(task: &DownloadTask) -> Self {
+        Self {
+            etag: task.etag.clone(),
+            last_modified: task.last_modified.clone(),
+        }
+    }
+
+    pub fn from_headers(headers: &HeaderMap) -> Self {
+        Self {
+            etag: header_text(headers, ETAG),
+            last_modified: header_text(headers, LAST_MODIFIED),
+        }
+    }
+
+    /// Có validator nào so được (hai bên cùng có) không.
+    pub fn comparable(&self, other: &Self) -> bool {
+        (self.etag.is_some() && other.etag.is_some())
+            || (self.last_modified.is_some() && other.last_modified.is_some())
+    }
+
+    /// File đã đổi: có validator so được và MỌI validator so được đều khác. Một bên thiếu thì không kết
+    /// luận; ETag khác mà Last-Modified giống vẫn là một file (cụm máy chủ Apache gắn inode vào ETag).
+    pub fn differs(&self, other: &Self) -> bool {
+        let etag = match (&self.etag, &other.etag) {
+            (Some(left), Some(right)) => Some(strong(left) == strong(right)),
+            _ => None,
+        };
+        let modified = match (&self.last_modified, &other.last_modified) {
+            (Some(left), Some(right)) => Some(left.trim() == right.trim()),
+            _ => None,
+        };
+        match (etag, modified) {
+            (None, None) => false,
+            (Some(same), None) | (None, Some(same)) => !same,
+            (Some(etag), Some(modified)) => !etag && !modified,
+        }
+    }
+}
+
+/// ETag yếu (`W/"…"`) do máy chủ nén gắn thêm: so phần giá trị.
+fn strong(etag: &str) -> &str {
+    let etag = etag.trim();
+    etag.strip_prefix("W/").unwrap_or(etag)
+}
+
 pub(crate) struct ContentRange {
     pub start: u64,
     pub end: u64,
@@ -45,7 +102,9 @@ pub(crate) async fn probe(
     url: &Url,
     timeout: Duration,
 ) -> Result<Probe, RequestFailure> {
-    let head = transport.send(Method::HEAD, url, None, Some(timeout)).await;
+    let head = transport
+        .send(Method::HEAD, url, None, Some(timeout.min(HEAD_TIMEOUT)))
+        .await;
     let mut head_probe = None;
     if let Ok(response) = head
         && response.status().is_success()
@@ -298,12 +357,12 @@ fn accepts_ranges(headers: &HeaderMap) -> bool {
 fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
     if let Ok(seconds) = value.parse::<u64>() {
-        return Some(Duration::from_secs(seconds.min(300)));
+        return Some(Duration::from_secs(seconds).min(MAX_SERVER_WAIT));
     }
     let date = httpdate::parse_http_date(value).ok()?;
     date.duration_since(SystemTime::now())
         .ok()
-        .map(|duration| duration.min(Duration::from_secs(300)))
+        .map(|duration| duration.min(MAX_SERVER_WAIT))
 }
 
 #[cfg(test)]
@@ -317,6 +376,32 @@ mod tests {
         assert_eq!(sanitize_suggested_name("tải-về.mp4"), "tải-về.mp4");
         assert_eq!(sanitize_suggested_name(""), "download.bin");
         assert_eq!(sanitize_suggested_name("CON"), "download.bin");
+    }
+
+    #[test]
+    fn validators_need_every_comparable_value_to_differ() {
+        let of = |etag: Option<&str>, modified: Option<&str>| Validators {
+            etag: etag.map(str::to_string),
+            last_modified: modified.map(str::to_string),
+        };
+        let lm = Some("Tue, 01 Oct 2026 10:00:00 GMT");
+        let later = Some("Wed, 02 Oct 2026 10:00:00 GMT");
+        assert!(of(Some("\"a\""), None).differs(&of(Some("\"b\""), None)));
+        assert!(!of(Some("\"a\""), None).differs(&of(Some("W/\"a\""), None)));
+        assert!(of(None, lm).differs(&of(None, later)));
+        assert!(!of(Some("\"a\""), lm).differs(&of(Some("\"b\""), lm)), "inode khác, cùng file");
+        assert!(of(Some("\"a\""), lm).differs(&of(Some("\"b\""), later)));
+        assert!(!of(Some("\"a\""), None).differs(&of(None, lm)), "không so được thì không kết luận");
+        assert!(!of(None, None).comparable(&of(Some("\"a\""), lm)));
+    }
+
+    #[test]
+    fn long_retry_after_is_kept_for_the_scheduler() {
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, "3600".parse().unwrap());
+        assert_eq!(parse_retry_after(&headers), Some(Duration::from_secs(3600)));
+        headers.insert(RETRY_AFTER, "999999".parse().unwrap());
+        assert_eq!(parse_retry_after(&headers), Some(MAX_SERVER_WAIT));
     }
 
     #[test]

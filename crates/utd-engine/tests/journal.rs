@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use tempfile::TempDir;
 use utd_engine::{
-    now_ms, plan_segments, DownloadTask, Error, ErrorClass, HashState, Journal, MediaJob,
-    SegmentStatus, TaskError, TaskStatus,
+    now_ms, plan_segments, DownloadTask, Error, ErrorClass, HashState, Journal, MediaJob, Recovery,
+    RecoveryWait, SegmentStatus, TaskError, TaskStatus,
 };
 
 fn setup() -> (TempDir, Journal) {
@@ -36,7 +36,7 @@ fn completed_task(mut task: DownloadTask, total: u64) -> DownloadTask {
 #[test]
 fn opens_in_wal_mode_with_schema_and_clean_integrity() {
     let (_directory, journal) = setup();
-    assert_eq!(journal.schema_version().expect("version"), 3);
+    assert_eq!(journal.schema_version().expect("version"), 4);
     assert!(journal.integrity_check().expect("integrity").is_empty());
 
     let connection = Connection::open(journal.path()).expect("open raw");
@@ -199,6 +199,42 @@ fn mark_interrupted_pauses_active_tasks_only() {
     assert_eq!(recoverable.len(), 3);
 }
 
+/// Lịch tự thử lại nằm trong journal: mở lại app vẫn chờ đúng giờ, đúng lý do; giao diện nhận qua JSON.
+#[test]
+fn keeps_the_recovery_schedule_and_lists_waiting_tasks() {
+    let (directory, journal) = setup();
+    let mut waiting = sample_task(directory.path(), 1);
+    waiting.status = TaskStatus::Paused;
+    let mut recovery = Recovery::new(RecoveryWait::Retry);
+    recovery.retry_at = Some(now_ms() + 60_000);
+    recovery.attempts = 2;
+    waiting.recovery = Some(recovery.clone());
+    let mut paused = sample_task(directory.path(), 2);
+    paused.status = TaskStatus::Paused;
+    let mut link = sample_task(directory.path(), 3);
+    link.status = TaskStatus::Failed;
+    link.recovery = Some(Recovery::new(RecoveryWait::Link));
+    for task in [&waiting, &paused, &link] {
+        journal.save_task(task).expect("save");
+    }
+    let path = journal.path().to_path_buf();
+    drop(journal);
+
+    let journal = Journal::open(&path).expect("reopen");
+    let loaded = journal.load_task(&waiting.id).expect("load").expect("task");
+    assert_eq!(loaded.recovery, Some(recovery));
+    let ids: Vec<String> = journal
+        .waiting_tasks()
+        .expect("waiting")
+        .into_iter()
+        .map(|task| task.id)
+        .collect();
+    assert_eq!(ids, vec![waiting.id.clone()], "chỉ task tạm dừng có lịch");
+    let json = serde_json::to_string(&loaded).expect("json");
+    assert!(json.contains("\"recovery\":{\"wait\":\"retry\""), "{json}");
+    assert!(!serde_json::to_string(&paused).expect("json").contains("recovery"));
+}
+
 #[test]
 fn delete_cascades_to_segments() {
     let (directory, journal) = setup();
@@ -265,7 +301,7 @@ fn backs_up_legacy_database_before_migrating() {
     }
 
     let journal = Journal::open(&path).expect("migrate");
-    assert_eq!(journal.schema_version().expect("version"), 3);
+    assert_eq!(journal.schema_version().expect("version"), 4);
 
     let backup = PathBuf::from(format!("{}.bak", path.display()));
     assert!(backup.exists(), "backup was not created");
@@ -289,7 +325,7 @@ fn rejects_a_newer_schema() {
     match Journal::open(&path) {
         Err(Error::UnsupportedSchema { found, max }) => {
             assert_eq!(found, 99);
-            assert_eq!(max, 3);
+            assert_eq!(max, 4);
         }
         other => panic!("expected UnsupportedSchema, got {other:?}"),
     }

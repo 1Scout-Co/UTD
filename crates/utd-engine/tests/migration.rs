@@ -130,7 +130,7 @@ fn migrates_a_v2_journal_to_v3_and_keeps_every_row() {
     }
 
     let journal = Journal::open(&path).expect("migrate");
-    assert_eq!(journal.schema_version().expect("version"), 3);
+    assert_eq!(journal.schema_version().expect("version"), 4);
     assert!(journal.integrity_check().expect("integrity").is_empty());
 
     let tasks = journal.list_tasks().expect("list");
@@ -200,6 +200,6 @@ fn migrates_a_v2_journal_to_v3_and_keeps_every_row() {
 
     // Mở lại: không di trú lần hai.
     let journal = Journal::open(&path).expect("reopen");
-    assert_eq!(journal.schema_version().expect("version"), 3);
+    assert_eq!(journal.schema_version().expect("version"), 4);
     assert_eq!(journal.list_children("media-1").expect("children").len(), 1);
 }
