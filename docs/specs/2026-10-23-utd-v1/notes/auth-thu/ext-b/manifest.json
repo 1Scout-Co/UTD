@@ -1,0 +1,3 @@
+{ "manifest_version": 3, "name": "THU cookies chi activeTab", "version": "0.0.1",
+  "permissions": ["cookies", "activeTab"],
+  "background": { "service_worker": "sw.js" } }

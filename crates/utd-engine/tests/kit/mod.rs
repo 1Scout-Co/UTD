@@ -575,3 +575,23 @@ pub fn downloads(directory: &Path) -> String {
 pub fn final_path(task: &DownloadTask) -> std::path::PathBuf {
     Path::new(&task.dest_dir).join(&task.file_name)
 }
+
+/// Mọi file trong `directory` (kể cả thư mục con) có chứa `needle`: journal (`utd.db`, `-wal`, `-shm`), file
+/// tạm, file tải. Bài thử "cookie mồi" dùng để chứng minh bí mật không bao giờ xuống đĩa (P-02, P-04, AC-30).
+pub fn files_containing(directory: &Path, needle: &[u8]) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).expect("read_dir").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if std::fs::read(&path)
+                .is_ok_and(|bytes| bytes.windows(needle.len()).any(|window| window == needle))
+            {
+                found.push(path);
+            }
+        }
+    }
+    found
+}

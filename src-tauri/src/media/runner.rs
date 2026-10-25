@@ -17,7 +17,7 @@ use crate::media::finish::{
 use crate::media::preset::{self, Settled};
 use crate::media::sources::Tool;
 use crate::media::{
-    auto_tools, fast, ffmpeg_location, js_runtime_args, kill_tree, tokio_command, tools,
+    auto_tools, fast, ffmpeg_location, kill_tree, tools, yt_dlp_command,
 };
 use crate::state::AppState;
 
@@ -219,10 +219,9 @@ async fn attempt(
         .replace('%', "%%");
     let template = format!("{stem}.%(ext)s");
 
-    let mut command = tokio_command(&tools.yt_dlp);
+    let mut command = yt_dlp_command(&tools);
     // --print ngầm bật --quiet nên phải bật lại --progress; --encoding giữ đường dẫn Unicode.
     command
-        .args(js_runtime_args(&tools))
         .arg("--encoding")
         .arg("utf-8")
         .arg("--progress")

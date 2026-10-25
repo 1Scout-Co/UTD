@@ -49,12 +49,16 @@ winreg = "0.56.0"
 # Thao tác file như Explorer (src/files): mở, chọn trong thư mục, Thùng rác, icon thật.
 # Của Microsoft, bản đã có trong Cargo.lock; windows-core cần cho #[implement] (COM sink).
 # Win32_UI_HiDpi, Win32_UI_Input_KeyboardAndMouse: nút cửa sổ tự vẽ (src/titlebar/caption.rs); tao đã bật sẵn cả hai.
+# Win32_Security, Win32_Security_Authorization, Win32_System_Threading: DACL chỉ người dùng cho named pipe (src/ipc/pipe_acl.rs).
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Registry",
+    "Win32_System_Threading",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

@@ -321,4 +321,24 @@ mod tests {
         let unknown = message(serde_json::json!({ "version": 1, "type": "exec", "url": "https://a.b" }));
         assert!(pipe_payload(&unknown).is_err());
     }
+
+    /// `run` ghi câu lỗi vào `native-host.log` (P-04): câu lỗi không bao giờ lặp lại nội dung tin nhắn, kể
+    /// cả link có token hay trường lạ.
+    #[test]
+    fn errors_that_reach_the_host_log_never_echo_the_request() {
+        let secret = "UTDCANARY7f3a9c";
+        for request in [
+            serde_json::json!({ "version": 1, "type": "download", "url": format!("file:///c:/{secret}") }),
+            serde_json::json!({ "version": 1, "type": "download", "url": format!("https://a.b/?t={secret}{}", "x".repeat(MAX_URL_BYTES)) }),
+            serde_json::json!({ "version": 2, "type": "download", "url": format!("https://a.b/?t={secret}") }),
+            serde_json::json!({ "version": 1, "type": secret, "url": "https://a.b/" }),
+            serde_json::json!({ "version": 1, "type": "batch", "urls": [format!("javascript:{secret}")] }),
+        ] {
+            let error = pipe_payload(&message(request)).unwrap_err();
+            assert!(!error.contains(secret), "{error}");
+        }
+        let reply = "{\"ok\":false,\"taskId\":null,\"message\":\"Token IPC không hợp lệ.\"}\n";
+        let response = exchange(&mut peer(reply), &format!("{{\"token\":\"{secret}\"}}")).unwrap();
+        assert!(!response.message.unwrap_or_default().contains(secret));
+    }
 }

@@ -1,0 +1,3 @@
+{ "manifest_version": 3, "name": "THU cookies co host", "version": "0.0.1",
+  "permissions": ["cookies"], "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "sw.js" } }

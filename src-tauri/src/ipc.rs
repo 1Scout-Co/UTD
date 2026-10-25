@@ -5,6 +5,10 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// DACL chỉ người dùng hiện tại cho named pipe.
+#[cfg(windows)]
+pub(crate) mod pipe_acl;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IpcConfig {
@@ -353,22 +357,23 @@ async fn accept_loop(
     config: IpcConfig,
     _directory: PathBuf,
 ) {
-    use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
-
     let name = pipe_path(&config.pipe);
+    // Không dựng được DACL thì thôi hẳn kênh IPC (tiện ích báo "UTD chưa chạy"), không mở pipe quyền mặc định.
+    let acl = match pipe_acl::PipeAcl::current_user() {
+        Ok(acl) => acl,
+        Err(error) => {
+            log::error!("IPC pipe ACL failed: {error}");
+            return;
+        }
+    };
+    // Luôn có sẵn một instance đang chờ: tạo instance kế tiếp trước khi trao instance vừa nối, để tên pipe
+    // không lúc nào trống cho kẻ khác chen vào. Instance đầu đòi "first instance": tên đã có ai tạo thì lỗi.
+    let mut server = create_until_ready(&acl, &name, true).await;
     loop {
-        let server = match ServerOptions::new()
-            .pipe_mode(PipeMode::Byte)
-            .create(&name)
-        {
-            Ok(server) => server,
-            Err(error) => {
-                log::error!("IPC pipe create failed: {error}");
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                continue;
-            }
-        };
-        if let Err(error) = server.connect().await {
+        let connected = server.connect().await;
+        let next = create_until_ready(&acl, &name, false).await;
+        let server = std::mem::replace(&mut server, next);
+        if let Err(error) = connected {
             log::warn!("IPC pipe connect failed: {error}");
             continue;
         }
@@ -381,6 +386,38 @@ async fn accept_loop(
                 log::warn!("IPC request rejected: {error}");
             }
         });
+    }
+}
+
+/// Như bản macOS `bind_until_ready`: lỗi tạo pipe thì thử lại, chỉ ghi log khi lỗi đổi.
+#[cfg(windows)]
+async fn create_until_ready(
+    acl: &pipe_acl::PipeAcl,
+    name: &str,
+    first: bool,
+) -> tokio::net::windows::named_pipe::NamedPipeServer {
+    use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
+
+    let mut last: Option<String> = None;
+    loop {
+        let created = acl.create(
+            ServerOptions::new()
+                .pipe_mode(PipeMode::Byte)
+                .first_pipe_instance(first)
+                .reject_remote_clients(true),
+            name,
+        );
+        match created {
+            Ok(server) => return server,
+            Err(error) => {
+                let message = error.to_string();
+                if last.as_deref() != Some(message.as_str()) {
+                    log::error!("IPC pipe create failed: {message}");
+                    last = Some(message);
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
     }
 }
 

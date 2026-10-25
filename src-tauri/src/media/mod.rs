@@ -476,9 +476,31 @@ pub(crate) fn ffmpeg_location(tools: &tools::MediaTools) -> Option<String> {
     tools::ffmpeg_directory(tools.ffmpeg.as_deref())
 }
 
+/// Mọi lệnh yt-dlp đi qua đây: cờ cô lập + runtime JavaScript, rồi nơi gọi thêm cờ riêng.
+pub(crate) fn yt_dlp_command(tools: &tools::MediaTools) -> tokio::process::Command {
+    let mut command = tokio_command(&tools.yt_dlp);
+    command.args(isolation_args(tools)).args(js_runtime_args(tools));
+    command
+}
+
+/// Không nạp file cấu hình (của người dùng, cạnh exe, của bản cài qua WinGet/Scoop) và plugin ngoài: một
+/// dòng `--print-traffic` trong `yt-dlp.conf` in lộ cả header `Cookie`, `--cookies-from-browser` tự gửi
+/// cookie người dùng chưa cho phép (thử thật: notes/auth-plan.md §5.2). `--no-plugin-dirs` có từ
+/// 2025.03.21; bản cũ hơn báo "no such option" nên không truyền.
+fn isolation_args(tools: &tools::MediaTools) -> Vec<&'static str> {
+    const FIRST_NO_PLUGIN_DIRS: &str = "2025.03.21";
+    let mut args = vec!["--ignore-config"];
+    if verify::is_date_version(&tools.yt_dlp_version)
+        && tools.yt_dlp_version.as_str() >= FIRST_NO_PLUGIN_DIRS
+    {
+        args.push("--no-plugin-dirs");
+    }
+    args
+}
+
 /// yt-dlp từ 2025.11.12 giải thử thách của YouTube bằng runtime JavaScript (deno). Chỉ rõ deno đã
 /// dò được (của UTD hoặc trên máy); bản yt-dlp cũ hơn không biết cờ này nên không truyền.
-pub(crate) fn js_runtime_args(tools: &tools::MediaTools) -> Vec<OsString> {
+fn js_runtime_args(tools: &tools::MediaTools) -> Vec<OsString> {
     const FIRST_EJS: &str = "2025.11.12";
     let supported = verify::is_date_version(&tools.yt_dlp_version)
         && tools.yt_dlp_version.as_str() >= FIRST_EJS;
@@ -577,6 +599,27 @@ mod tests {
         // Bản trước EJS không biết cờ này: truyền vào là lỗi "no such option".
         assert!(js_runtime_args(&tools_with("2025.10.22", Some(deno))).is_empty());
         assert!(js_runtime_args(&tools_with("không rõ", Some(deno))).is_empty());
+    }
+
+    /// Mọi lệnh yt-dlp bỏ file cấu hình; bản trước 2025.03.21 (đã thử 2025.02.19) không biết
+    /// `--no-plugin-dirs` nên chỉ còn `--ignore-config`.
+    #[test]
+    fn every_yt_dlp_command_ignores_user_config_and_plugins() {
+        let deno = r"C:\UTD-Data\bin\deno.exe";
+        let args = |version: &str| -> Vec<String> {
+            yt_dlp_command(&tools_with(version, Some(deno)))
+                .as_std()
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(
+            args("2026.10.21"),
+            ["--ignore-config", "--no-plugin-dirs", "--js-runtimes", &format!("deno:{deno}")]
+        );
+        assert_eq!(args("2025.03.21")[..2], ["--ignore-config", "--no-plugin-dirs"]);
+        assert_eq!(args("2025.02.19"), ["--ignore-config"]);
+        assert_eq!(args("không rõ"), ["--ignore-config"]);
     }
 
     /// Như yt-dlp.exe / yt-dlp_macos: `cmd` chạy `ping` (macOS: `sh` chạy `sleep`) làm tiến trình con,

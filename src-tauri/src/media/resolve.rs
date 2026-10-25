@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::time::timeout;
 use utd_engine::{validate_url, ErrorClass, TaskError};
 
-use crate::media::{ffmpeg_location, js_runtime_args, runner, tokio_command, tools};
+use crate::media::{ffmpeg_location, runner, tools, yt_dlp_command};
 
 /// YouTube bóp tốc độ yêu cầu Range lớn: mỗi yêu cầu xin tối đa chừng này khi yt-dlp không nói.
 pub(super) const DEFAULT_CHUNK: u64 = 10 * 1024 * 1024;
@@ -112,8 +112,8 @@ pub(super) async fn resolve(
     url: &str,
     selector: &str,
 ) -> Result<Resolved, TaskError> {
-    let mut command = tokio_command(&tools.yt_dlp);
-    command.args(js_runtime_args(tools)).args([
+    let mut command = yt_dlp_command(tools);
+    command.args([
         "--encoding",
         "utf-8",
         "--no-playlist",

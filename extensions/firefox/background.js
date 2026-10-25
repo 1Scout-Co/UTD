@@ -235,7 +235,13 @@ api.contextMenus.onClicked.addListener((info, tab) => {
   else download(info, tab)
 })
 
-api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+// Chỉ nhận lệnh từ popup của chính tiện ích: không từ trang web, content script hay tiện ích khác (sau này
+// lệnh có thể kèm cookie, notes/auth-plan.md §4.3).
+const fromPopup = (sender) =>
+  sender?.id === api.runtime.id && !sender.tab && sender.url === api.runtime.getURL("popup.html")
+
+api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!fromPopup(sender)) return false
   if (message?.type === "utd.send-page") {
     const url = message.url
     if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
