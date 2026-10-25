@@ -63,6 +63,8 @@ function withProbe(row: BatchRow, remote: RemoteFile | null | undefined, fromBro
     ...row,
     name: remote.fileName || row.name,
     size: remote.totalBytes,
+    finalUrl: remote.url,
+    contentType: remote.contentType,
     kind: page ? "page" : "file",
     checked: page ? false : row.checked || fromBrowser,
   }

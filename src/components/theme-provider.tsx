@@ -8,6 +8,8 @@ type ThemeProviderProps = {
   defaultTheme?: Theme
   storageKey?: string
   disableTransitionOnChange?: boolean
+  /** Phím D (ngoài ô nhập) đổi sáng/tối. Tắt khi app chỉ có một bảng màu. */
+  hotkey?: boolean
 }
 
 type ThemeProviderState = {
@@ -81,6 +83,7 @@ export function ThemeProvider({
   defaultTheme = "system",
   storageKey = "theme",
   disableTransitionOnChange = true,
+  hotkey = true,
   ...props
 }: ThemeProviderProps) {
   const [theme, setThemeState] = React.useState<Theme>(() => {
@@ -139,6 +142,10 @@ export function ThemeProvider({
   }, [theme, applyTheme])
 
   React.useEffect(() => {
+    if (!hotkey) {
+      return undefined
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) {
         return
@@ -176,7 +183,7 @@ export function ThemeProvider({
     return () => {
       window.removeEventListener("keydown", handleKeyDown)
     }
-  }, [storageKey])
+  }, [hotkey, storageKey])
 
   React.useEffect(() => {
     const handleStorageChange = (event: StorageEvent) => {

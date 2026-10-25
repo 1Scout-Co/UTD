@@ -268,7 +268,7 @@ function toRowContext(
   files: ReturnType<typeof useFileActions>,
   handlers: Pick<
     HomeScreenProps,
-    "onPause" | "onResume" | "onRemove" | "onDiagnose"
+    "onPause" | "onResume" | "onRemove" | "onDiagnose" | "onDetails" | "onRefreshLink"
   >
 ): RowContext {
   return {
@@ -307,7 +307,14 @@ function DownloadsView({
   onBatch?: () => void
 } & Pick<
   HomeScreenProps,
-  "items" | "onAdd" | "onPause" | "onResume" | "onRemove" | "onDiagnose"
+  | "items"
+  | "onAdd"
+  | "onPause"
+  | "onResume"
+  | "onRemove"
+  | "onDiagnose"
+  | "onDetails"
+  | "onRefreshLink"
 > &
   FileActionHooks) {
   const counts = useMemo(() => countByFilter(items), [items])

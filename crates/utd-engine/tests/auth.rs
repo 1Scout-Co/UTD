@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use kit::*;
 use utd_engine::auth::{AUTH_EXPIRED, AUTH_REQUIRED, BrowserCookie, CookieJar};
-use utd_engine::{DownloadControl, DownloadOutcome, DownloadRequest};
+use utd_engine::recovery::{self, Plan};
+use utd_engine::{now_ms, DownloadControl, DownloadOutcome, DownloadRequest, RecoveryWait};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -278,4 +279,65 @@ async fn a_real_file_under_a_login_path_still_downloads() {
         .await
         .expect("download");
     assert!(outcome.is_completed(), "unexpected outcome: {outcome:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sign_in_wait_takes_a_new_link_only_with_the_cookies() {
+    let secret = canary();
+    let data = payload(MIB + 77);
+    let server = Server::start(gated(secret.clone(), Arc::new(data.clone()))).await;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (journal, engine) = engine(directory.path(), options(2, 4));
+
+    // Chưa đăng nhập: về trang đăng nhập ⇒ chờ link mới như link hết hạn (một đường chờ, recover.rs).
+    let mut request = DownloadRequest::new(server.url("/file.bin"), downloads(directory.path()));
+    request.file_name = Some("private.bin".into());
+    let outcome = engine
+        .download(request, DownloadControl::new())
+        .await
+        .expect("download");
+    assert_eq!(error_code(&outcome), AUTH_REQUIRED);
+    let failed = outcome.task().clone();
+    let Plan::Wait(wait) = recovery::plan(&failed, failed.error.as_ref().unwrap(), true, now_ms())
+    else {
+        panic!("sign-in waits for a new link");
+    };
+    assert_eq!(wait.wait, RecoveryWait::Link);
+
+    // Link mới không kèm đăng nhập: vẫn là trang đăng nhập, không nhận.
+    let bare = engine
+        .replace_link(&failed.id, &server.url("/file.bin?v=2"), Vec::new(), None)
+        .await;
+    assert!(bare.is_err(), "{bare:?}");
+
+    // Tải lại từ trình duyệt kèm đăng nhập: dò bằng cookie, ghi dấu trang cần đăng nhập.
+    let jar = Arc::new(CookieJar::new(vec![session_cookie("sid", &secret, "127.0.0.1")]));
+    let relinked = engine
+        .replace_link(
+            &failed.id,
+            &server.url("/file.bin?v=2"),
+            Vec::new(),
+            Some(("127.0.0.1", jar.clone())),
+        )
+        .await
+        .expect("signed link");
+    assert_eq!(relinked.auth_sites, ["127.0.0.1"]);
+    assert!(relinked.recovery.is_none() && relinked.error.is_none());
+
+    // Lượt sau không cookie (vd mở lại app) dừng ngay; có cookie thì tải xong.
+    let outcome = engine
+        .resume(&failed.id, DownloadControl::new())
+        .await
+        .expect("resume");
+    assert_eq!(error_code(&outcome), AUTH_REQUIRED);
+    let control = DownloadControl {
+        cookies: Some(jar),
+        ..DownloadControl::new()
+    };
+    let outcome = engine.resume(&failed.id, control).await.expect("resume");
+    assert!(outcome.is_completed(), "unexpected outcome: {outcome:?}");
+    assert_eq!(std::fs::read(final_path(outcome.task())).expect("file"), data);
+    drop(engine);
+    drop(journal);
+    assert!(files_containing(directory.path(), secret.as_bytes()).is_empty());
 }

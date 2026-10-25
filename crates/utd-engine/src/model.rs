@@ -244,6 +244,89 @@ impl TaskError {
     }
 }
 
+/// Mỗi task giữ tối đa chừng này mốc lịch sử (cũ nhất bị bỏ): thử lại nhiều lần không phình journal.
+pub const MAX_TASK_EVENTS: usize = 50;
+/// Mã của mốc "dừng vì app tắt ngang" (`Journal::mark_interrupted`).
+pub const INTERRUPTED_CODE: &str = "app.interrupted";
+
+/// Một mốc trong lịch sử của task: đổi trạng thái, lỗi (mã + câu), dừng vì app tắt ngang.
+/// Màn Chi tiết đọc để hiện lý do dừng, các lần lỗi và "Sao chép log".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskEvent {
+    pub at: i64,
+    pub status: TaskStatus,
+    /// Mã lỗi khi lỗi/cách ly, `INTERRUPTED_CODE` khi app tắt ngang; còn lại không có.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub downloaded_bytes: u64,
+}
+
+impl TaskEvent {
+    /// Mốc ứng với trạng thái hiện tại của task (lỗi chỉ đi kèm trạng thái lỗi/cách ly).
+    pub fn of(task: &DownloadTask) -> Self {
+        let error = task
+            .error
+            .as_ref()
+            .filter(|_| matches!(task.status, TaskStatus::Failed | TaskStatus::Quarantined));
+        Self {
+            at: task.updated_at,
+            status: task.status,
+            code: error.map(|error| error.code.clone()),
+            message: error.map(|error| error.message.clone()),
+            downloaded_bytes: task.downloaded_bytes,
+        }
+    }
+}
+
+/// Download đang chờ gì để UTD tự chạy lại (giao diện: "Sẽ thử lại lúc…", "Chờ có mạng", "Ổ đầy").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryWait {
+    /// Lỗi tạm thời (máy chủ bận, 429, mạng chập chờn): thử lại lúc `retry_at`.
+    Retry,
+    /// Máy không có đường ra mạng: chạy lại ngay khi có mạng (và mỗi `retry_at` cho chắc).
+    Network,
+    /// Ổ đầy hoặc ổ chứa thư mục tải đã rút: chạy lại khi đủ chỗ / ổ cắm lại.
+    Disk,
+    /// Link hết hạn hoặc cần đăng nhập: chờ link mới (dán vào, hoặc tải lại từ trình duyệt).
+    Link,
+}
+
+/// Trạng thái tự cứu của một task (src-tauri/src/recover.rs giữ lịch, engine chỉ gợi ý `retry_at`
+/// khi máy chủ gửi Retry-After).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Recovery {
+    pub wait: RecoveryWait,
+    /// Giờ máy (ms) sẽ tự chạy lại; `None` = chỉ chờ sự kiện (có mạng, có chỗ, link mới).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<i64>,
+    /// Số lần tự thử lại liền nhau mà không thêm được byte nào.
+    #[serde(default)]
+    pub attempts: u32,
+    /// Byte đã có lúc đếm lần thử gần nhất: lượt sau có thêm byte thì đếm lại từ đầu.
+    #[serde(default)]
+    pub progress: u64,
+    /// Ổ đầy: cần trống chừng này byte để tải tiếp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need_bytes: Option<u64>,
+}
+
+impl Recovery {
+    pub fn new(wait: RecoveryWait) -> Self {
+        Self {
+            wait,
+            retry_at: None,
+            attempts: 0,
+            progress: 0,
+            need_bytes: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Segment {
@@ -300,6 +383,9 @@ pub struct DownloadTask {
     /// Không đưa ra JSON (giao diện không cần, tránh lộ giá trị).
     #[serde(default, skip_serializing)]
     pub request_headers: Vec<RequestHeader>,
+    /// UTD đang tự cứu download (chờ thử lại, chờ mạng, chờ chỗ trống, chờ link mới).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<Recovery>,
     /// Task cần đăng nhập ở các trang này (tên miền gốc, vd `google.com`). Chỉ là dấu: cookie không bao giờ
     /// vào journal, mỗi lượt chạy phải đưa lại qua `DownloadControl::cookies` (notes/auth-plan.md §6).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -349,6 +435,7 @@ impl DownloadTask {
             parent_id: None,
             max_request_bytes: None,
             request_headers: Vec::new(),
+            recovery: None,
             auth_sites: Vec::new(),
         };
         task.validate()?;

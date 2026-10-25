@@ -147,7 +147,7 @@ export function channelPageUrl(error: unknown): string | null {
 }
 
 /** Link trang video gửi từ trình duyệt (chuột phải / popup của extension). */
-interface MediaRequest {
+export interface MediaRequest {
   url: string
   pageUrl?: string
   /** Trang đã được cho phép đăng nhập: mã lần cho phép (không phải cookie). */

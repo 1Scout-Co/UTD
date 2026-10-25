@@ -4,8 +4,9 @@ import {
   AlertTriangle,
   Check,
   Copy,
-  ExternalLink,
+  Link2,
   RefreshCw,
+  RotateCcw,
   ShieldAlert,
   Stethoscope,
   WifiOff,
@@ -22,12 +23,12 @@ import {
 } from "@/components/ui/dialog"
 import { t } from "@/shared/i18n/i18n"
 
-import { openWebPage } from "../api/downloads"
-import { diagnose, type DoctorCategory } from "../model/doctor"
+import { diagnose, type DoctorAction, type DoctorCategory } from "../model/doctor"
 import type { DownloadItem } from "../model/types"
+import { OpenPageButton } from "./sign-in-notice"
 
-// Nhãn nhóm: t(`doctor.cat.${category}`).
-const CATEGORY_STYLE: Record<
+// Nhãn nhóm: t(`doctor.cat.${category}`). Màn Chi tiết (S-21) dùng chung.
+export const CATEGORY_STYLE: Record<
   DoctorCategory,
   { icon: typeof WifiOff; box: string }
 > = {
@@ -57,16 +58,32 @@ const CATEGORY_STYLE: Record<
   },
 }
 
+// Nút chính theo cách sửa: nhãn + icon.
+const ACTION_BUTTON: Record<
+  DoctorAction,
+  { icon: typeof RefreshCw; label: () => string }
+> = {
+  resume: { icon: RefreshCw, label: () => t("menu.resume") },
+  refreshLink: { icon: Link2, label: () => t("recover.menu") },
+  restart: { icon: RotateCcw, label: () => t("recover.restart") },
+}
+
 export function DoctorDialog({
   item,
   open,
   onOpenChange,
   onRetry,
+  onRefreshLink,
+  onRestart,
 }: {
   item: DownloadItem | null
   open: boolean
   onOpenChange: (open: boolean) => void
   onRetry: (id: string) => void
+  /** Có ⇒ link hết hạn hiện nút "Cập nhật link…". */
+  onRefreshLink?: (id: string) => void
+  /** Có ⇒ file đã đổi / `.part` mất hiện nút "Tải lại từ đầu". */
+  onRestart?: (id: string) => void
 }) {
   const [copied, setCopied] = useState(false)
   if (!item) return null
@@ -74,6 +91,14 @@ export function DoctorDialog({
   const style = CATEGORY_STYLE[report.category]
   const Icon = style.icon
   const code = item.errorCode ?? "unknown"
+  const handlers: Record<DoctorAction, ((id: string) => void) | undefined> = {
+    resume: onRetry,
+    refreshLink: onRefreshLink,
+    restart: onRestart,
+  }
+  const run = report.action ? handlers[report.action] : undefined
+  const button = report.action ? ACTION_BUTTON[report.action] : null
+  const ButtonIcon = button?.icon
 
   const copyCode = async () => {
     try {
@@ -148,29 +173,18 @@ export function DoctorDialog({
               {t("app.close")}
             </Button>
             {report.signIn && item.url ? (
-              <Button
-                type="button"
-                data-s="S-72"
-                onClick={() => {
-                  void openWebPage(item.url ?? "").catch((reason: unknown) =>
-                    console.error("UTD open page:", reason),
-                  )
-                }}
-              >
-                <ExternalLink />
-                {t("auth.openPage")}
-              </Button>
+              <OpenPageButton url={item.url} outline={Boolean(run)} />
             ) : null}
-            {report.retryable ? (
+            {run && button && ButtonIcon ? (
               <Button
                 type="button"
                 onClick={() => {
-                  onRetry(item.id)
+                  run(item.id)
                   onOpenChange(false)
                 }}
               >
-                <RefreshCw />
-                {t("menu.resume")}
+                <ButtonIcon />
+                {button.label()}
               </Button>
             ) : null}
           </div>

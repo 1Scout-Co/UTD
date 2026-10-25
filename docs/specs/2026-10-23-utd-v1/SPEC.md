@@ -126,7 +126,7 @@ Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25).
 |---|---|---|---|
 | S-70 | Có dữ liệu (popup extension) | Trang đang mở có task chờ đăng nhập: "google.com · 2 tải chờ"; trang nhạy cảm (ngân hàng, gov…) ghi rõ | Dùng đăng nhập / Tiếp tục (n); bật/tắt "Đăng nhập trên trang này" |
 | S-71 | Lỗi (popup extension) | Trình duyệt chưa cho phép, hoặc tiện ích không được chạy ở cửa sổ riêng tư | Thử lại |
-| S-72 | Lỗi (danh sách, chi tiết) | Task "Cần đăng nhập": chưa có cookie, đăng nhập hết hạn, hoặc app vừa mở lại | Mở trang, huỷ |
+| S-72 | Lỗi (danh sách, chi tiết) | Task "Cần đăng nhập": chưa có cookie, đăng nhập hết hạn, hoặc app vừa mở lại. Chờ như link hết hạn (tự cứu, chờ link mới) | Mở trang, Cập nhật link… (download thường), huỷ |
 | S-73 | Có dữ liệu (Cài đặt › Tích hợp) | Công tắc "Dùng đăng nhập của trình duyệt" (mặc định bật), số trang đang giữ cookie, cảnh báo khoá tài khoản | Quên cookie |
 
 ### Làm được gì

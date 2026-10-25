@@ -15,11 +15,15 @@ import {
   removeDownload,
   resumeDownload,
   subscribeEngine,
+  subscribeMediaRequest,
+  takeMediaRequest,
+  type MediaRequest,
 } from "../api/downloads"
 import { formatBytes } from "@/shared/i18n/format"
 import { t } from "@/shared/i18n/i18n"
 
 import { mapEngineTask } from "../model/download-mapper"
+import { restartDownload } from "../api/recover"
 import { isChannelPage } from "../model/media-pages"
 import { demoDownloads, demoStorage } from "../model/mock-data"
 import type {
@@ -33,13 +37,29 @@ import type {
 import { AddDownloadDialog } from "./add-download-dialog"
 import { BatchDialog } from "./batch-dialog"
 import { ChannelFlow, useChannelFlow } from "./channel-flow"
+import { DetailFlow } from "./detail-flow"
 import { DoctorDialog } from "./doctor-dialog"
-import { MediaPickerDialog, useMediaRequests } from "./media-picker-dialog"
+import { MediaPickerDialog } from "./media-picker-dialog"
+import { RefreshLinkDialog } from "./refresh-link-dialog"
 import { SettingsDialog } from "./settings-dialog"
 import { ToolsAutoCard } from "./tools-auto"
 import { useBatchFlow } from "./use-batch-flow"
+import { useAppEvent } from "./use-app-event"
 import { useUpdateAvailable } from "./use-update-available"
 import { Soniox } from "./variants/soniox"
+
+/**
+ * Task vừa thêm lên đầu danh sách. Lệnh thêm trả trạng thái lúc tạo (đang chờ); file nhỏ có thể đã chạy xong
+ * (`utd://task`) trước khi lệnh trả về — bản đã có trong danh sách mới hơn thì giữ, không đè lại "đang chờ".
+ */
+function putFirst(previous: EngineTask[], added: EngineTask[]): EngineTask[] {
+  const known = new Map(previous.map((task) => [task.id, task]))
+  const ids = new Set(added.map((task) => task.id))
+  return [
+    ...added.map((task) => known.get(task.id) ?? task),
+    ...previous.filter((task) => !ids.has(task.id)),
+  ]
+}
 
 export function HomeScreen() {
   const desktop = isDesktopApp()
@@ -57,6 +77,9 @@ export function HomeScreen() {
     authGrant?: string
   } | null>(null)
   const [diagnoseId, setDiagnoseId] = useState<string | null>(null)
+  const [detailId, setDetailId] = useState<string | null>(null)
+  // Hộp "Cập nhật link" (menu chuột phải hoặc Doctor).
+  const [relinkId, setRelinkId] = useState<string | null>(null)
   const [tasks, setTasks] = useState<EngineTask[]>([])
   const [progress, setProgress] = useState<Record<string, EngineProgress>>({})
   const [storage, setStorage] = useState<StorageInfo | null>(null)
@@ -141,6 +164,10 @@ export function HomeScreen() {
   const diagnoseItem = diagnoseId
     ? (items.find((item) => item.id === diagnoseId) ?? null)
     : null
+  const relinkItem = relinkId
+    ? (items.find((item) => item.id === relinkId) ?? null)
+    : null
+  const closeRelink = useCallback(() => setRelinkId(null), [])
 
   const storageSummary = desktop
     ? storage && storage.totalBytes > 0
@@ -160,7 +187,7 @@ export function HomeScreen() {
 
   // Task mới (thêm từ hộp Tải cả kênh) lên đầu danh sách.
   const showTask = useCallback((task: EngineTask) => {
-    setTasks((previous) => [task, ...previous.filter((item) => item.id !== task.id)])
+    setTasks((previous) => putFirst(previous, [task]))
     setScreenState("data")
   }, [])
   const channel = useChannelFlow(showTask)
@@ -177,8 +204,7 @@ export function HomeScreen() {
   const { setOpen: setBatchOpen } = batch
   // Task vừa thêm theo lô: lên đầu danh sách (thứ tự chạy do hàng đợi ở app quyết).
   const addTasks = (added: EngineTask[]) => {
-    const ids = new Set(added.map((task) => task.id))
-    setTasks((previous) => [...added, ...previous.filter((task) => !ids.has(task.id))])
+    setTasks((previous) => putFirst(previous, added))
     if (added.length) setScreenState("data")
     refreshStorage()
   }
@@ -212,7 +238,12 @@ export function HomeScreen() {
     },
     [openChannelWith, setBatchOpen, setChannelOpen],
   )
-  useMediaRequests(desktop, openMediaWith)
+  // Link trang video từ trình duyệt (chuột phải / popup).
+  const onMediaRequest = useCallback(
+    (request: MediaRequest) => openMediaWith(request.url, request.authGrant),
+    [openMediaWith],
+  )
+  useAppEvent(desktop, subscribeMediaRequest, onMediaRequest, takeMediaRequest)
 
   const openAdd = () => {
     setAddError(null)
@@ -241,10 +272,7 @@ export function HomeScreen() {
     setAddError(null)
     try {
       const task = await addDownload(payload)
-      setTasks((previous) => [
-        task,
-        ...previous.filter((item) => item.id !== task.id),
-      ])
+      setTasks((previous) => putFirst(previous, [task]))
       setScreenState("data")
       setAddOpen(false)
       refreshStorage()
@@ -272,10 +300,7 @@ export function HomeScreen() {
     setMediaError(null)
     try {
       const task = await addMediaDownload(payload)
-      setTasks((previous) => [
-        task,
-        ...previous.filter((item) => item.id !== task.id),
-      ])
+      setTasks((previous) => putFirst(previous, [task]))
       setScreenState("data")
       setMediaOpen(false)
       refreshStorage()
@@ -295,6 +320,14 @@ export function HomeScreen() {
     if (!desktop) return
     void resumeDownload(taskId).catch((error) =>
       console.error("UTD resume:", error),
+    )
+  }
+
+  // File trên máy chủ đã đổi / `.part` bị xoá: bỏ phần đã tải, tải lại từ đầu.
+  const restart = (taskId: string) => {
+    if (!desktop) return
+    void restartDownload(taskId).catch((error) =>
+      console.error("UTD restart:", error),
     )
   }
 
@@ -342,6 +375,8 @@ export function HomeScreen() {
         onResume={resume}
         onRemove={remove}
         onDiagnose={setDiagnoseId}
+        onDetails={setDetailId}
+        onRefreshLink={setRelinkId}
         onSettings={() => {
           setSettingsFocus(null)
           setSettingsOpen(true)
@@ -396,6 +431,24 @@ export function HomeScreen() {
         onChannel={openChannelWith}
       />
       <ChannelFlow desktop={desktop} flow={channel} />
+      <DetailFlow
+        taskId={detailId}
+        onClose={() => setDetailId(null)}
+        desktop={desktop}
+        items={items}
+        tasks={tasks}
+        progress={progress}
+        onDropped={dropTask}
+        onRefreshLink={(id) => {
+          setDetailId(null)
+          setRelinkId(id)
+        }}
+        onRestart={restart}
+        onSettings={() => {
+          setSettingsFocus(null)
+          setSettingsOpen(true)
+        }}
+      />
       <DoctorDialog
         item={diagnoseItem}
         open={diagnoseItem !== null}
@@ -406,6 +459,19 @@ export function HomeScreen() {
           resume(id)
           setDiagnoseId(null)
         }}
+        onRefreshLink={(id) => {
+          setDiagnoseId(null)
+          setRelinkId(id)
+        }}
+        onRestart={(id) => {
+          restart(id)
+          setDiagnoseId(null)
+        }}
+      />
+      <RefreshLinkDialog
+        item={relinkItem}
+        desktop={desktop}
+        onClose={closeRelink}
       />
       <SettingsDialog
         open={settingsOpen}

@@ -15,8 +15,6 @@ import { commandErrorText, t } from "@/shared/i18n/i18n"
 import {
   channelPageUrl,
   mediaProbe,
-  subscribeMediaRequest,
-  takeMediaRequest,
 } from "../api/downloads"
 import { isChannelPage } from "../model/media-pages"
 import { commandCode, needsSignIn } from "../model/sign-in"
@@ -30,38 +28,6 @@ import {
 } from "./media-picker-parts"
 import { SignInNotice, useAuthGranted } from "./sign-in-notice"
 import { ToolsAutoNote } from "./tools-auto"
-
-/**
- * Link trang video từ trình duyệt (chuột phải / popup): `onUrl` cần ổn định (useCallback). Link tới
- * trước khi kịp nghe (UTD vừa mở) được app giữ lại: lấy một lần ngay sau khi nghe.
- */
-export function useMediaRequests(
-  desktop: boolean,
-  onUrl: (url: string, authGrant?: string) => void,
-) {
-  useEffect(() => {
-    if (!desktop) return
-    let disposed = false
-    let unlisten: (() => void) | undefined
-    subscribeMediaRequest((request) => {
-      if (!disposed) onUrl(request.url, request.authGrant)
-    })
-      .then(async (off) => {
-        if (disposed) {
-          off()
-          return
-        }
-        unlisten = off
-        const early = await takeMediaRequest()
-        if (early && !disposed) onUrl(early.url, early.authGrant)
-      })
-      .catch((reason: unknown) => console.error("UTD media request:", reason))
-    return () => {
-      disposed = true
-      unlisten?.()
-    }
-  }, [desktop, onUrl])
-}
 
 /**
  * `initialUrl`: mở sẵn link này và tự phân tích (từ hộp Thêm hoặc trình duyệt). Đổi link thì đổi `key`

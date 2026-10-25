@@ -281,8 +281,10 @@ async fn pause_then_resume_completes() {
     assert_eq!(std::fs::read(final_path(resumed.task())).expect("file"), data);
 }
 
+/// AC-04: file đổi trên máy chủ lúc đang tải dở ⇒ dừng, báo `file.changed`, không ghép đoạn cũ; người
+/// dùng chọn "Tải lại từ đầu" (`reset_progress`) thì tải đúng file mới.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn restarts_when_etag_changes() {
+async fn stops_when_etag_changes_and_restarts_on_request() {
     let data = payload(1024 * 1024);
     let total = data.len() as u64;
     let server = TestServer::start(
@@ -322,7 +324,21 @@ async fn restarts_when_etag_changes() {
         segment.status = SegmentStatus::Done;
     }
     journal.save_segments(&task.id, &segments).expect("save plan");
+    let before = journal.load_task(&task.id).expect("load").expect("task").downloaded_bytes;
+    assert!(before > 0);
 
+    let outcome = engine
+        .resume(&task.id, DownloadControl::new())
+        .await
+        .expect("resume");
+    let DownloadOutcome::Failed(failed) = &outcome else {
+        panic!("unexpected outcome: {outcome:?}");
+    };
+    assert_eq!(failed.error.as_ref().map(|error| error.code.as_str()), Some("file.changed"));
+    assert_eq!(failed.downloaded_bytes, before, "không âm thầm xoá phần đã tải");
+    assert!(!final_path(failed).exists());
+
+    engine.reset_progress(&task.id).expect("reset");
     let outcome = engine
         .resume(&task.id, DownloadControl::new())
         .await

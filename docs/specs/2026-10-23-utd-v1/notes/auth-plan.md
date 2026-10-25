@@ -259,7 +259,8 @@ Thiết kế pipe Windows (`src-tauri/src/auth/pipe.rs`):
     HTML thay vì file (đã có AC-06) ⇒ `auth.required`.
   - Danh sách đặt một chỗ, có test.
 - **Tiếp tục mà không có credentials:** task có `auth` nhưng đang thiếu credentials thì không gửi request nào,
-  trả `auth.required` ngay. Phiên khôi phục xếp nó vào hàng chờ `Login` (Phụ lục B).
+  trả `auth.required` ngay. App xếp nó vào chờ link mới (`RecoveryWait::Link`), cùng chỗ chờ với link hết hạn
+  (Phụ lục B).
 
 ## 6. Vòng đời cookie
 
@@ -446,8 +447,8 @@ Khác kế hoạch (cố ý):
 - Firefox < 128 không có `optional_host_permissions`: popup báo "Trình duyệt chưa cho phép" (S-71), phần còn lại
   chạy như cũ.
 - macOS: pipe cookie cho yt-dlp báo `auth.pipe` tới khi có FIFO (GĐ2). Tải file trực tiếp kèm cookie vẫn chạy.
-- Task cần đăng nhập đang ở trạng thái `failed` với mã `auth.*`. Khi ghép nhánh khôi phục: đổi sang
-  `RecoveryWait::Login` (Phụ lục B).
+- Task cần đăng nhập: `failed` với mã `auth.*`. Đã đổi khi ghép main: chờ `RecoveryWait::Link` (mục "Ghép main"
+  bên dưới, Phụ lục B).
 
 Kiểm (Windows):
 - `cargo test` app 222 (+ 1 yt-dlp thật `#[ignore]` chạy tay: đạt), engine 159 (thêm `auth` 7 unit + 7 tích hợp).
@@ -457,6 +458,24 @@ Kiểm (Windows):
   - `auth-thu/ext-auth.cjs`: tiện ích trong Chromium 156.
   - `auth-thu/auth-e2e.py`: trọn luồng trên app debug — đăng nhập, khởi động lại giữa chừng, cho phép lại, không
     sót cookie mồi.
+
+#### Ghép main (2026-10-25, origin/main 16a882f: màn Chi tiết, tự cứu download, GĐ0)
+
+- Journal: cột `auth_sites_json` thành migration **v6** (main có v4 `task_events`, v5 `recovery_json`); `save_task`
+  ghi trong transaction của main.
+- Cần đăng nhập lại đi chung đường chờ link mới `RecoveryWait::Link` (Phụ lục B), không có trạng thái chờ riêng:
+  - `recovery::plan`: `auth.required`, `auth.expired`, `media.login` ⇒ `Link` (task gốc, cả media).
+  - `auth.pipe` bỏ khỏi nhóm "cần đăng nhập" (đăng nhập lại không sửa được) ⇒ lỗi thường, có nút Thử lại.
+  - Popup "Dùng đăng nhập": chỉ xếp lại task đang chờ `Link` của trang đó; hộp "Cập nhật link" đang mở cho task
+    đó thì đóng (`utd://link-updated`).
+  - Bấm tải lại trên trình duyệt (`capture_link`): `DownloadEngine::replace_link(…, signed)` dò link mới bằng cookie
+    của cú bấm, ghi trang vào `auth_sites`; app gắn lần cho phép vào task trước khi xếp hàng.
+  - Chẩn đoán (S-72) của download thường: nút chính "Cập nhật link…", thêm "Mở trang"; task media chỉ "Mở trang".
+- IPC: link có cảnh báo trước khi tải (S-22, `Route::Confirm`) mang lần cho phép của cú bấm sang hộp Thêm hàng loạt.
+- Bundle JS: main riêng 199,14 kB; ghép xong 200,09 kB / 200 kB (vượt 91 B) dù đã cắt: gộp ba hook nghe sự kiện
+  (`use-app-event.ts`), S-73 chỉ hiện số trang (đúng SPEC), công tắc lên đầu mục, bỏ icon `LogIn`. Chờ quyết.
+- Thêm bài thử: engine `a_sign_in_wait_takes_a_new_link_only_with_the_cookies`, unit `recovery` (mã đăng nhập ⇒
+  `Link`, task con và `auth.pipe` thì không), app `a_sign_in_after_restart_waits_like_an_expired_link`.
 
 Chưa làm, cần chủ dự án:
 - Thử với tài khoản thật: YouTube giới hạn tuổi, file Google Drive riêng (Q6).
@@ -492,7 +511,7 @@ Chưa làm, cần chủ dự án:
 - **App:**
   - `src-tauri/src/{commands,state,lib,events}.rs`: lệnh `auth_status`, `auth_forget`; sự kiện
     `utd://auth-granted`.
-  - `queue.rs` và `recover.rs` (của phiên khôi phục): chờ `Login`.
+  - `recover.rs` (của phiên khôi phục): chờ `Link` (không thêm `Login`, xem Phụ lục B).
 - **Engine:**
   - `crates/utd-engine/src/cookies.rs` (mới).
   - `engine/{transport,session,mod}.rs`, `model.rs` (`AuthMarker`), `db.rs` (migration `auth_json`).
@@ -642,11 +661,16 @@ Playwright 1.64): `auth-thu/README.md`.
 ## Phụ lục B — Ghép với hai phiên song song
 
 - **Khôi phục download** (`claude/recovery-9f3b1d`, chưa commit; đọc `notes/recovery.md` và `recovery.rs`):
-  - Có `RecoveryWait::{Disk, Link, Network, Retry}`. Đề xuất thêm **`RecoveryWait::Login`**.
-  - Task có `auth` mà gặp 401/403 hoặc trang đăng nhập ⇒ `Login` thay vì `Link`; không tự thử lại mù.
-  - Khi `mark_interrupted` mở app, task có `auth` và không có grant ⇒ `Login` ngay.
-  - Grant mới tới (`utd://auth-granted`) ⇒ xếp lại mọi task `Login` của trang đó.
-  - "Cập nhật link" (link ký hết hạn) giữ nguyên; với media có cookie thì `resolve` chạy kèm grant.
+  - Có `RecoveryWait::{Disk, Link, Network, Retry}`. Lúc lập kế hoạch đề xuất thêm `RecoveryWait::Login`.
+  - **Đã làm khác khi ghép (2026-10-25, theo phiên chính):** không thêm `Login`. Cần đăng nhập lại đi chung đường
+    chờ link mới `Link`, không có đường thứ hai:
+    - `recovery::plan`: `auth.required`, `auth.expired`, `media.login` ⇒ `Link` (cả task media; task con thì không).
+    - Mở lại app: task bị ngắt chạy lại, engine dừng ngay với `auth.required` (không gửi gì) ⇒ `Link`.
+    - Hai cách gỡ, cùng một chỗ chờ: (1) popup "Dùng đăng nhập" xếp lại mọi task chờ `Link` của trang đó có mã
+      cần đăng nhập; (2) bấm tải lại trên trình duyệt ⇒ `capture_link` gắn link vào task, dò bằng cookie của cú
+      bấm, gắn lần cho phép rồi mới xếp hàng.
+    - Hộp "Cập nhật link" đang mở (`await_download_link`) mà popup cho phép đăng nhập ⇒ báo `utd://link-updated`
+      để hộp đóng.
 - **Màn chi tiết + cảnh báo trước khi tải** (`claude/detail-screen-7c21e4`, chưa commit):
   - Doctor S-21 thêm nguyên nhân `auth.required` / `auth.expired`, cách sửa "Bấm biểu tượng UTD › Tiếp tục".
   - `detail_log.rs` đã bỏ query; thêm test T-L1 cho bảng sự kiện mới của phiên đó.

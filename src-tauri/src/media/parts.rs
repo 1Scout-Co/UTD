@@ -197,6 +197,52 @@ pub(crate) fn discard_parts(journal: &Journal, parent_id: &str) {
     }
 }
 
+/// File tạm yt-dlp (đường dự phòng) để lại khi task media chưa xong bị xoá: `<tên>.f<mã>.<đuôi>` và
+/// bản `.part`/`.ytdl`/`.part-FragN` của nó, `<tên>.<đuôi>.part`, `<tên>.<đuôi>.ytdl`, `<tên>.temp.<đuôi>`.
+/// Chỉ tên khớp đúng mẫu; file cuối `<tên>.<đuôi>` không bao giờ bị đụng. Gọi khi task không chạy.
+pub(crate) fn discard_leftovers(task: &DownloadTask) {
+    if task.status == TaskStatus::Completed {
+        return;
+    }
+    let stem = stem(task);
+    let Ok(entries) = std::fs::read_dir(&task.dest_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+        if is_file && entry.file_name().to_str().is_some_and(|name| is_leftover(&stem, name)) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn is_leftover(stem: &str, name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(stem).and_then(|rest| rest.strip_prefix('.')) else {
+        return false;
+    };
+    let core = rest
+        .strip_suffix(".part")
+        .or_else(|| rest.strip_suffix(".ytdl"))
+        .unwrap_or(rest);
+    let core = core.find(".part-Frag").map_or(core, |at| &core[..at]);
+    let temporary = core.len() != rest.len();
+    let extension = |value: &str| {
+        (1..=5).contains(&value.len()) && value.chars().all(|c| c.is_ascii_alphanumeric())
+    };
+    let format = |value: &str| {
+        value.len() > 1
+            && value.starts_with('f')
+            && value[1..]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    };
+    match core.split('.').collect::<Vec<_>>().as_slice() {
+        [id, ext] => (format(id) || *id == "temp") && extension(ext),
+        [ext] => temporary && extension(ext),
+        _ => false,
+    }
+}
+
 pub(super) fn hints_from_streams(streams: &[Stream]) -> Vec<Hint> {
     streams
         .iter()
@@ -299,6 +345,32 @@ mod tests {
             chunk: Some(10 * 1024 * 1024),
             available_at: None,
             drm: false,
+        }
+    }
+
+    #[test]
+    fn yt_dlp_leftovers_match_only_temporary_names() {
+        let stem = "Đi Cùng Pew";
+        for name in [
+            "Đi Cùng Pew.f399.mp4.part",
+            "Đi Cùng Pew.f399.mp4",
+            "Đi Cùng Pew.f251.webm.ytdl",
+            "Đi Cùng Pew.f251-drc.webm.part-Frag12",
+            "Đi Cùng Pew.f251.webm.part-Frag12.part",
+            "Đi Cùng Pew.mp4.part",
+            "Đi Cùng Pew.mp4.ytdl",
+            "Đi Cùng Pew.temp.mp4",
+        ] {
+            assert!(is_leftover(stem, name), "{name}");
+        }
+        for name in [
+            "Đi Cùng Pew.mp4",
+            "Đi Cùng Pew (1).mp4.part",
+            "Đi Cùng Pew.mp4.ab12cd34.part",
+            "Khác.f399.mp4.part",
+            "Đi Cùng Pew.ghi chú.txt",
+        ] {
+            assert!(!is_leftover(stem, name), "{name}");
         }
     }
 

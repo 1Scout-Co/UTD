@@ -6,17 +6,17 @@ use std::sync::Arc;
 
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
-use utd_engine::{DownloadTask, Journal, TaskStatus};
+use utd_engine::{DownloadTask, Journal, RecoveryWait, TaskStatus};
 
 use super::{AuthPayload, Grant, accept, enabled, site};
 use crate::events::{AUTH_GRANTED_EVENT, AuthGranted};
 use crate::state::AppState;
 
-/// Lỗi của task "Cần đăng nhập" (S-72): cho phép trang đó trong popup là tải tiếp được.
+/// Lỗi của task "Cần đăng nhập" (S-72): cho phép trang đó trong popup là tải tiếp được. Task như vậy chờ
+/// link mới (`RecoveryWait::Link`, recover.rs) — cùng chỗ chờ với link hết hạn, không có đường chờ thứ hai.
 pub(crate) const SIGN_IN_CODES: &[&str] = &[
     "auth.required",
     "auth.expired",
-    "auth.pipe",
     "http.401",
     "http.403",
     "media.login",
@@ -45,7 +45,7 @@ pub(crate) fn grant_from_click(
     }
 }
 
-/// Task đang chờ đăng nhập ở trang `site`.
+/// Task đang chờ đăng nhập ở trang `site`: chờ link mới vì lỗi cần đăng nhập.
 pub(crate) fn waiting_tasks(journal: &Journal, site: &str) -> Vec<DownloadTask> {
     journal
         .list_tasks()
@@ -53,6 +53,10 @@ pub(crate) fn waiting_tasks(journal: &Journal, site: &str) -> Vec<DownloadTask> 
         .into_iter()
         .filter(|task| {
             task.status == TaskStatus::Failed
+                && task
+                    .recovery
+                    .as_ref()
+                    .is_some_and(|recovery| recovery.wait == RecoveryWait::Link)
                 && task
                     .error
                     .as_ref()
@@ -122,6 +126,7 @@ pub(crate) fn renew(
         }
         state.auth.bind(&task.id, &grant.id);
         if crate::commands::resume_task(&state, &task.id).is_ok() {
+            crate::recover::link_settled(app, &task.id);
             resumed += 1;
         }
     }

@@ -88,6 +88,20 @@ export function formatMinutes(total: number): string {
   return `${hours} ${minutes.format(total % 60)}`
 }
 
+/** Khoảng thời gian (ms): "42 giây", "3 phút 5 giây", "1 giờ 5 phút" (vi) · "3 min 5 sec" (en). */
+export function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000))
+  const unit = (value: number, name: "second" | "minute" | "hour") =>
+    numberFormat({ style: "unit", unit: name }).format(value)
+  if (total < 60) return unit(total, "second")
+  if (total < 3600) {
+    const seconds = total % 60
+    const minutes = unit(Math.floor(total / 60), "minute")
+    return seconds ? `${minutes} ${unit(seconds, "second")}` : minutes
+  }
+  return formatMinutes(Math.round(total / 60))
+}
+
 /** `value` là % (0–100). */
 export function formatPercent(value: number): string {
   return numberFormat({ style: "percent", maximumFractionDigits: 0 }).format(

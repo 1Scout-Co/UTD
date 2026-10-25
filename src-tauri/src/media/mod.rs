@@ -404,12 +404,15 @@ pub(crate) fn spawn_media_run(
         return Err("download is already running".into());
     }
     tauri::async_runtime::spawn(async move {
-        if let Err(message) = runner::run(app.clone(), journal.clone(), task_id.clone(), cancel).await {
+        let failure = runner::run(app.clone(), journal.clone(), task_id.clone(), cancel)
+            .await
+            .err();
+        if let Some(message) = &failure {
             let _ = app.emit(
                 ERROR_EVENT,
                 BridgeError {
                     task_id: task_id.clone(),
-                    message,
+                    message: message.clone(),
                 },
             );
         }
@@ -420,6 +423,7 @@ pub(crate) fn spawn_media_run(
             app.state::<AppState>().auth.release(&task_id);
         }
         running.remove(&task_id);
+        crate::recover::after_run(&app, &task_id, failure.as_deref());
         crate::queue::finished(&app, &task_id);
     });
     Ok(())

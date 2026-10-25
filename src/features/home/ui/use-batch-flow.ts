@@ -1,32 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 
-import { subscribeBatchRequest, takeBatchRequest } from "../api/downloads"
-
-/** Lô link từ trình duyệt; lô tới trước khi kịp nghe (UTD vừa mở) được app giữ lại, lấy một lần. */
-function useBatchRequests(desktop: boolean, onUrls: (urls: string[], authGrant?: string) => void) {
-  useEffect(() => {
-    if (!desktop) return
-    let disposed = false
-    let unlisten: (() => void) | undefined
-    subscribeBatchRequest((request) => {
-      if (!disposed) onUrls(request.urls, request.authGrant)
-    })
-      .then(async (off) => {
-        if (disposed) {
-          off()
-          return
-        }
-        unlisten = off
-        const early = await takeBatchRequest()
-        if (early && !disposed) onUrls(early.urls, early.authGrant)
-      })
-      .catch((reason: unknown) => console.error("UTD batch request:", reason))
-    return () => {
-      disposed = true
-      unlisten?.()
-    }
-  }, [desktop, onUrls])
-}
+import { subscribeBatchRequest, takeBatchRequest, type BatchRequest } from "../api/downloads"
+import { useAppEvent } from "./use-app-event"
 
 /** Ctrl+B (B = batch) mở hộp Thêm hàng loạt. */
 function useBatchShortcut(onOpen: () => void) {
@@ -67,13 +42,14 @@ export function useBatchFlow(desktop: boolean, beforeOpen: () => void) {
     [beforeOpen],
   )
   const openEmpty = useCallback(() => show([], false), [show])
+  // Lô link từ trình duyệt; lô tới trước khi kịp nghe (UTD vừa mở) được app giữ lại, lấy một lần.
   const fromBrowser = useCallback(
-    (urls: string[], authGrant?: string) => show(urls, true, authGrant),
+    (request: BatchRequest) => show(request.urls, true, request.authGrant),
     [show],
   )
   /** Dán nhiều link vào hộp Thêm URL ⇒ chuyển sang đây với các link đó. */
   const openWith = useCallback((urls: string[]) => show(urls, false), [show])
-  useBatchRequests(desktop, fromBrowser)
+  useAppEvent(desktop, subscribeBatchRequest, fromBrowser, takeBatchRequest)
   useBatchShortcut(openEmpty)
   // Ổn định giữa các lần vẽ: màn chính dùng trong callback của luồng media/kênh.
   const setOpen = useCallback(

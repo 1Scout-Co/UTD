@@ -239,19 +239,32 @@ struct Window {
     start: Instant,
     bytes: u64,
     measure_from: Instant,
+    /// Đã qua lúc ổn định và đang đo (chưa thì nhịp kế chỉ lấy làm mốc).
+    started: bool,
     live_sum: usize,
     ticks: u32,
 }
 
 impl Window {
     fn new(now: Instant, bytes: u64, settle: Duration) -> Self {
-        Self {
+        let mut window = Self {
             start: now,
             bytes,
-            measure_from: now + settle,
+            measure_from: now,
+            started: false,
             live_sum: 0,
             ticks: 0,
-        }
+        };
+        window.settle(now, settle);
+        window
+    }
+
+    /// Vừa bắt đầu, vừa đổi số kết nối hay vừa hết lùi: cửa sổ kế bắt đầu ở nhịp đầu tiên sau lúc ổn
+    /// định. Mốc đặt ở nửa `settle` vì nhịp thật luôn tới trễ vài ms: mốc trọn `settle` thì nhịp đó
+    /// lọt qua và lúc mở kết nối bị tính vào tốc độ của bậc mới.
+    fn settle(&mut self, now: Instant, settle: Duration) {
+        self.measure_from = now + settle / 2;
+        self.started = false;
     }
 
     fn reset(&mut self, sample: &Sample) {
@@ -263,8 +276,12 @@ impl Window {
 
     /// Đủ một cửa sổ thì trả (tốc độ B/s, đã dùng hết số kết nối cho phép chưa).
     fn sample(&mut self, sample: &Sample, target: usize, length: Duration) -> Option<(f64, bool)> {
-        if sample.now <= self.measure_from {
+        if !self.started {
+            // Chỉ bắt đầu đo khi đã qua lúc ổn định và byte đang về: lúc mở kết nối, hay app khựng lúc
+            // đầu (chưa có byte nào), không được kéo tốc độ của bậc này xuống.
+            let flowing = sample.downloaded > self.bytes;
             self.reset(sample);
+            self.started = flowing && sample.now >= self.measure_from;
             return None;
         }
         self.live_sum += sample.live;
@@ -332,7 +349,7 @@ impl Controller {
             if sample.now >= until {
                 self.phase = Phase::Climb;
                 self.reference = None;
-                self.window.measure_from = sample.now + self.tuning.settle;
+                self.window.settle(sample.now, self.tuning.settle);
             }
             return None;
         }
@@ -476,7 +493,7 @@ impl Controller {
             return None;
         }
         self.target = target;
-        self.window.measure_from = now + self.tuning.settle;
+        self.window.settle(now, self.tuning.settle);
         Some(target)
     }
 }
@@ -563,6 +580,35 @@ mod tests {
         let settled = &targets[100..];
         let busy = settled.iter().filter(|target| **target > 4).count();
         assert!(busy * 3 < settled.len(), "probes too often: {targets:?}");
+    }
+
+    /// Như trên nhưng giống máy thật: nhịp tới trễ vài ms và lúc đầu khựng 250 ms chưa có byte nào (mở
+    /// kết nối, máy bận). Phần đó không được tính vào bậc 4, nếu không bậc 8 trông nhanh hơn dù trần chung
+    /// đã chạm và bộ điều khiển leo lên 16 (lỗi từng làm bài trần băng thông đỏ trên CI).
+    #[test]
+    fn late_ticks_and_a_slow_start_do_not_fake_a_gain() {
+        let start = Instant::now();
+        let mut controller = Controller::new(4, 16, tuning(), start, 0);
+        let tick = TICK + Duration::from_millis(3);
+        let mut now = start + Duration::from_millis(250);
+        let mut bytes = 0.0;
+        let mut targets = Vec::new();
+        for step in 0..200 {
+            if step > 0 {
+                now += tick;
+                bytes += 4.0 * MIB * tick.as_secs_f64();
+            }
+            let live = controller.target();
+            controller.on_tick(Sample {
+                now,
+                downloaded: bytes as u64,
+                live,
+                pressure: Pressure::default(),
+            });
+            targets.push(controller.target());
+        }
+        assert!(targets.iter().all(|target| *target <= 8), "{targets:?}");
+        assert!(controller.target() <= 5, "{targets:?}");
     }
 
     #[test]

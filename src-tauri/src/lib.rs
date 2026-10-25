@@ -5,6 +5,8 @@ mod batch;
 mod browser_integration;
 mod coded;
 mod commands;
+mod detail;
+mod detail_log;
 mod events;
 mod files;
 mod ipc;
@@ -13,7 +15,9 @@ mod legacy;
 mod media;
 mod media_pages;
 pub mod native_host;
+mod preflight;
 mod queue;
+mod recover;
 mod state;
 mod titlebar;
 mod updater;
@@ -141,6 +145,8 @@ pub fn run() {
             // Trước pipe server: link từ trình duyệt tới khi giao diện chưa nghe thì giữ ở đây.
             app.manage(media_pages::PendingMedia::default());
             app.manage(batch::PendingBatch::default());
+            // Màn Chi tiết đang mở task nào (detail.rs): engine đẩy bản đồ đoạn cho đúng task đó.
+            app.manage(detail::DetailWatch::default());
             let directory = data_dir(app.handle());
             std::fs::create_dir_all(&directory)?;
             let isolated = ipc::isolated_data_dir().is_some();
@@ -220,6 +226,7 @@ pub fn run() {
                 app_nap::watch(move || !running.is_empty() || auto.installs_missing());
             }
             app.manage(auto);
+            app.manage(recover::Recover::default());
             app.manage(AppState {
                 engine,
                 journal,
@@ -228,6 +235,8 @@ pub fn run() {
                 auth: Arc::default(),
             });
             queue.start(Arc::new(queue::AppRuntime(app.handle().clone())));
+            // Download chờ tự thử lại / chờ mạng / chờ chỗ trống: tới lúc thì vào lại hàng đợi.
+            recover::start(app.handle().clone());
             // Task media chờ công cụ tự tải nằm trong hàng mà không giữ chỗ: công cụ xong thì chạy.
             media::watch_tools_for_queue(app.handle());
             log::info!("UTD engine ready at {}", directory.display());
@@ -274,6 +283,15 @@ pub fn run() {
             queue::queue_settings,
             queue::set_queue_limit,
             commands::inspect_link,
+            // Màn Chi tiết (S-15..S-21) và cảnh báo trước khi tải (S-22).
+            detail::download_detail,
+            detail::watch_download,
+            detail::download_log,
+            preflight::check_links,
+            // Tự cứu download: cập nhật link, chờ link mới từ trình duyệt, chạy lại.
+            recover::update_download_link,
+            recover::await_download_link,
+            recover::restart_download,
             updater::check_for_update,
             updater::install_update,
             updater::get_update_check,

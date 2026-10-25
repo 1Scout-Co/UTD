@@ -12,7 +12,9 @@ riêng hoà vào nền gradient của Soniox, đúng kiểu từng hệ điều 
   rê yên 0,5 s thì hiện chú thích dưới nút (Thu nhỏ · Phóng to/Khôi phục · Đóng), logo + icon mờ đi khi cửa sổ không
   active (đúng lúc khung gốc mờ).
 - **macOS**: giữ 3 đèn giao thông gốc phủ lên nền app (`titleBarStyle: Overlay`, `hiddenTitle`), đèn đặt thẳng giữa
-  thanh 40px (`trafficLightPosition {x:16, y:18}`), logo lùi sang phải 84px để không đè đèn; toàn màn hình (đèn ẩn)
+  thanh 40px (`trafficLightPosition {x:16, y:22}` — đo trên Mac thật 2026-10-25: đỉnh đèn ≈ `y − 9`pt, `y:18` để tâm đèn
+  ở 16pt cao hơn tâm logo/thanh 20pt ~4pt; `y:22` cho tâm 19,5pt, đỉnh đèn trùng đỉnh chữ "utd", xem
+  `ui-demos/titlebar-macos-5/6`), logo lùi sang phải 84px để không đè đèn; toàn màn hình (đèn ẩn)
   thì logo về lề 22px như Windows. Không vẽ nút giả. Nhấp đúp thanh làm theo cài đặt hệ thống (phóng to / thu nhỏ /
   không làm gì), kéo được cả cửa sổ đang ở sau.
 - Menu chuột phải, menu ⋯, tooltip không bao giờ lấn vào dải 40px của thanh (mép trên chừa 44px).

@@ -1,9 +1,9 @@
 // Tải cần đăng nhập (S-14, S-72; notes/auth-plan.md §8): mã lỗi nghĩa là "cho phép trang này trong popup
-// tiện ích là tải tiếp được". Cùng danh sách với `SIGN_IN_CODES` ở src-tauri/src/auth/flow.rs.
+// tiện ích là tải tiếp được". Cùng danh sách với `SIGN_IN_CODES` ở src-tauri/src/auth/flow.rs. `auth.pipe`
+// (yt-dlp không nhận được cookie) không nằm đây: đăng nhập lại không sửa được.
 const SIGN_IN_CODES = new Set([
   "auth.required",
   "auth.expired",
-  "auth.pipe",
   "http.401",
   "http.403",
   "media.login",
