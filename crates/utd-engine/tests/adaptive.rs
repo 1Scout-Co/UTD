@@ -58,6 +58,8 @@ struct Shared {
     next_slot: Mutex<Instant>,
     crowded_since: Mutex<Option<Instant>>,
     storm_started: Mutex<Option<Instant>>,
+    /// Số kết nối đang gửi lúc bão bắt đầu (phía máy chủ, không trễ như sự kiện tiến độ).
+    storm_streams: AtomicUsize,
 }
 
 impl Shared {
@@ -89,6 +91,8 @@ impl Shared {
         let mut started = self.storm_started.lock().expect("storm lock");
         if started.is_none() {
             *started = Some(now);
+            self.storm_streams
+                .store(self.streams.load(Ordering::SeqCst), Ordering::SeqCst);
         }
     }
 }
@@ -127,6 +131,7 @@ impl ThrottledServer {
             next_slot: Mutex::new(Instant::now()),
             crowded_since: Mutex::new(None),
             storm_started: Mutex::new(None),
+            storm_streams: AtomicUsize::new(0),
         });
         let accept = shared.clone();
         tokio::spawn(async move {
@@ -153,6 +158,10 @@ impl ThrottledServer {
         let storm = self.shared.limits.storm?;
         let started = self.shared.storm_start()?;
         Some((started, started + storm.length))
+    }
+
+    fn streams_at_storm(&self) -> usize {
+        self.shared.storm_streams.load(Ordering::SeqCst)
     }
 }
 
@@ -562,13 +571,16 @@ async fn backs_off_on_429_and_503_then_recovers() {
         "server should have rejected requests"
     );
 
+    // Sự kiện tiến độ có thể tới trễ (CI: vòng sự kiện khựng ~400 ms đúng lúc lên 16 kết nối), nên bậc
+    // cao nhất trước bão lấy thêm từ phía máy chủ: bão chỉ nổ khi đã có đủ `crowd` kết nối.
     let before = peak(
         &points
             .iter()
             .copied()
             .filter(|point| point.at < storm_start)
             .collect::<Vec<_>>(),
-    );
+    )
+    .max(u16::try_from(server.streams_at_storm()).unwrap_or(u16::MAX));
     let resumed = points
         .iter()
         .find(|point| point.at >= storm_end && point.connections > 0)
