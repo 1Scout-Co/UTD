@@ -32,7 +32,14 @@ viết code tính năng; các thử nghiệm nhỏ nằm ở `auth-thu/` (ghi r�
   - 2: link trang Drive/OneDrive/Dropbox, hàng loạt và tải cả kênh dùng chung một lần cho phép, macOS, huy hiệu
     trên biểu tượng extension.
   - 3: takeover (AC-15) và nhập cookies.txt nếu chủ dự án muốn.
-- Có **9 câu cần chủ dự án quyết** ở §10. Thử thật với YouTube giới hạn tuổi và Google Drive riêng cần chủ dự án
+- **So với các repo khác** (Phụ lục C, đọc mã 23 repo): cách phổ biến lỏng hơn nhiều.
+  - Trình quản lý tải có extension: xin quyền mọi trang, gửi cookie cho mọi download, lưu chuỗi cookie dạng chữ
+    thường cạnh task, thường không bỏ cookie khi chuyển hướng sang miền khác.
+  - App giao diện cho yt-dlp: đưa cookie bằng file cookies.txt nằm luôn trên đĩa.
+
+  Kế hoạch học thêm 4 điểm: gửi kèm User-Agent (§4.2), kiểm yt-dlp đã thật sự đọc cookie (§5.1), danh sách miền
+  nhạy cảm (Q10), takeover tạm dừng rồi trả lại trình duyệt (§4.4).
+- Có **10 câu cần chủ dự án quyết** ở §10. Thử thật với YouTube giới hạn tuổi và Google Drive riêng cần chủ dự án
   tự đăng nhập: phiên này không đăng nhập tài khoản nào.
 
 ## 1. Phạm vi
@@ -124,6 +131,17 @@ muốn phục vụ người dùng không cài extension (Q4); khi đó đọc fi
   - Bỏ cookie `sameSite: "strict"` khi trang đang mở khác host với đích, vì trình duyệt cũng không gửi Strict khi
     điều hướng chéo trang.
   - Trần: 300 cookie, 64 KiB.
+- **Gửi kèm User-Agent của trình duyệt** (`navigator.userAgent`; P-02 đã cho phép gửi User-Agent).
+  - Lý do: một số trang gắn phiên đăng nhập với User-Agent; cookie đi với User-Agent khác có thể bị coi là phiên
+    lạ. Seal làm đúng như vậy: `--cookies` đi cùng `--add-header User-Agent:<UA của WebView>` (Phụ lục C).
+  - App dùng User-Agent đó làm header `User-Agent` của task trong engine, và `--user-agent` cho yt-dlp.
+  - User-Agent không phải bí mật, nên được lưu cùng task như các header khác (`request_headers`). Nhờ vậy sau
+    khi khởi động lại vẫn dùng đúng User-Agent đó.
+- **Miền nhạy cảm (Q10):** nếu chủ dự án đồng ý thì làm như Motrix 2.x.
+  - Có danh sách hậu tố tên miền: `gov`, `mil`, ngân hàng, `paypal.com`…
+  - Các trang này không kèm cookie, kể cả khi trang đã được cho phép, trừ khi người dùng xác nhận trong popup
+    cho đúng lượt đó.
+  - Danh sách đặt trong app (Rust), có test; extension hỏi app như với mẫu quyền.
 - Cửa sổ ẩn danh/riêng tư: extension chỉ chạy ở đó khi người dùng tự bật. Cookie từ đó được đánh dấu `private` và
   bỏ khi task xong (§6).
 
@@ -142,6 +160,14 @@ handler `contextMenus.onClicked`, hoặc khi người dùng bấm nút trong pop
   - Nếu không: `resume`, trình duyệt tải tiếp như thường. Cách này giữ được download POST, blob: và link
     dùng-một-lần, những thứ UTD không phát lại được.
 - **Bỏ qua:** `blob:`, `data:`, file nhỏ hơn ngưỡng.
+- **Bằng chứng từ repo khác** (Phụ lục C) cho cách tạm dừng rồi trả lại:
+  - motrix-webextension (bản cũ, `f8bc93d`) làm đúng như vậy: tạm dừng, gửi sang aria2, aria2 lỗi thì cho trình
+    duyệt tải tiếp (`background.js` L62–L90).
+  - AB Download Manager (extension `658a0c7`) huỷ, xoá khỏi lịch sử và xoá file ngay
+    (`DownloadLinkInterceptor.ts` L517). Trên MV3, nếu app lỗi sau khi đã huỷ thì chỉ có chú thích "NO-OP for
+    now" (L558): **mất luôn download**.
+  - Aria2-Explorer (`5e97685`) dự phòng bằng `downloads.download({url})`: tải lại bằng GET, nên mất download
+    POST và link dùng-một-lần.
 - **Quyền:** cần thêm `downloads`. Muốn kèm cookie cho mọi trang thì phải có quyền mọi trang (cảnh báo "all
   websites"), nên chủ dự án cần quyết (Q5).
 
@@ -170,6 +196,16 @@ Thiết kế pipe Windows (`src-tauri/src/auth/pipe.rs`):
     Cha của tiến trình lấy qua Toolhelp; PyInstaller chạy lại chính nó thành tiến trình con.
   - Phân biệt đọc hay ghi bằng cách đua: chờ drain xong ⇒ client đọc, đóng handle. Đọc được byte ⇒ client ghi,
     đọc tới EOF rồi bỏ.
+- **Kiểm yt-dlp đã thật sự đọc cookie.**
+  - Vấn đề: yt-dlp gọi `os.access(path, R_OK)` trước khi nạp. Nếu bước đó trả `False` thì **bỏ qua cookie, không
+    báo lỗi** (`yt_dlp/cookies.py` L107, commit `fa98866`), và chạy tiếp như chưa đăng nhập. Trang công khai thì
+    vẫn ra kết quả, nên lỗi pipe sẽ bị che mất.
+  - Cách chặn: pipe giữ cờ `loaded`, chỉ bật khi một client hợp lệ đã đọc trọn nội dung (drain xong).
+    - Lệnh `-J` (Phân tích, `resolve`): yt-dlp thoát mà `loaded` chưa bật ⇒ bỏ kết quả, báo `auth.pipe`.
+    - Lệnh tải bằng yt-dlp (`runner`): yt-dlp chỉ nạp cookie ngay trước request đầu tiên (`cookiejar` là
+      `cached_property`). Vì vậy tới dòng tiến độ đầu tiên mà `loaded` chưa bật ⇒ dừng cả cây tiến trình
+      (`kill_tree`), báo `auth.pipe`.
+  - Không bao giờ để task có cookie chạy tiếp mà không có cookie.
 - **Đóng:** pipe sống đúng bằng tiến trình yt-dlp; nội dung (`Zeroizing<Vec<u8>>`) xoá khi tiến trình thoát.
 - **Lỗi:** mã `auth.pipe`, không âm thầm rơi về file.
 - **Dự phòng** (chỉ khi yt-dlp đổi cách mở file, tắt mặc định):
@@ -255,7 +291,7 @@ google.com" để hiện popup nhanh.
 | T5 | Journal SQLite (+ WAL) | Persist | Không có cột nào giữ giá trị. Test quét byte của `utd.db`, `-wal`, `-shm` tìm cookie mồi | URL ký (token ngắn hạn) vẫn ở journal (Q7) |
 | T6 | yt-dlp và cấu hình/plugin của nó | Cấu hình người dùng in traffic, plugin trộm cookie | `--ignore-config --no-plugin-dirs`; yt-dlp tải từ GitHub có so SHA-256 | Bản thân yt-dlp là mã bên thứ ba nhận cookie: ranh giới tin cậy đã chấp nhận |
 | T7 | Extension giả | Gửi tin cho native host | `allowed_origins` / `allowed_extensions` của host manifest. Khoá `key` nằm công khai trong repo, nên ai cũng nạp được bản unpacked cùng ID (cần chế độ nhà phát triển + người dùng tự nạp) | Khi lên store: bản phát hành chỉ nhận ID của store (Q8) |
-| T8 | Trang độc dụ tải kèm cookie (CSRF) | Đặt link tới trang nhạy cảm (`mail.google.com/…?action=delete`) để UTD GET kèm cookie | Chỉ GET, đúng như trình duyệt điều hướng. Bỏ cookie SameSite=Strict khi chéo trang. Hàng loạt chỉ kèm cookie cho link cùng trang. Chỉ trang đã cho phép mới có cookie | Ngang với người dùng tự bấm link đó |
+| T8 | Trang độc dụ tải kèm cookie (CSRF) | Đặt link tới trang nhạy cảm (`mail.google.com/…?action=delete`) để UTD GET kèm cookie | Chỉ GET, đúng như trình duyệt điều hướng. Bỏ cookie SameSite=Strict khi chéo trang. Hàng loạt chỉ kèm cookie cho link cùng trang. Chỉ trang đã cho phép mới có cookie. Miền nhạy cảm cần xác nhận từng lượt (Q10) | Ngang với người dùng tự bấm link đó |
 | T9 | Trang độc chuyển hướng file sang miền của nó | Thu cookie | Cookie tính theo domain-match ở từng bước (đã thử với yt-dlp: không mang sang host khác). Test engine | Thấp |
 | T10 | Trang gọi extension (postMessage) / extension khác (`onMessageExternal`) | Kích hoạt đọc cookie | Không có content script lắng nghe trang; không đăng ký `onMessageExternal`; `onMessage` kiểm `sender.id === runtime.id` và không có `sender.tab` | Thấp |
 | T11 | Tin nhắn native giả cookie của miền khác | Gắn cookie lạ | App kiểm: domain của cookie phải domain-match URL đích hoặc trang; tên/giá trị đúng bảng ký tự; trần số lượng/kích thước | Thấp |
@@ -341,7 +377,8 @@ Hộp hỏi quyền là của trình duyệt, tự theo ngôn ngữ trình duy�
 
 - **Extension:** `extensions/{chromium,firefox}/`
   - `manifest.json`: `optional_permissions`, `optional_host_permissions`.
-  - `background.js`: đọc cookie trong `onClicked`; tin nhắn `version: 2` có `auth`; kiểm `sender`.
+  - `background.js`: đọc cookie trong `onClicked`; tin nhắn `version: 2` có `auth` (cookie + `userAgent`);
+    kiểm `sender`.
   - `popup.html`, `popup.js`: S-70, S-71, công tắc theo trang.
   - `_locales/*/messages.json` (16 thư mục).
 - **Native host:** `src-tauri/src/native_host.rs`
@@ -389,7 +426,7 @@ Tự động (chạy CI Windows + macOS trừ khi ghi khác):
 | T-C2 | Chuyển hướng: cùng miền con có cookie `Domain=` ⇒ gửi; host-only sang miền con ⇒ không; sang miền khác ⇒ không Cookie, không Authorization; https→http ⇒ không cookie Secure; `Set-Cookie` được gộp | `utd-engine/tests/auth.rs` (server `kit`) |
 | T-C3 | Không persist: tải xong và tạm dừng giữa chừng có credentials, rồi quét byte `utd.db`, `-wal`, `-shm` tìm cookie mồi ⇒ 0 | như trên |
 | T-C4 | Tiếp tục khi thiếu credentials ⇒ `auth.required`, server không nhận request nào; 401 khi có cookie ⇒ `auth.expired` | như trên |
-| T-P1 | Pipe Windows: yt-dlp thật (bỏ qua khi máy không có) đọc cookie mồi từ pipe, thoát 0, server fixture nhận cookie; quét `%TEMP%` + `UTD_DATA_DIR` ⇒ 0 file chứa mồi; client không phải con yt-dlp ⇒ bị từ chối; pipe biến mất sau khi yt-dlp thoát | `src-tauri` test `#[cfg(windows)]` + `#[ignore]` khi không có yt-dlp; CI tải yt-dlp có SHA-256 |
+| T-P1 | Pipe Windows: yt-dlp thật (bỏ qua khi máy không có) đọc cookie mồi từ pipe, thoát 0, server fixture nhận cookie; quét `%TEMP%` + `UTD_DATA_DIR` ⇒ 0 file chứa mồi; client không phải con yt-dlp ⇒ bị từ chối; pipe biến mất sau khi yt-dlp thoát; không có lần đọc trọn nào (giả `os.access` hỏng) ⇒ `auth.pipe`, kết quả `-J` bị bỏ; lệnh tải bị dừng trước byte đầu | `src-tauri` test `#[cfg(windows)]` + `#[ignore]` khi không có yt-dlp; CI tải yt-dlp có SHA-256 |
 | T-P2 | FIFO macOS như T-P1 | `#[cfg(target_os = "macos")]`, GĐ2 |
 | T-Y1 | Mọi lệnh yt-dlp có `--ignore-config --no-plugin-dirs`; lệnh có cookie không có `-v/--print-traffic/--write-pages/--dump-pages` | unit trên hàm dựng tham số |
 | T-L1 | Log: chạy cả luồng (IPC → grant → engine → yt-dlp giả) với logger thu vào bộ nhớ ⇒ không có cookie mồi; `native-host.log` không có mồi; "Sao chép log" và sự kiện chi tiết không có mồi | `src-tauri` |
@@ -460,6 +497,11 @@ Câu cần chủ dự án quyết:
 8. **Q8 — Khoá extension công khai trong repo:** khi lên store, bản phát hành chỉ nhận ID của store, ID dev chỉ
    dùng cho bản debug? Đề xuất **có**.
 9. **Q9 — Đồng ý sửa SPEC** theo §2 (S-14, S-63, thêm S-70..S-73, AC-18) khi bắt đầu GĐ1?
+10. **Q10 — Danh sách miền nhạy cảm** (`gov`, `mil`, ngân hàng, `paypal.com`…, học từ Motrix 2.x):
+    - Đề xuất: **có**, làm ở GĐ1. Các trang này không tự kèm cookie dù đã được cho phép; mỗi lượt cần bấm xác nhận
+      trong popup.
+    - Cái giá: thêm một cú bấm mỗi lần tải từ ngân hàng/cổng chính phủ, và phải giữ danh sách.
+    - Đồng ý thì thêm vào §8.3 hai câu chữ cho 16 ngôn ngữ: nhãn "Trang nhạy cảm" và nút xác nhận.
 
 ## Phụ lục A — Nguồn
 
@@ -517,3 +559,81 @@ Playwright 1.64): `auth-thu/README.md`.
   - `detail_log.rs` đã bỏ query; thêm test T-L1 cho bảng sự kiện mới của phiên đó.
   - Hộp cảnh báo trước khi tải (S-22) có thể hiện chip "kèm đăng nhập · google.com" để người dùng thấy cookie sẽ
     được dùng.
+
+## Phụ lục C — Các repo khác làm thế nào (đọc mã nguồn, 2026-10-25)
+
+Hai agent clone nông (`--depth 1`) rồi đọc mã, không build và không chạy mã đã clone. Kết quả:
+- **15 repo trình quản lý tải có extension.** Free Download Manager không công khai mã. JDownloader chỉ có bản
+  extension MV3 của bên thứ ba.
+- **8 app giao diện cho yt-dlp.** Hitomi Downloader bị chặn DMCA (HTTP 451). Stacher không có mã công khai.
+
+Số dòng theo commit ghi trong bảng. Điều gì chưa kiểm trong mã thì ghi "chưa kiểm".
+
+### C.1 Trình quản lý tải có extension
+
+| Repo (commit) | Lấy cookie | Quyền | Đồng ý | Kênh extension → app | Lưu cookie? | Chuyển hướng sang miền khác |
+|---|---|---|---|---|---|---|
+| AB Download Manager (ext `658a0c7`, app `e329495`) | Tự bắt: `onSendHeaders` + `extraHeaders`; menu: `cookies.getAll({url})`, store mặc định | `*://*/*` bắt buộc, cookies, webRequest, downloads, nativeMessaging | Công tắc "Send headers" **mặc định bật** (`Config.ts` L58); đường tự bắt bỏ qua công tắc | Native messaging; dự phòng HTTP `127.0.0.1:15151`, `X-Api-Key` **mặc định tắt** (`DefaultAppSettings.kt` L43) | Có, chữ thường `downloadlist/<id>.json` | Vẫn gửi Cookie (OkHttp chỉ bỏ `Authorization`) |
+| XDM 9 (`4f16d4d`) | Chép header thật (`extraHeaders`); menu: `getAll({url})`; lấy hàng loạt: `getAll({domain})` + `storeId` của tab | `*://*/*` bắt buộc, cookies, webRequest, downloads | Không hỏi | HTTP `127.0.0.1:8597`, không token; chỉ kiểm Host + Origin, chỉ POST (`BrowserIntegration.kt` L244–255) | Cookie chữ thường trong `task-<id>.info` (`TaskInfoDB.kt` L225); `Authorization` chỉ ở RAM (`SensitiveHeaders.kt`) | Vẫn gửi (OkHttp) |
+| Gopeed (ext `d29bf1b`, app `b8ff5ff`) | `onBeforeSendHeaders` + `extraHeaders`, chỉ `main_frame`/`sub_frame`; không có quyền `cookies` | host http/https, downloads, webRequest, nativeMessaging | Không hỏi | Native messaging → socket / `\\.\pipe\gopeed_host`; REST: token tuỳ chọn, CORS `*` | Có, JSON trong bbolt (0600) | **Lộ:** nhớ URL cuối (`fetcher.go` L532) rồi gửi mọi header tới đó (`helper.go` L125–149) |
+| motrix-webextension, bản cũ (`f8bc93d`) | `getAll({url: item.url})` → aria2 `header: Cookie:` | `<all_urls>`, cookies, downloads | Không hỏi; phải có API key mới takeover | aria2 RPC qua WS `127.0.0.1:16800`, bắt buộc secret | aria2 gốc lưu `header` vào file phiên (chữ thường) | aria2 gốc: không bỏ |
+| Motrix 2.x + motrix-extension (`bcedf50`, app `a7a7c9a`) | `getAll({url})` → cookie có cấu trúc (domain/path/cờ) | `<all_urls>`, cookies, webRequest, downloads, nativeMessaging | **Takeover mặc định tắt** (`shared/takeover.ts` L56) + hộp đồng ý; **danh sách miền nhạy cảm** (`capture/sensitiveDomains.ts`) gửi không cookie | Native messaging + WS loopback 16802–16806, ghép cặp SPAKE2, AES-GCM | Hũ cookie riêng từng task trong SQLite của bản fork aria2 | **Bỏ** Cookie/`Authorization` khi khác origin (fork `HttpRequest.cc` L168–182) |
+| Aria2-Explorer (`5e97685`) | `getAll({url, storeId})` + lần nữa với `partitionKey: {}`; `incognito: split` | `<all_urls>`, cookies, downloads | Chỉ gửi cookie khi RPC là localhost/https/wss | aria2 RPC, secret mặc định rỗng | Tuỳ cấu hình aria2 (chưa kiểm) | aria2 gốc: không bỏ |
+| uGet (`b60810f`, integrator `94a13a7`) | `getAll({url: gốc origin})`: sót cookie có path | `<all_urls>`, cookies, webRequest, downloads, nativeMessaging (MV2) | Không hỏi | Native messaging → Python → CLI | File tạm tên cố định `$TMP/uget_cookie`, quyền mặc định, xoá sau khi CLI xong | chưa kiểm |
+| Persepolis (`109e952`, ext `6ecc318`) | `getAll({url})` → `"a=b; c=d"` | `*://*/`, cookies, downloads, nativeMessaging | Không hỏi | Native messaging | Có, cột `load_cookies` trong SQLite; đọc mã thấy cookie bị rơi trên Linux/mac (sai tên khoá) | chưa kiểm |
+| Video DownloadHelper coapp (`f3736ce`) | Extension đóng mã (chưa kiểm) | chưa kiểm | chưa kiểm | Native messaging, `allowed_origins` | **Không**: chỉ ở RAM, bỏ 60 s sau khi xong | **Bỏ** (got 11.8.6 xoá `cookie`/`authorization` khi đổi host); nhưng ffprobe nhận `-headers` trên dòng lệnh |
+| MyJDownloader MV3, bên thứ ba (`fb045b6`) | Không xuất cookie: tự `fetch(credentials: 'include')` trong trình duyệt, chỉ gửi URL | `<all_urls>`, webRequest | — | Cloud MyJD / CNL `127.0.0.1:9666` | Chỉ URL | — |
+
+### C.2 App giao diện cho yt-dlp
+
+| App (commit) | Nguồn cookie | Đưa cho yt-dlp | Nơi lưu | Xoá? | Mặc định | `--ignore-config` |
+|---|---|---|---|---|---|---|
+| Parabolic (`1118e6a`) | File người dùng chọn, hoặc trình duyệt (Windows chỉ còn Firefox) | `--cookies <file người dùng>` hoặc `--cookies-from-browser` | File của người dùng; app lưu đường dẫn | Không | Tắt | **Có** (`YtdlpExecutableService.cs` L70, L132) |
+| Open Video Downloader (`c402ee3`) | File chọn, hoặc danh sách trình duyệt (có Chrome) | Có thể truyền cả hai cờ | File của người dùng; mật khẩu/token lưu mã hoá (Stronghold), **cookie thì không** | Không | Tắt | Không |
+| ytDownloader (`60f52ec`) | Người dùng dán chữ Netscape, hoặc trình duyệt | `--cookies <userData>/cookies.txt` | localStorage + file 0600, chữ thường, ghi lại mỗi lần mở cài đặt | Chỉ khi xoá ô chữ | Tắt | Không |
+| Seal, Android (`7677f61`) | Đăng nhập trong WebView của app; lấy **mọi** cookie, không lọc host (`DownloadUtil.kt` L374–422) | `--cookies <cacheDir>/cookies.txt` + `--add-header User-Agent:<UA của WebView>` (L361–366) | Thư mục cache riêng của app, chữ thường | Không rõ (chưa kiểm) | Tắt | Không |
+| Tartube (`823e873`) | Đường dẫn file, hoặc trình duyệt + keyring + profile | **Luôn** `--cookies <data_dir>/cookies.txt`, ghi rõ là để chặn yt-dlp ghi file vào thư mục làm việc (`mainapp.py` L764–769) | Thư mục dữ liệu, giữ mãi | Không | Trình duyệt tắt | Không |
+| yt-dlg (`574ed2e`) | Không có, chỉ ô "tham số thêm" | — | — | — | — | **Có** (mặc định) |
+| cobalt (`a636575`) | `cookies.json` do người chạy máy chủ cung cấp | Không dùng yt-dlp; tự gửi `Cookie`, gộp `Set-Cookie`, ghi lại file mỗi 60 s | File máy chủ, JSON chữ thường | Không | — | — |
+| Media Downloader (`616c052`) | File chọn hoặc gõ tên trình duyệt | `--cookies-from-browser` và/hoặc `--cookies` | File của người dùng | Không | Tắt | **Có** |
+
+Thêm hai ghi chú:
+- **Lịch sử "Get cookies.txt":** extension cookies.txt gốc bị báo gửi URL và sau đó gửi cả cookie về máy chủ của
+  tác giả ([ytdl-org/youtube-dl#31465](https://github.com/ytdl-org/youtube-dl/issues/31465), 2023). Wiki yt-dlp
+  đổi sang khuyên dùng "Get cookies.txt LOCALLY" (commit wiki `1043ec2`, `7256bac`). Bản LOCALLY xin
+  `<all_urls>` + cookies + downloads; trong mã không thấy gọi mạng.
+- **Chrome trên Windows (App-Bound Encryption):** Parabolic bỏ Chrome/Edge khỏi danh sách trên Windows (commit
+  `a95108bf5e`, "Manual txt files should be used instead"). Wiki ytDownloader ghi chỉ Firefox chạy được.
+  Không app nào nhận diện hai lỗi tương ứng của yt-dlp.
+
+### C.3 Cách phổ biến, và UTD khác ở đâu
+
+| | Cách phổ biến | Kế hoạch UTD |
+|---|---|---|
+| Quyền extension | Mọi trang, bắt buộc ngay lúc cài | Tuỳ chọn, theo tên miền gốc, xin khi trang cần (§4.2) |
+| Lúc đọc cookie | Mọi download, thường không hỏi | Chỉ trong cú bấm, chỉ trang đã cho phép (§4.3) |
+| Định dạng | Một chuỗi `Cookie:` phẳng | Cookie có cấu trúc, gửi theo domain/path/secure/SameSite (§5.3), như Motrix 2.x |
+| Lưu | Chữ thường cạnh task, để tải tiếp sau khi khởi động lại | Chỉ RAM; khởi động lại thì xin lại bằng 2 cú bấm (§6). Đây là điểm duy nhất UTD kém tiện hơn, do P-02 buộc |
+| Đưa cho yt-dlp | File cookies.txt trên đĩa, hoặc `--cookies-from-browser` | Named pipe, kiểm đã đọc (§5.1) |
+| Chuyển hướng sang miền khác | Đa số vẫn gửi Cookie | Tính lại theo miền ở mỗi bước (giống got, fork aria2 của Motrix) |
+| Kênh extension → app | HTTP localhost, token tuỳ chọn hoặc không có | Native messaging + pipe có token; thêm DACL (GĐ0) |
+| `--ignore-config` | 3/8 app | Mọi lệnh (GĐ0) |
+
+**Đã học và đưa vào kế hoạch:**
+1. Gửi kèm User-Agent của trình duyệt, như Seal (§4.2).
+2. Kiểm yt-dlp đã thật sự đọc cookie, vì `os.access` sai thì yt-dlp bỏ qua không báo (§5.1, T-P1).
+3. Danh sách miền nhạy cảm, như Motrix 2.x (Q10).
+4. Takeover tạm dừng rồi trả lại trình duyệt, như motrix-webextension bản cũ; tránh lỗi mất download của AB
+   Download Manager (§4.4).
+
+**Cố ý không chép:**
+- Đọc mọi request bằng `webRequest` + `extraHeaders` (XDM, AB Download Manager, Gopeed): phải có quyền mọi trang
+  và thấy toàn bộ lưu lượng.
+- Lưu chuỗi cookie cạnh task.
+- File cookie cố định trên đĩa.
+- HTTP localhost không token.
+- Truyền header/cookie trên dòng lệnh (`ffprobe -headers` của Video DownloadHelper).
+
+**Kiểm chéo:** agent thứ hai dựng lại pipe bằng CPython 3.11 + ctypes (không phải yt-dlp.exe) và ra cùng kết luận
+với bài thử ở `auth-thu/`: `os.access` tốn một lần nối, lần nối thứ hai đọc được, lần thứ ba nhận phần ghi lại
+(xuống dòng CRLF).
