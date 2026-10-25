@@ -45,6 +45,10 @@ struct Storm {
 /// Hàng đợi của đường truyền: kết nối đến trễ một chút vẫn bù được, không mất băng thông.
 const BUCKET_BURST: Duration = Duration::from_millis(40);
 
+/// Bài trần băng thông so hai bậc chỉ hơn kém vài phần trăm: các bài khác mở kết nối, tải, băm cùng lúc
+/// làm máy CI 4 vCPU khựng đúng lúc đo. Bài đó giữ khoá ghi (chạy một mình), các bài khác giữ khoá đọc.
+static ALONE: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
 struct Shared {
     body: Vec<u8>,
     limits: Limits,
@@ -402,6 +406,7 @@ fn summary(points: &[Point]) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ramps_past_four_when_each_connection_is_throttled() {
+    let _shared = ALONE.read().await;
     let data = payload(16 * MIB);
     let limits = Limits {
         per_connection: Some(MIB as u64),
@@ -459,9 +464,9 @@ async fn ramps_past_four_when_each_connection_is_throttled() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stops_adding_connections_when_total_bandwidth_is_capped() {
-    // Bài này so tốc độ hai bậc gần bằng nhau (trần chung). Cửa sổ 50/300 ms của `options` quá ngắn trên
-    // máy CI 4 vCPU chạy song song cả bộ: lần đo đầu dính lúc mở kết nối, thấp hơn thật, nên bộ điều khiển
-    // tưởng thêm kết nối có lợi. Nới cửa sổ (thật: 500 ms / 3 s) và tải lâu hơn tương ứng.
+    let _alone = ALONE.write().await;
+    // Bài này so tốc độ hai bậc gần bằng nhau (trần chung) nên dùng cửa sổ gần cấu hình thật hơn
+    // (thật: 500 ms / 3 s) và tải lâu hơn tương ứng.
     let data = payload(24 * MIB);
     let server = ThrottledServer::start(
         data.clone(),
@@ -509,15 +514,19 @@ async fn stops_adding_connections_when_total_bandwidth_is_capped() {
         "should not keep adding useless connections: [{}]",
         summary(&points)
     );
+    // Dưới trần chung bậc 8 đo ra nhanh hơn bậc 4 khoảng 0% ± nhiễu; nhiễu rơi vào vùng giữ (KEEP_GAIN..
+    // CLIMB_GAIN, 3–8%) thì bộ điều khiển được phép ở lại 8. Bài này chỉ chứng minh không leo tiếp lên 12/16;
+    // lùi đúng về 4 khi bậc trên không nhanh hơn thì test đơn vị của `engine::adaptive` kiểm (không nhiễu).
     assert!(
-        late_mean <= 6.5,
-        "should settle low: [{}]",
+        late_mean <= 8.0,
+        "should not stay above 8: [{}]",
         summary(&points)
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn backs_off_on_429_and_503_then_recovers() {
+    let _shared = ALONE.read().await;
     let data = payload(24 * MIB);
     let server = ThrottledServer::start(
         data.clone(),
@@ -604,6 +613,7 @@ async fn backs_off_on_429_and_503_then_recovers() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pause_and_resume_stay_byte_exact_while_adapting() {
+    let _shared = ALONE.read().await;
     let data = payload(16 * MIB);
     let server = ThrottledServer::start(
         data.clone(),
