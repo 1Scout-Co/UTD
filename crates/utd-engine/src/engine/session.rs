@@ -23,6 +23,7 @@ use super::http::{host_key, probe, sanitize_suggested_name, Probe, RequestFailur
 use super::limiter::Limiter;
 use super::net::{NetEpoch, NetState, NetWatch};
 use super::pulse::Pulse;
+use super::interstitial;
 use super::relink::{self, LinkError};
 use super::transport::{plain_policy, scoped_policy, Clients, Transport};
 use super::verify::{sha256_file, HashOutcome};
@@ -399,7 +400,7 @@ impl DownloadEngine {
         }
         let url = validate_url(&task.url)?;
         let transport = self.transport(&task, &url, &control)?;
-        let probe = match self.probe_with_retry(&transport, &url, &control).await {
+        let mut probe = match self.probe_with_retry(&transport, &url, &control).await {
             Ok(probe) => probe,
             Err(failure) => {
                 if control.cancel.is_cancelled() {
@@ -414,6 +415,16 @@ impl DownloadEngine {
         if landed_on_page && is_login_redirect(&url, &probe.url) {
             let error = if transport.has_cookies() { auth_expired() } else { auth_required() };
             return self.fail(task, error, &control);
+        }
+        // Trang xác nhận trước khi tải (Google Drive: file lớn không quét virus được) ⇒ theo form tải của trang.
+        // Mỗi lượt đều theo lại: link trong form (`uuid`) có thể hết hạn giữa hai lượt. Chỉ khi máy chủ nói rõ là
+        // HTML: không nói kiểu thì đa phần là file, đọc thêm một lần là tải phí.
+        let html_page = !probe.attachment && probe.content_type.as_deref().is_some_and(is_html_type);
+        if html_page
+            && let Some(next) = interstitial::follow(&transport, &probe.url, self.options.connect_timeout).await
+            && let Ok(found) = self.probe_with_retry(&transport, &next, &control).await
+        {
+            probe = found;
         }
         pulse.mark("probe");
         if control.cancel.is_cancelled() {

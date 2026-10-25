@@ -493,8 +493,45 @@ Kiểm (Windows):
   - Sửa: `media_pages::is_drive_folder` (`drive.google.com/` và `/drive/…`) ⇒ mã `link.drive_folder` "Mở file ở
     trang riêng rồi thử lại", ở mọi đường (IPC trả lỗi trước khi gắn link, Thêm URL, lô link); tiện ích đổi câu có
     mã sang chữ của nó (16 ngôn ngữ).
-  - Còn mở: tìm id file đang xem trước trong DOM của Drive để tải thẳng; đường `drive.google.com/file/d/…/view`
-    qua yt-dlp có cookie chưa thử thật.
+  - Còn mở: tìm id file đang xem trước trong DOM của Drive để tải thẳng từ trang thư mục.
+- **Lỗi 3 — trang file Drive tải ra "view":** tab đúng trang file `drive.google.com/file/d/<id>/view` (video riêng
+  tư, đã đăng nhập, google.com đã cho phép) ⇒ task HTTP tên "view", `http.not_a_file` sau 3 s. Sửa ở mục "Google
+  Drive" ngay dưới.
+
+#### Google Drive: trang file (đưa từ GĐ2 lên, 2026-10-25)
+
+- **Nhận trang file** (`media_pages::drive_download_url`): `drive.google.com/file/d/<id>/view|edit|preview`,
+  `open?id=`, `uc?id=` (cả `/u/<n>/…`, `docs.google.com/uc?id=`) ⇒ link tải thật
+  `https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t` (giữ `resourcekey`). Đổi ở IPC
+  (trước khi định tuyến) và ở `create_download` (Thêm URL, lô link). id chỉ nhận `[A-Za-z0-9_-]`, 10–200 ký tự.
+- **Trang xác nhận quét virus** (file lớn): engine `engine/interstitial.rs` — trang HTML có form GET
+  `id="download-form"` cùng host ⇒ dựng link từ các ô của form (`confirm`, `uuid`…) rồi dò lại; mỗi lượt chạy đều
+  theo lại (link trong form có thể hết hạn). Đọc trang tối đa 256 KiB, không chạy script, form khác host / POST bị bỏ.
+- **Tên file** lấy từ `Content-Disposition` của máy chủ (task tạo không đặt tên nên engine được đổi tên theo máy chủ).
+- **Cookie**: quyền `*://*.google.com/*` phủ `drive.usercontent.google.com`; tiện ích đọc thêm cookie áp cho
+  `https://drive.usercontent.google.com/download` khi link là trang file Drive (cookie riêng của máy tải nếu có).
+  Chuyển hướng sang `*.googleusercontent.com` (miền khác) thì không mang cookie, đúng luật cũ.
+- **Video trên Drive: tải file gốc, không qua yt-dlp.** Lý do:
+  - Đúng byte của file người dùng tải lên, như nút Tải xuống của Drive; yt-dlp (extractor GoogleDrive) có thể chọn
+    bản chuyển mã của trình phát (độ phân giải thấp hơn) khi không lấy được bản gốc.
+  - Một đường cho mọi loại file (pdf, zip, video…), không cần yt-dlp/ffmpeg, tải đa luồng và tiếp tục được như file
+    thường; lỗi đăng nhập đi chung đường chờ `Link` đã có.
+  - Cookie chỉ đi qua engine (RAM, theo host), không phải đưa sang tiến trình yt-dlp qua pipe.
+- **Trang thư mục/danh sách** (`/drive/my-drive`, `/drive/folders/…`, `/drive/search?q=…`, `drive.google.com/`):
+  không tạo task, báo `link.drive_folder` (xem Lỗi 2).
+- Bài thử: unit nhận dạng link (`drive_file_pages_download_the_original_file`), unit form (`interstitial`), engine
+  `a_drive_virus_scan_page_is_followed_with_the_cookies_and_named_by_the_server` (máy chủ giả: cần cookie, trang
+  xác nhận, tên trong Content-Disposition; đỏ khi bỏ bước theo form).
+- Chưa thử thật: file Drive của chủ dự án (bản release dựng lại cho chủ dự án tự thử).
+
+#### Doctor cho `http.not_a_file`
+
+- Báo cáo riêng "Link này là trang web, không phải file" (16 ngôn ngữ): mở trang và bấm nút tải của trang, hoặc
+  chuột phải đúng link tải › Tải bằng UTD; Drive thì mở file ra trang riêng. Không có nút Thử lại (lần nào cũng
+  hỏng); download thường có nút "Cập nhật link…" để dán link tải thật cho chính download đó. Hộp Doctor và màn Chi
+  tiết S-21 dùng chung (`model/doctor.ts`), có e2e cho cả hai.
+- `http.empty` (máy chủ không gửi dữ liệu) để nguyên báo cáo chung: nguyên nhân khác (máy chủ hỏng/tạm thời), không
+  phải "link là trang web".
 - `auth-e2e.py` chạy lại trên bản release: đạt 6 bước, 0 file chứa cookie mồi; sửa cách đếm yêu cầu sau khi mở lại
   (chỉ dòng `GET`/`HEAD`).
 - Trên máy này app do phiên AI mở thì Chrome không nối được (pipe/AppData của phiên bị cô lập): thử thật phải để

@@ -2,6 +2,7 @@ mod adaptive;
 mod content;
 mod file;
 mod http;
+mod interstitial;
 mod limiter;
 mod net;
 mod pulse;

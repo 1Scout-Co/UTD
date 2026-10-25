@@ -325,6 +325,22 @@ test('S-21: file trên máy chủ đã đổi ⇒ "Tải lại từ đầu", kh�
   expect((await calls(page, 'restart_download')).at(-1)?.args).toEqual({ taskId: 't1' })
 })
 
+test('S-21: link là trang web ⇒ không có "Thử lại"; cách làm (cả Drive) và "Cập nhật link…"', async ({ page }) => {
+  const notFile = task('failed', {
+    url: 'https://drive.google.com/file/d/1hfaJWoyFptsG9niNHVfOB8m6snwbibpl/view',
+    totalBytes: null,
+    downloadedBytes: 0,
+    error: { class: 'user', code: 'http.not_a_file', message: 'Link này là một trang web, không phải file.' },
+  })
+  const dialog = await open(page, { list_downloads: [notFile], download_detail: detail(notFile) })
+  const screen = dialog.locator('[data-s="S-21"]')
+  await expect(screen.getByRole('heading', { name: 'Link này là trang web, không phải file' })).toBeVisible()
+  await expect(screen).toContainText('Google Drive: mở file ra trang riêng rồi thử lại.')
+  await expect(screen.getByRole('button', { name: 'Thử lại' })).toHaveCount(0)
+  await screen.getByRole('button', { name: 'Cập nhật link…' }).click()
+  await expect(page.getByRole('dialog', { name: 'Cập nhật link' })).toBeVisible()
+})
+
 test('S-15: a11y — màn chi tiết đang tải', async ({ page }) => {
   const running = task('downloading')
   await open(page, { list_downloads: [running], download_detail: detail(running) })

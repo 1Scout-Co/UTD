@@ -489,6 +489,10 @@ where
     let parsed = serde_json::from_str::<PipeRequest>(&line);
     line.zeroize();
     let mut request = parsed.map_err(|_| "IPC payload không hợp lệ".to_string())?;
+    // Trang file Google Drive ("Tải trang này", chuột phải link file): tải file gốc bằng link tải thật.
+    if let Some(download) = crate::media_pages::drive_download_url(&request.url) {
+        request.url = download;
+    }
     let response = match route(&request, token) {
         Route::Reject(message) => PipeResponse::error(message),
         Route::Media => open_media(&app, request, crate::media_pages::MEDIA_PAGE_NOTE),

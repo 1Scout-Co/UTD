@@ -93,7 +93,9 @@ pub(crate) fn create_download(
     grant: Option<&crate::auth::Grant>,
 ) -> Result<(DownloadTask, Entry), String> {
     let allow_rename = input.file_name.is_none();
-    let mut request = DownloadRequest::new(input.url, dest_dir.to_string_lossy().into_owned());
+    // Trang file Google Drive (dán vào Thêm URL, lô link): tải file gốc, tên lấy từ máy chủ.
+    let url = crate::media_pages::drive_download_url(&input.url).unwrap_or(input.url);
+    let mut request = DownloadRequest::new(url, dest_dir.to_string_lossy().into_owned());
     if let Some(grant) = grant {
         request.auth_sites = vec![grant.site.clone()];
     }

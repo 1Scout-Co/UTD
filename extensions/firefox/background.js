@@ -80,6 +80,10 @@ const hostOf = (url) => {
 
 const within = (host, site) => host === site || host.endsWith(`.${site}`)
 
+// Trang file Google Drive (`/file/d/<id>/…`, `open?id=`, `uc?id=`) và máy chủ tải thật của nó.
+const DRIVE_FILE_PAGE = /^https:\/\/(drive|docs)\.google\.com\/(u\/\d+\/)?(file\/d\/|open\?|uc\?)/
+const DRIVE_DOWNLOAD = "https://drive.usercontent.google.com/download"
+
 /** Trang (tên miền gốc) đã được cho phép phủ `host`: quyền `*://*.google.com/*` phủ drive.google.com. */
 async function grantedSite(host) {
   if (!host || !api.cookies) return null
@@ -146,6 +150,8 @@ async function authFor(targetUrl, pageUrl, tab) {
   if ((await api.storage.local.get(key))[key]) return null
   const sameSite = within(hostOf(pageUrl ?? ""), site)
   const urls = sameSite && pageUrl && pageUrl !== targetUrl ? [targetUrl, pageUrl] : [targetUrl]
+  // Trang file Google Drive: UTD tải bằng link tải thật ở máy khác (src-tauri/src/media_pages.rs).
+  if (DRIVE_FILE_PAGE.test(targetUrl)) urls.push(DRIVE_DOWNLOAD)
   const cookies = await readCookies(site, urls, tab, !sameSite)
   return cookies.length > 0 ? { site, cookies, userAgent: navigator.userAgent } : null
 }

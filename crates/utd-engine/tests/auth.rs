@@ -341,3 +341,77 @@ async fn a_sign_in_wait_takes_a_new_link_only_with_the_cookies() {
     drop(journal);
     assert!(files_containing(directory.path(), secret.as_bytes()).is_empty());
 }
+
+/// Trang xác nhận quét virus của máy chủ giả kiểu Google Drive (rút gọn từ trang thật): form GET `download-form`.
+const DRIVE_CONFIRM: &str = r#"<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title></head>
+<body><p>Google Drive can&#39;t scan this file for viruses.</p><form id="download-form" action="/download"
+method="get"><input type="submit" id="uc-download-link" value="Download anyway"/><input type="hidden" name="id"
+value="big"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t">
+<input type="hidden" name="uuid" value="u-1"></form></body></html>"#;
+
+/// Như `drive.usercontent.google.com/download`: cần cookie phiên (thiếu thì về trang đăng nhập), file lớn ra
+/// trang xác nhận trước, gửi form (có `uuid`) mới ra file; tên file nằm trong Content-Disposition.
+fn drive_like(secret: String, body: Arc<Vec<u8>>) -> Handler {
+    Arc::new(move |request: &Req| {
+        if request.path.starts_with("/ServiceLogin") {
+            return Reply::new(200)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body("<form><input type=password></form>");
+        }
+        let signed_in = request.header("cookie").is_some_and(|cookie| {
+            cookie
+                .split("; ")
+                .any(|pair| pair == format!("SID={secret}"))
+        });
+        if !signed_in {
+            return Reply::redirect("/ServiceLogin?continue=/download");
+        }
+        let query = request.path.split_once('?').map_or("", |(_, query)| query);
+        let has = |pair: &str| query.split('&').any(|item| item == pair);
+        if has("id=big") && !has("uuid=u-1") {
+            return Reply::new(200)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(DRIVE_CONFIRM);
+        }
+        serve_file(request, &body, &FileOpts::default()).header(
+            "Content-Disposition",
+            "attachment; filename=\"clip.mp4\"; filename*=UTF-8''Clip%20quay%20ng%C3%A0y%201.mp4",
+        )
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_drive_virus_scan_page_is_followed_with_the_cookies_and_named_by_the_server() {
+    let secret = canary();
+    let data = payload(MIB + 999);
+    let server = Server::start(drive_like(secret.clone(), Arc::new(data.clone()))).await;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (_journal, engine) = engine(directory.path(), options(2, 4));
+    let link = server.url("/download?id=big&export=download&confirm=t");
+
+    // Chưa đăng nhập: về trang đăng nhập, không tạo file "download".
+    let outcome = engine
+        .download(DownloadRequest::new(link.clone(), downloads(directory.path())), DownloadControl::new())
+        .await
+        .expect("download");
+    assert_eq!(error_code(&outcome), AUTH_REQUIRED);
+
+    // Kèm cookie: trang xác nhận ⇒ theo form (thêm `uuid`) ⇒ file thật, tên từ Content-Disposition.
+    let mut request = DownloadRequest::new(link, downloads(directory.path()));
+    request.auth_sites = vec!["127.0.0.1".into()];
+    let outcome = engine
+        .download(request, signed_in(vec![session_cookie("SID", &secret, "127.0.0.1")]))
+        .await
+        .expect("download");
+    assert!(outcome.is_completed(), "unexpected outcome: {outcome:?}");
+    let task = outcome.task();
+    assert_eq!(task.file_name, "Clip quay ngày 1.mp4");
+    assert!(task.final_url.as_deref().is_some_and(|url| url.contains("uuid=u-1")), "{:?}", task.final_url);
+    assert_eq!(std::fs::read(final_path(task)).expect("file"), data);
+    let pages = server
+        .requests()
+        .iter()
+        .filter(|request| request.method == "GET" && request.path.contains("id=big") && !request.path.contains("uuid"))
+        .count();
+    assert!(pages <= 3, "đọc trang xác nhận có giới hạn: {pages}");
+}
