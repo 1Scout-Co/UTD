@@ -131,7 +131,17 @@ function igRoutes(page: Page, options: { feedStatus?: number } = {}) {
     requests.push({ url: url.pathname + url.search, method: request.method(), headers: request.headers(), body: request.postData() })
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
     if (url.pathname === '/api/v1/users/web_profile_info/') {
-      return json({ data: { user: { id: '528817151', full_name: 'NASA', profile_pic_url_hd: `${IG_CDN}/v/avatar.jpg`, edge_followed_by: { count: 97000000 }, is_private: false } } })
+      // Chữ "spam", "wait a few minutes" trong tiểu sử / chú thích không phải lỗi bị chặn.
+      return json({
+        data: {
+          user: {
+            id: '528817151', full_name: 'NASA', profile_pic_url_hd: `${IG_CDN}/v/avatar.jpg`, edge_followed_by: { count: 97000000 }, is_private: false,
+            biography: 'No spam! Launch in a few hours, please wait a few minutes. require_login',
+            edge_owner_to_timeline_media: { edges: [{ node: { edge_media_to_caption: { edges: [{ node: { text: 'feedback_required spam' } }] } } }] },
+          },
+        },
+        status: 'ok',
+      })
     }
     if (url.pathname === '/api/v1/feed/reels_media/' && url.search === '?reel_ids=528817151') {
       return json({ reels: { 528817151: { id: '528817151', items: [{ pk: '9001', taken_at: 1790000000, code: 'S1', image_versions2: igImage('story'), user: NASA }] } } })

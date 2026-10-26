@@ -324,16 +324,26 @@ class SocialJob {
     const reply = await this.run(socialInstagramCall, [path, form, SOCIAL_IG_APP_ID]).catch(() => null)
     if (!reply) throw new Error("social.changed")
     const code = socialInstagramError(reply)
-    if (code) throw new Error(code)
+    if (code) {
+      // Để chẩn đoán (trang service worker của tiện ích): mã HTTP và câu báo của Instagram, không có dữ liệu hồ sơ.
+      console.warn("UTD social", code, path.split("?")[0], reply.status, reply.meta?.message ?? "")
+      throw new Error(code)
+    }
     return reply
   }
 }
 
-/** Lỗi của một câu trả lời Instagram (mã cố định, UTD đổi sang câu của app). */
+/**
+ * Lỗi của một câu trả lời Instagram (mã cố định, UTD đổi sang câu của app). Chỉ đọc các trường báo lỗi ở cấp ngoài: chú
+ * thích bài / tiểu sử trong câu trả lời có thể chứa chữ "spam", "wait a few minutes"…
+ */
 function socialInstagramError(reply) {
-  const message = JSON.stringify(reply.meta ?? {}).toLowerCase()
-  if (reply.status === 429 || /wait a few minutes|checkpoint_required|challenge_required|feedback_required|spam/.test(message)) return "social.rate_limited"
-  if (reply.status === 401 || reply.status === 403 || /\/accounts\/login|\/challenge/.test(reply.url ?? "") || /login_required|require_login/.test(message)) return "social.login"
+  const meta = reply.meta && typeof reply.meta === "object" ? reply.meta : {}
+  const text = (value) => (typeof value === "string" ? value.toLowerCase() : "")
+  const message = `${text(meta.message)} ${text(meta.error_type)}`
+  const failed = meta.status === "fail"
+  if (reply.status === 429 || meta.spam === true || (failed && /wait a few minutes|checkpoint_required|challenge_required|feedback_required|spam/.test(message))) return "social.rate_limited"
+  if (reply.status === 401 || reply.status === 403 || /\/accounts\/login|\/challenge/.test(reply.url ?? "") || (failed && (meta.require_login === true || /login_required/.test(message)))) return "social.login"
   if (reply.status === 404) return "social.not_found"
   if (reply.status !== 200 || !reply.meta) return "social.changed"
   return null
