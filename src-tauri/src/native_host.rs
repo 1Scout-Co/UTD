@@ -39,7 +39,8 @@ fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
     // Trang đang mở (để UTD mở đúng luồng media); bỏ qua nếu lạ thay vì từ chối cả yêu cầu.
     let page_url = request.page_url.as_deref().map(str::trim).filter(|page| is_web_url(page));
     match request.kind.as_str() {
-        "download" => {
+        // `takeover` (bản 2): download trình duyệt vừa bắt đầu, tiện ích đang tạm dừng nó (takeover.rs).
+        "download" | "takeover" if request.kind == "download" || request.version >= 2 => {
             let url = request.url.trim();
             if !is_web_url(url) {
                 return Err("Chỉ hỗ trợ URL HTTP/HTTPS.".into());
@@ -49,12 +50,16 @@ fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
                 .as_deref()
                 .map(str::trim)
                 .filter(|name| !name.is_empty() && name.chars().count() <= 180);
-            Ok(serde_json::json!({
+            let mut payload = serde_json::json!({
                 "url": url,
                 "suggestedName": suggested_name,
                 "pageUrl": page_url,
                 "auth": auth,
-            }))
+            });
+            if request.kind == "takeover" {
+                payload["kind"] = "takeover".into();
+            }
+            Ok(payload)
         }
         "batch" => {
             if request.urls.len() > crate::batch::MAX_LINKS {
@@ -355,6 +360,25 @@ mod tests {
             renew(serde_json::json!({ "version": 2, "type": "auth-renew", "url": "https://drive.google.com/", "auth": auth })).unwrap()["auth"],
             auth
         );
+    }
+
+    /// Tự bắt link tải: chỉ bản 2, cùng kiểm như một link; app biết đây là download trình duyệt đang dừng.
+    #[test]
+    fn takeovers_are_version_two_links() {
+        let takeover = |version: u32, url: &str| {
+            pipe_payload(&message(serde_json::json!({
+                "version": version, "type": "takeover", "url": url,
+                "pageUrl": "https://example.com/", "suggestedName": "a.zip",
+            })))
+        };
+        let payload = takeover(2, "https://cdn.example.com/a.zip").unwrap();
+        assert_eq!(payload["kind"], "takeover");
+        assert_eq!(payload["suggestedName"], "a.zip");
+        assert_eq!(payload["pageUrl"], "https://example.com/");
+        assert!(takeover(1, "https://cdn.example.com/a.zip").is_err());
+        assert!(takeover(2, "blob:https://example.com/1").is_err());
+        let plain = pipe_payload(&message(serde_json::json!({ "version": 1, "type": "download", "url": "https://a.b/c" })));
+        assert_eq!(plain.unwrap().get("kind"), None, "link thường như cũ");
     }
 
     #[test]

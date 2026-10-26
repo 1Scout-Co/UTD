@@ -19,6 +19,7 @@ mod preflight;
 mod queue;
 mod recover;
 mod state;
+mod takeover;
 mod titlebar;
 mod updater;
 

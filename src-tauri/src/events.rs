@@ -52,6 +52,16 @@ pub struct AuthGranted {
     pub auth_grant: String,
 }
 
+/// UTD vừa nhận một download của trình duyệt (tự bắt link tải, takeover.rs): giao diện hiện thông báo nhỏ.
+pub const TAKEN_OVER_EVENT: &str = "utd://taken-over";
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TakenOver {
+    pub task_id: String,
+    pub file_name: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeError {

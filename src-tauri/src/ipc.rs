@@ -59,6 +59,8 @@ enum Route {
     AuthPending,
     /// Popup gửi cookie (người dùng vừa bấm cho phép): tải tiếp việc đang chờ.
     AuthRenew,
+    /// Download trình duyệt vừa bắt đầu (tự bắt link tải, takeover.rs): nhận nếu dò được file.
+    Takeover,
 }
 
 fn route(request: &PipeRequest, token: &str) -> Route {
@@ -70,6 +72,7 @@ fn route(request: &PipeRequest, token: &str) -> Route {
         match kind {
             "auth-pending" => Route::AuthPending,
             "auth-renew" if request.auth.is_some() => Route::AuthRenew,
+            "takeover" => Route::Takeover,
             _ => Route::Reject("Yêu cầu từ trình duyệt không hợp lệ."),
         }
     } else if let Some(links) = &request.batch {
@@ -502,6 +505,21 @@ where
             Some(auth) => PipeResponse::auth(crate::auth::flow::renew(&app, &request.url, auth)),
             None => PipeResponse::error("Yêu cầu từ trình duyệt không hợp lệ."),
         },
+        Route::Takeover => {
+            let offer = crate::takeover::Offer {
+                url: request.url,
+                page_url: request.page_url,
+                suggested_name: request.suggested_name,
+                auth: request.auth.take(),
+            };
+            match crate::takeover::take(&app, &engine, &queue, offer).await {
+                Ok(task_id) => PipeResponse::ok(task_id),
+                Err(reason) => {
+                    log::info!("takeover declined: {reason}");
+                    PipeResponse::error(crate::takeover::DECLINED)
+                }
+            }
+        }
         Route::Batch(urls) => {
             let page_url = crate::media_pages::clean_page_url(request.page_url);
             // Cookie của trang đang mở; chỉ link cùng trang dùng (batch.rs).
@@ -713,6 +731,12 @@ mod tests {
             "cookies": [{ "name": "SID", "value": "UTDCANARYipc", "domain": ".google.com", "hostOnly": false, "path": "/", "secure": true, "expires": null }],
         });
         assert_eq!(route(&popup(TOKEN, "auth-pending", None), TOKEN), Route::AuthPending);
+        assert_eq!(route(&popup(TOKEN, "takeover", Some(auth.clone())), TOKEN), Route::Takeover);
+        assert_eq!(route(&popup(TOKEN, "takeover", None), TOKEN), Route::Takeover, "trang chưa dùng đăng nhập");
+        assert_eq!(
+            route(&popup(&"f".repeat(TOKEN.len()), "takeover", None), TOKEN),
+            Route::Reject("Token IPC không hợp lệ.")
+        );
         assert_eq!(route(&popup(TOKEN, "auth-renew", Some(auth.clone())), TOKEN), Route::AuthRenew);
         assert_eq!(
             route(&popup(TOKEN, "auth-renew", None), TOKEN),

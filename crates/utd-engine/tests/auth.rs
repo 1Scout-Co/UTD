@@ -342,6 +342,30 @@ async fn a_sign_in_wait_takes_a_new_link_only_with_the_cookies() {
     assert!(files_containing(directory.path(), secret.as_bytes()).is_empty());
 }
 
+/// Tự bắt link tải của trình duyệt: dò kèm cookie của cú bấm thấy file thật; không cookie thì chỉ thấy trang
+/// đăng nhập (app trả download về trình duyệt). Không tạo task, cookie không xuống đĩa.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inspecting_with_the_click_cookies_sees_the_file_behind_a_sign_in() {
+    let secret = canary();
+    let server = Server::start(gated(secret.clone(), Arc::new(payload(MIB)))).await;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (journal, engine) = engine(directory.path(), options(2, 4));
+
+    let bare = engine.inspect(&server.url("/file.bin")).await.expect("inspect");
+    assert!(bare.page, "không cookie: trang đăng nhập");
+    let jar = Arc::new(CookieJar::new(vec![session_cookie("sid", &secret, "127.0.0.1")]));
+    let signed = engine
+        .inspect_signed(&server.url("/file.bin"), Some(jar))
+        .await
+        .expect("inspect");
+    assert!(!signed.page, "{signed:?}");
+    assert_eq!(signed.total_bytes, Some(MIB as u64));
+    assert!(journal.list_tasks().expect("list").is_empty(), "không tạo task");
+    drop(engine);
+    drop(journal);
+    assert!(files_containing(directory.path(), secret.as_bytes()).is_empty());
+}
+
 /// Trang xác nhận quét virus của máy chủ giả kiểu Google Drive (rút gọn từ trang thật): form GET `download-form`.
 const DRIVE_CONFIRM: &str = r#"<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title></head>
 <body><p>Google Drive can&#39;t scan this file for viruses.</p><form id="download-form" action="/download"

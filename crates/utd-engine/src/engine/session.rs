@@ -175,12 +175,22 @@ impl DownloadEngine {
     /// Dò nhanh một link mà không tạo task (HEAD, hoặc GET 1 byte): tên, kích thước, có phải trang web.
     /// Cho bảng xem trước của hộp Thêm hàng loạt: thử một lần, mỗi yêu cầu tối đa `connect_timeout`.
     pub async fn inspect(&self, raw_url: &str) -> std::result::Result<RemoteFile, TaskError> {
+        self.inspect_signed(raw_url, None).await
+    }
+
+    /// Như `inspect`, kèm cookie đăng nhập của một cú bấm (tự bắt link tải của trình duyệt): cookie chỉ
+    /// dùng cho lần dò này, tính lại theo từng bước chuyển hướng như khi tải.
+    pub async fn inspect_signed(
+        &self,
+        raw_url: &str,
+        cookies: Option<Arc<CookieJar>>,
+    ) -> std::result::Result<RemoteFile, TaskError> {
         let url = validate_url(raw_url.trim()).map_err(|error| TaskError {
             class: ErrorClass::User,
             code: "url.invalid".into(),
             message: error.to_string(),
         })?;
-        let transport = Transport::new(&self.clients, &url, &[], None, None)
+        let transport = Transport::new(&self.clients, &url, &[], None, cookies)
             .map_err(|_| internal_error())?;
         let probe = probe(&transport, &url, self.options.connect_timeout)
             .await
