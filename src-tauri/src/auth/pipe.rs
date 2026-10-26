@@ -16,7 +16,6 @@ use std::sync::{Arc, OnceLock};
 
 use tokio_util::sync::CancellationToken;
 use utd_engine::auth::CookieJar;
-use zeroize::Zeroizing;
 
 /// Số instance tạo sẵn: kiểm quyền, nạp, lưu, và một dự phòng.
 #[cfg(windows)]
@@ -64,6 +63,7 @@ pub(crate) fn open(_jar: &CookieJar) -> io::Result<CookiePipe> {
 #[cfg(windows)]
 pub(crate) fn open(jar: &CookieJar) -> io::Result<CookiePipe> {
     use tokio::net::windows::named_pipe::ServerOptions;
+    use zeroize::Zeroizing;
 
     let path = format!(r"\\.\pipe\utd-ck-{}", uuid::Uuid::new_v4().simple());
     let acl = crate::ipc::pipe_acl::PipeAcl::current_user()?;
