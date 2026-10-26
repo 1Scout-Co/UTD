@@ -183,8 +183,9 @@ test('S-73: Cài đặt có mục Đăng nhập của trình duyệt; Quên cook
   expect(await app(page).calls('set_auth_enabled')).toEqual([{ enabled: false }])
 })
 
-// Tiện ích: nạp background.js thật với API trình duyệt giả (như batch.spec.ts). Trang đã cho phép:
-// `*://*.utd.test/*`. Không bao giờ gọi native host thật.
+// Tiện ích: nạp background.js thật với API trình duyệt giả (như batch.spec.ts). Quyền xin một lần lúc cài (Q11):
+// UTD giả trả trang gốc (`utd.test`) và trang nhạy cảm (`bank.test`); tắt riêng một trang bằng `signin-off:<trang>`.
+// Không bao giờ gọi native host thật.
 function stubSignedInExtension() {
   const sent: Record<string, unknown>[] = []
   const reads: string[] = []
@@ -196,7 +197,9 @@ function stubSignedInExtension() {
     { name: 'SID', value: 's1', domain: '.utd.test', hostOnly: false, path: '/', secure: true, session: true, sameSite: 'no_restriction' },
     { name: 'pref', value: 'p1', domain: 'drive.utd.test', hostOnly: true, path: '/', secure: false, session: false, expirationDate: 2_000_000_000.5, sameSite: 'unspecified' },
     { name: 'lock', value: 'l1', domain: 'drive.utd.test', hostOnly: true, path: '/', secure: false, session: true, sameSite: 'strict' },
+    { name: 'bank', value: 'b1', domain: 'bank.test', hostOnly: true, path: '/', secure: true, session: true, sameSite: 'lax' },
   ]
+  const siteOf = (url: string) => new URL(url).hostname.split('.').slice(-2).join('.')
   ;(window as unknown as Record<string, unknown>).chrome = {
     runtime: {
       id: 'ext-id',
@@ -206,7 +209,8 @@ function stubSignedInExtension() {
       onMessage: { addListener: (listener: (typeof messages)[number]) => messages.push(listener) },
       sendNativeMessage: async (_host: string, payload: Record<string, unknown>) => {
         sent.push(payload)
-        return { ok: true, auth: { site: 'utd.test', pending: 0 } }
+        const site = siteOf(String(payload.url))
+        return { ok: true, auth: { site, sensitive: site === 'bank.test', enabled: true, pending: 0 } }
       },
     },
     contextMenus: {
@@ -214,6 +218,7 @@ function stubSignedInExtension() {
       create: async () => undefined,
       onClicked: { addListener: (listener: (info: unknown, tab: unknown) => void) => clicks.push(listener) },
     },
+    tabs: { sendMessage: async () => Promise.reject(new Error('no content script')) },
     action: { setBadgeText: async () => undefined, setBadgeBackgroundColor: async () => undefined },
     storage: {
       local: {
@@ -221,7 +226,6 @@ function stubSignedInExtension() {
         get: async (key: string) => (key in store ? { [key]: store[key] } : {}),
       },
     },
-    permissions: { getAll: async () => ({ permissions: ['cookies'], origins: ['*://*.utd.test/*'] }) },
     cookies: {
       getAllCookieStores: async () => [{ id: '0', tabIds: [1] }],
       getAll: async ({ url }: { url: string }) => {
@@ -236,14 +240,14 @@ function stubSignedInExtension() {
   ;(window as unknown as Record<string, unknown>).__ext = { sent, reads, clicks, messages, store }
 }
 
-test('extension: chỉ trang đã cho phép mới kèm cookie; chéo trang bỏ Strict; trang nhạy cảm không kèm', async ({ page }) => {
+test('extension: chuột phải kèm cookie của trang; chéo trang bỏ Strict; trang tắt riêng và trang nhạy cảm không kèm', async ({ page }) => {
   await page.route('http://drive.utd.test/**', (route) => route.fulfill({ contentType: 'text/html', body: '<p>Drive</p>' }))
   await page.addInitScript(stubSignedInExtension)
   await page.goto('http://drive.utd.test/page')
   await page.addScriptTag({ path: 'extensions/chromium/background.js' })
   const summary = await page.evaluate(async () => {
     type Ext = {
-      sent: Record<string, { cookies?: { name: string }[]; site?: string; userAgent?: string } | unknown>[]
+      sent: Record<string, unknown>[]
       reads: string[]
       clicks: ((info: unknown, tab: unknown) => void)[]
       messages: ((message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean)[]
@@ -258,27 +262,32 @@ test('extension: chỉ trang đã cho phép mới kèm cookie; chéo trang bỏ 
     await click('http://usercontent.utd.test/file.pdf', 'http://drive.utd.test/page')
     await click('http://drive.utd.test/file.pdf', 'http://other.example/page')
     await click('http://other.example/file.pdf', 'http://drive.utd.test/page')
-    ext.store['sensitive:utd.test'] = true
+    ext.store['signin-off:utd.test'] = true
     await click('http://drive.utd.test/file.pdf', 'http://drive.utd.test/page')
-    delete ext.store['sensitive:utd.test']
-    // Popup hỏi việc chờ: không đọc cookie nào (T-E2). Tin từ trang/tab khác popup bị bỏ.
+    delete ext.store['signin-off:utd.test']
+    await click('https://bank.test/statement.pdf', 'https://bank.test/account')
     const readsBefore = ext.reads.length
+    // Popup hỏi việc chờ: không đọc cookie nào (T-E2). Tin từ trang/tab khác popup bị bỏ.
     const popup = { id: 'ext-id', url: 'chrome-extension://ext-id/popup.html' }
     for (const listener of ext.messages) listener({ type: 'utd.auth-pending', url: 'http://drive.utd.test/page' }, popup, () => undefined)
     for (const listener of ext.messages)
       listener({ type: 'utd.auth-pending', url: 'http://drive.utd.test/page' }, { ...popup, tab: { id: 1 } }, () => undefined)
     await wait()
     return {
-      sent: ext.sent.map((payload) => {
-        const auth = payload.auth as { site: string; cookies: { name: string }[]; userAgent: string } | undefined
-        return {
-          type: payload.type,
-          version: payload.version,
-          cookies: auth ? auth.cookies.map((cookie) => cookie.name).sort().join(',') : null,
-          site: auth?.site ?? null,
-          ua: Boolean(auth?.userAgent),
-        }
-      }),
+      sent: ext.sent
+        .filter((payload) => payload.type !== 'auth-pending')
+        .map((payload) => {
+          const auth = payload.auth as { site: string; cookies: { name: string }[]; userAgent: string } | undefined
+          return {
+            type: payload.type,
+            version: payload.version,
+            cookies: auth ? auth.cookies.map((cookie) => cookie.name).sort().join(',') : null,
+            site: auth?.site ?? null,
+            ua: Boolean(auth?.userAgent),
+          }
+        }),
+      asked: ext.sent.filter((payload) => payload.type === 'auth-pending').length,
+      bankRead: ext.reads.some((url) => url.includes('bank.test')),
       pendingReads: ext.reads.length - readsBefore,
     }
   })
@@ -287,7 +296,53 @@ test('extension: chỉ trang đã cho phép mới kèm cookie; chéo trang bỏ 
     { type: 'download', version: 2, cookies: 'SID,pref', site: 'utd.test', ua: true },
     { type: 'download', version: 1, cookies: null, site: null, ua: false },
     { type: 'download', version: 1, cookies: null, site: null, ua: false },
-    { type: 'auth-pending', version: 2, cookies: null, site: null, ua: false },
+    { type: 'download', version: 1, cookies: null, site: null, ua: false },
   ])
+  // Hỏi UTD trang gốc mỗi host một lần (nhớ 5 phút) + một lần của popup.
+  expect(summary.asked).toBe(5)
+  expect(summary.bankRead).toBe(false)
   expect(summary.pendingReads).toBe(0)
+})
+
+test('extension: nút trên trang — đọc định dạng không cookie, chỉ kèm cookie khi nguồn đòi đăng nhập; nhớ kết quả', async ({ page }) => {
+  await page.route('http://drive.utd.test/**', (route) => route.fulfill({ contentType: 'text/html', body: '<p>Drive</p>' }))
+  await page.addInitScript(stubSignedInExtension)
+  await page.goto('http://drive.utd.test/page')
+  await page.addScriptTag({ path: 'extensions/chromium/background.js' })
+  const summary = await page.evaluate(async () => {
+    type Listener = (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean
+    const ext = (window as unknown as { __ext: { sent: Record<string, unknown>[]; messages: Listener[] } }).__ext
+    const tab = { id: 1, url: 'http://drive.utd.test/page' }
+    const content = { id: 'ext-id', tab, frameId: 0, url: tab.url }
+    const ask = (message: unknown, sender: unknown = content) =>
+      new Promise((resolve) => {
+        let handled = false
+        for (const listener of ext.messages) handled = listener(message, sender, resolve) || handled
+        if (!handled) resolve('bỏ qua')
+      })
+    const video = 'http://drive.utd.test/watch?v=1'
+    await ask({ type: 'utd.video-formats', url: video, signIn: false })
+    await ask({ type: 'utd.video-formats', url: video, signIn: false })
+    await ask({ type: 'utd.video-formats', url: video, signIn: true })
+    await ask({ type: 'utd.video-download', url: video, title: 'Video', selector: 'bv*+ba/b', audioFormat: null, signIn: false })
+    await ask({ type: 'utd.video-download', url: video, title: 'Video', selector: 'bv*+ba/b', audioFormat: null, signIn: true })
+    // Khung con / trang khác không gửi được lệnh cho nền.
+    const ignored = [
+      await ask({ type: 'utd.video-formats', url: video, signIn: true }, { ...content, frameId: 3 }),
+      await ask({ type: 'utd.video-formats', url: video, signIn: true }, { ...content, id: 'other-extension' }),
+    ]
+    return {
+      native: ext.sent
+        .filter((payload) => payload.type !== 'auth-pending')
+        .map((payload) => [payload.type, Boolean(payload.auth), payload.selector ?? null]),
+      ignored,
+    }
+  })
+  expect(summary.native).toEqual([
+    ['media-formats', false, null],
+    ['media-formats', true, null],
+    ['media-download', false, 'bv*+ba/b'],
+    ['media-download', true, 'bv*+ba/b'],
+  ])
+  expect(summary.ignored).toEqual(['bỏ qua', 'bỏ qua'])
 })

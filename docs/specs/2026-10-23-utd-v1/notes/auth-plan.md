@@ -542,6 +542,77 @@ Chưa làm, cần chủ dự án:
 - Cần nạp tiện ích bản mới và chạy bản UTD mới. Native host đang đăng ký trên máy là của bản 0.1.0, chưa hiểu tin
   bản 2.
 
+#### GĐ3 — Nút "Tải video này" trên trang, kiểu IDM (kế hoạch 2026-10-26)
+
+Chủ dự án (lời gốc): "luồng tiện như IDM… tự động bắt link rồi hiển thị cái nút Tải video này gọn gọn trên phần cần
+tải… hoặc chuột phải… nhưng phải có phần chọn luôn định dạng tải về, chứ như hiện tại là nó hiển thị trong App";
+"chỉ xin quyền 1 lần giống IDM đi, xin cho mọi trang luôn chứ".
+
+**Q11 — quyền (chủ dự án quyết 2026-10-26).** Tiện ích xin một lần lúc cài: `host_permissions: ["*://*/*"]`,
+`cookies` bắt buộc, content script trên mọi trang http(s). Chrome cảnh báo "đọc và thay đổi mọi dữ liệu của bạn
+trên mọi trang web" (Firefox tương tự). Thay cách xin quyền theo từng trang của Q1/Q5. Lý do: IDM xin như vậy; bản
+thử thật cho thấy hộp xin quyền theo trang dễ hỏng (lỗi manifest 2026-10-25) và thêm một bước mỗi trang.
+
+Hệ quả cho mô hình cookie (giữ nguyên nguyên tắc: chỉ đọc cookie trong cú bấm của người dùng, chỉ nằm trong RAM của
+app):
+- Quyền mọi trang dùng để gắn nút; không có đường nào đọc cookie ngầm. Cookie chỉ đọc khi: chuột phải › UTD, popup
+  "Tải trang này"/"Dùng đăng nhập", hoặc bấm nút/dòng định dạng trên trang (sự kiện `isTrusted`; trang không giả
+  được cú bấm, không gửi được tin cho tiện ích).
+- Trình duyệt không còn phân biệt trang nào đã cho phép (quyền đã phủ mọi trang), nên lựa chọn theo trang chuyển
+  sang tiện ích + app: mặc định dùng đăng nhập ở mọi trang; tắt riêng một trang bằng công tắc "Đăng nhập trên trang
+  này" trong popup (lưu `signin-off:<trang>`); công tắc chung trong Cài đặt (S-73) giữ nguyên; trang nhạy cảm (Q10)
+  vẫn phải bấm xác nhận trong popup, app vẫn chặn (`auth.sensitive`).
+- Trước khi đọc cookie, tiện ích hỏi app trang gốc của link (`auth-pending`: PSL, nhạy cảm, công tắc chung) — tiện
+  ích không có danh sách hậu tố. Nhớ câu trả lời 5 phút.
+- Media: phân tích không kèm cookie trước; chỉ khi nguồn đòi đăng nhập (`media.login`, `auth.*`) mới phân tích lại
+  kèm cookie trong cùng cú bấm, và lượt tải đó kèm cookie. Video công khai không mang cookie.
+
+**Luồng.**
+1. Content script (`content.js`, khung chính, mọi trang http(s)) tìm `<video>` đủ lớn (≥ 160×90, đang hiện). Rê chuột
+   vào video (hoặc video vừa phát) ⇒ nút nhỏ "⬇ Tải video này" ở góc trên-phải, nằm ngay trên mép video nếu còn
+   chỗ (không đè điều khiển của trình phát), hết chỗ thì nằm trong góc. Ẩn sau 1,5 s khi rời chuột; ẩn khi toàn màn
+   hình. Shadow DOM (CSS trang không phá), z-index cao nhất. Không chèn vào khung khác nguồn (GĐ sau nếu cần).
+2. Bấm nút ⇒ bảng ngay dưới nút: "Đang đọc định dạng…" rồi danh sách Tốt nhất · 2160p · 1440p · 1080p · 720p · 480p
+   · 360p · 240p · 144p (mức có thật) · Chỉ âm thanh (M4A) · MP3 (khi có ffmpeg), mỗi dòng kèm dung lượng ước tính.
+   Bấm một dòng ⇒ app tạo task media với đúng định dạng đó và xếp hàng ngay, không mở hộp "Tải media"; bảng báo "Đã
+   thêm vào UTD" rồi đóng. Esc / bấm ra ngoài thì đóng.
+3. Link không phải trang video quen mà yt-dlp không đọc được, nhưng `<video>` có nguồn http(s) thật (không phải
+   `blob:`) ⇒ một dòng "Tải file video" (tải thẳng nguồn đó bằng engine).
+4. Chuột phải lên video, hoặc lên trang/link của trang video quen ⇒ mục UTD mở cùng bảng đó trên trang, đặt ở chỗ
+   vừa bấm. Khung không có content script (khung khác nguồn, trang mở trước khi cài) ⇒ như cũ: gửi link cho app.
+5. Đọc sẵn: trên trang video quen (YouTube, TikTok, Facebook… danh sách `VIDEO_PAGES`), lần đầu nút hiện thì đọc định
+   dạng trước (không cookie). Kết quả nhớ theo URL 10 phút ở tiện ích (gộp các yêu cầu trùng) và ở app.
+6. Popup thêm công tắc "Hiện nút Tải video trên trang" (mặc định bật, `videoButton`).
+
+**Tin nhắn mới (bản 2).** `media-formats {url, src?, auth?}` ⇒ `{ok, media: {title, webpageUrl, signed, formats: [{id,
+sizeBytes, selector, audioFormat}]}}`; `media-download {url, pageUrl, title, selector, audioFormat, auth?}` ⇒
+`{ok, taskId}`. Native host chuyển thêm trường `media`; macOS đợi trả lời tới 60 s (phân tích lâu). App kiểm selector
+như hộp Tải media (`checked_choice`), dùng lại `create_media` + hàng đợi; phân tích trên trang liệt kê đủ các mức (hộp
+trong app vẫn tối đa 5 mức).
+
+**Kiểm.**
+- Rust: định tuyến IPC hai loại mới; native host chuyển `media`; app trả đủ mức chiều cao khi yêu cầu; nhớ kết quả.
+- e2e: trang thử cục bộ có `<video>`, `content.js` thật với API trình duyệt giả: nút hiện khi rê chuột, nằm trên mép
+  video, bảng "đang đọc" rồi danh sách kèm dung lượng, bấm dòng gửi đúng selector, tắt công tắc thì không có nút,
+  cú bấm giả từ trang (`isTrusted` = false) không làm gì; tiện ích thật trong Chromium chèn nút vào trang thử.
+- Bài cũ của popup/quyền theo trang sửa theo Q11. size-limit JS ≤ 220 kB (content script nằm trong tiện ích, không
+  tính vào bundle app).
+
+**Rủi ro.** Trình phát tự vẽ (YouTube đặt lớp phủ lên video) ⇒ dò chuột theo khung của video thay vì sự kiện trên
+video. Trang SPA đổi URL không tải lại ⇒ theo dõi `location.href`. `<video>` trong khung khác nguồn (nhúng YouTube)
+chưa có nút. Firefox: content script và quyền mọi trang chạy được từ Firefox 127; thử chính trên Chromium.
+
+**Kết quả GĐ3 (2026-10-26, commit b1a0e76).** Làm đúng kế hoạch trên, khác/thêm:
+- Không có nút "Mở trong UTD" khi bảng báo lỗi: chủ dự án không muốn mở hộp trong app; lỗi báo gọn trong bảng (cần
+  đăng nhập · UTD không đọc được video này · UTD chưa chạy).
+- YouTube: nút chỉ hiện ở trang xem video (`/watch`, `/shorts/`, `/live/`, `/embed/`), không ở video xem thử ở trang
+  chủ / danh sách.
+- Trang file Google Drive: bảng có một dòng "Tải file video" (file gốc, như mục Google Drive ở trên).
+- Kiểm: cargo test app 251 (+2 ignored), engine, mp4; clippy sạch; lint (716 khoá); build; size-limit JS 200,11 / 220 kB;
+  e2e 117/117 (mới: `video-button.spec.ts` 6 bài, `extension.spec.ts` viết lại theo Q11 — tiện ích thật trong
+  Chromium có quyền ngay lúc cài và chèn nút vào trang thử; `sign-in.spec.ts` sửa theo Q11, thêm bài nền nút trên trang).
+- Chưa thử thật trên Chrome của chủ dự án; Firefox chưa thử.
+
 ### 9.2 File sẽ sửa (GĐ0–1)
 
 - **Extension:** `extensions/{chromium,firefox}/`

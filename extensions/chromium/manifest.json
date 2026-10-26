@@ -6,9 +6,15 @@
   "description": "__MSG_extDescription__",
   "minimum_chrome_version": "102",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA9TL9j3drIHuln3gkVVkU27EySeiSBtiBkjdHFebuEeOgF1rwpwyh9kHWD/ejojeTyUw68O4E9VxVCMx4ta0fwElbMUPVj2VNhJPoBWjp/hjtd/7M+AEGpdF7w/n+Kpaa1+B7VUk3DyZSt4HqyyjvVdnTttI44MRSIq5KP8xUmFCZz+v7bTG1nT5LSJCuTEpydjqQCYgiaW3EF7Rzqt8lfpJ/9wQMy+Z6aNzk1m5ZqjLO3kYGrMFfLIOOCaoAG+qtAPb3BKyXWRncUYG0Ab2tJEo9EBOwZgt65MSzAexuTS639/+4gdvtLwrTRuy2QJE/fBQkBrich12S95SAXj0Z9QIDAQAB",
-  "permissions": ["contextMenus", "nativeMessaging", "storage", "activeTab", "scripting"],
-  "optional_permissions": ["cookies"],
-  "optional_host_permissions": ["*://*/*"],
+  "permissions": ["contextMenus", "nativeMessaging", "storage", "activeTab", "scripting", "cookies"],
+  "host_permissions": ["*://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "background": {
     "service_worker": "background.js"
   },

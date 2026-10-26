@@ -84,15 +84,29 @@ const within = (host, site) => host === site || host.endsWith(`.${site}`)
 const DRIVE_FILE_PAGE = /^https:\/\/(drive|docs)\.google\.com\/(u\/\d+\/)?(file\/d\/|open\?|uc\?)/
 const DRIVE_DOWNLOAD = "https://drive.usercontent.google.com/download"
 
-/** Trang (tên miền gốc) đã được cho phép phủ `host`: quyền `*://*.google.com/*` phủ drive.google.com. */
-async function grantedSite(host) {
+// Trang gốc của từng host (UTD tính theo danh sách hậu tố, tiện ích không có): nhớ 5 phút.
+const SITE_TTL = 5 * 60_000
+const sites = new Map()
+
+/**
+ * Trang gốc của `url` nếu được dùng đăng nhập (Q11, notes/auth-plan.md GĐ3): công tắc chung trong UTD bật, không
+ * phải trang nhạy cảm (những trang đó mỗi lượt phải bấm trong popup), người dùng không tắt riêng trang này trong
+ * popup. Chỉ hỏi UTD, không đọc cookie.
+ */
+async function signInSite(url) {
+  const host = hostOf(url)
   if (!host || !api.cookies) return null
-  const { origins = [] } = await api.permissions.getAll()
-  for (const origin of origins) {
-    const match = /^\*:\/\/(\*\.)?([^/*]+)\/\*$/.exec(origin)
-    if (match && (match[2] === host || (match[1] && within(host, match[2])))) return match[2]
+  let info = sites.get(host)
+  if (!info || Date.now() - info.at > SITE_TTL) {
+    const reply = await sendNative({ version: 2, type: "auth-pending", url })
+    if (!reply?.ok || !reply.auth?.site) return null
+    info = { at: Date.now(), site: reply.auth.site, sensitive: reply.auth.sensitive, enabled: reply.auth.enabled }
+    sites.set(host, info)
   }
-  return null
+  if (!info.enabled || info.sensitive) return null
+  const key = `signin-off:${info.site}`
+  if ((await api.storage.local.get(key))[key]) return null
+  return info.site
 }
 
 /** Kho cookie của tab: container/cửa sổ riêng tư (Firefox), ẩn danh (Chrome). */
@@ -140,14 +154,12 @@ async function readCookies(site, urls, tab, crossSite) {
 }
 
 /**
- * Phần `auth` của tin nhắn tải khi trang của link đã được cho phép (và không phải trang nhạy cảm: những
- * trang đó mỗi lượt phải bấm trong popup). Chưa cho phép ⇒ `null`, không đọc cookie nào.
+ * Phần `auth` của tin nhắn tải trong cú bấm của người dùng, khi trang của link được dùng đăng nhập (`signInSite`).
+ * Không được ⇒ `null`, không đọc cookie nào.
  */
 async function authFor(targetUrl, pageUrl, tab) {
-  const site = await grantedSite(hostOf(targetUrl))
+  const site = await signInSite(targetUrl)
   if (!site) return null
-  const key = `sensitive:${site}`
-  if ((await api.storage.local.get(key))[key]) return null
   const sameSite = within(hostOf(pageUrl ?? ""), site)
   const urls = sameSite && pageUrl && pageUrl !== targetUrl ? [targetUrl, pageUrl] : [targetUrl]
   // Trang file Google Drive: UTD tải bằng link tải thật ở máy khác (src-tauri/src/media_pages.rs).
@@ -342,15 +354,35 @@ api.runtime.onInstalled.addListener(() => void installMenus())
 api.runtime.onStartup.addListener(() => void installMenus())
 void installMenus()
 
+/** Mở bảng chọn định dạng ngay trên trang (content.js). `false`: khung đó không có content script ⇒ làm như cũ. */
+async function openFormats(info, tab, url) {
+  if (!tab?.id) return false
+  try {
+    const reply = await api.tabs.sendMessage(tab.id, { type: "utd.open-formats", url }, { frameId: info.frameId ?? 0 })
+    return reply?.ok === true
+  } catch {
+    return false
+  }
+}
+
+/** Chuột phải lên video, hoặc link/trang xem video quen ⇒ bảng định dạng trên trang; còn lại gửi link cho UTD. */
+async function downloadOrPick(info, tab) {
+  const media = info.menuItemId === MENU_MEDIA || info.mediaType === "video" || info.mediaType === "audio"
+  const url = media ? (info.pageUrl ?? tab?.url) : pickUrl(info, tab)
+  const video = media || (typeof url === "string" && isVideoPage(cleanLink(url) ?? new URL("about:blank")))
+  if (url && video && (await openFormats(info, tab, url))) return
+  await download(info, tab)
+}
+
 api.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === MENU_ALL) void downloadAll(info, tab)
-  else void download(info, tab)
+  else void downloadOrPick(info, tab)
 })
 
-/** Popup bấm "Dùng đăng nhập" / "Tiếp tục": quyền đã có (popup vừa xin); đọc cookie cho tab và việc chờ. */
+/** Popup bấm "Dùng đăng nhập" / "Tiếp tục" (cú bấm của người dùng, cả trang nhạy cảm): đọc cookie cho tab và việc chờ. */
 async function renew({ tabId, site, urls }) {
   const tab = await api.tabs.get(tabId)
-  if (!tab?.url || !(await grantedSite(hostOf(tab.url)))) return { ok: false, message: "auth.denied" }
+  if (!tab?.url || !api.cookies || !within(hostOf(tab.url), site)) return { ok: false, message: "auth.denied" }
   const links = [tab.url, ...(Array.isArray(urls) ? urls : [])].filter(
     (url) => typeof url === "string" && within(hostOf(url), site),
   )
@@ -359,12 +391,80 @@ async function renew({ tabId, site, urls }) {
   return (await sendNative({ version: 2, type: "auth-renew", url: tab.url, auth })) ?? { ok: false }
 }
 
-// Chỉ nhận lệnh từ popup của chính tiện ích: không từ trang web, content script hay tiện ích khác (sau này
-// lệnh có thể kèm cookie, notes/auth-plan.md §4.3).
+// --- Nút "Tải video này" trên trang (content.js; notes/auth-plan.md GĐ3) ---
+// Kết quả phân tích nhớ 10 phút theo (link, có đăng nhập): bảng mở lại tức thì, đọc sẵn không chạy hai lần.
+const FORMATS_TTL = 10 * 60_000
+const formatReplies = new Map()
+
+const codeOf = (message) => /^\[([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)\] /.exec(message ?? "")?.[1] ?? null
+
+/** Định dạng cho bảng trên trang. `signIn`: cú bấm thật mà nguồn đòi đăng nhập ⇒ kèm cookie nếu trang cho dùng. */
+function videoFormats({ url, src, signIn }, tab) {
+  const key = `${signIn ? 1 : 0} ${url}`
+  const known = formatReplies.get(key)
+  if (known && Date.now() - known.at < FORMATS_TTL) return known.reply
+  const reply = (async () => {
+    const auth = signIn ? await authFor(url, tab?.url, tab).catch(() => null) : null
+    const payload = { version: 2, type: "media-formats", url, src: src ?? null, pageUrl: tab?.url ?? null }
+    const response = await sendNative(withAuth(payload, auth))
+    if (response === null) return { ok: false, message: t("notConnected") }
+    if (response.ok !== true) {
+      return { ok: false, code: codeOf(response.message), message: response.message ? fromHost(response.message) : t("noResponse") }
+    }
+    return { ok: true, media: response.media }
+  })()
+  formatReplies.set(key, { at: Date.now(), reply })
+  void reply.then((answer) => {
+    if (!answer.ok) formatReplies.delete(key)
+  })
+  return reply
+}
+
+/** Dòng định dạng người dùng bấm: UTD tải luôn, không mở hộp Tải media. */
+async function videoDownload({ url, title, selector, audioFormat, signIn }, tab) {
+  const auth = signIn ? await authFor(url, tab?.url, tab).catch(() => null) : null
+  const payload = { version: 2, type: "media-download", url, pageUrl: tab?.url ?? null, title, selector, audioFormat }
+  return sendToUtd(withAuth(payload, auth))
+}
+
+/** Dòng "Tải file video": tải thẳng nguồn của thẻ `<video>` như chuột phải › Tải bằng UTD. */
+async function videoFile({ url }, tab) {
+  const auth = await authFor(url, tab?.url, tab).catch(() => null)
+  return sendToUtd(withAuth({ version: 1, type: "download", url, pageUrl: tab?.url ?? null, suggestedName: null }, auth))
+}
+
+const webUrl = (value) => typeof value === "string" && value.length <= MAX_LINK_CHARS && /^https?:\/\//i.test(value)
+
+// Content script của chính tiện ích ở khung chính một trang web (trang không gửi tin cho tiện ích được).
+const fromContent = (sender) =>
+  sender?.id === api.runtime.id && Boolean(sender.tab) && (sender.frameId ?? 0) === 0 && webUrl(sender.url)
+
+// Lệnh từ popup của chính tiện ích: không từ trang web, content script hay tiện ích khác (lệnh có thể kèm cookie,
+// notes/auth-plan.md §4.3).
 const fromPopup = (sender) =>
   sender?.id === api.runtime.id && !sender.tab && sender.url === api.runtime.getURL("popup.html")
 
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (fromContent(sender)) {
+    const tab = sender.tab
+    const answer = (work) => {
+      work.catch(() => ({ ok: false, message: t("noResponse") })).then(sendResponse)
+      return true
+    }
+    if (message?.type === "utd.video-formats" && webUrl(message.url)) {
+      return answer(videoFormats({ url: message.url, src: webUrl(message.src) ? message.src : null, signIn: message.signIn === true }, tab))
+    }
+    if (message?.type === "utd.video-download" && webUrl(message.url) && typeof message.selector === "string") {
+      const title = typeof message.title === "string" ? message.title.slice(0, 300) : null
+      const audioFormat = typeof message.audioFormat === "string" ? message.audioFormat : null
+      const picked = { url: message.url, title, selector: message.selector, audioFormat, signIn: message.signIn === true }
+      return answer(videoDownload(picked, tab))
+    }
+    if (message?.type === "utd.video-file" && webUrl(message.url)) {
+      return answer(videoFile({ url: message.url }, tab))
+    }
+    return false
+  }
   if (!fromPopup(sender)) return false
   if (message?.type === "utd.send-page") {
     const url = message.url

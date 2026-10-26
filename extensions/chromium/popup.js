@@ -6,6 +6,7 @@ const authSite = document.getElementById("auth-site")
 const authUse = document.getElementById("auth-use")
 const authSwitch = document.getElementById("auth-switch")
 const authStatus = document.getElementById("auth-status")
+const videoSwitch = document.getElementById("video-switch")
 
 // Chữ theo ngôn ngữ của trình duyệt (_locales/<mã>/messages.json, mặc định en); tiếng Ả Rập viết phải→trái.
 const t = (key, substitutions) => api.i18n.getMessage(key, substitutions) || key
@@ -62,13 +63,25 @@ button.addEventListener("click", async () => {
   }
 })
 
-// --- Đăng nhập (S-70, S-71; notes/auth-plan.md §8) ---
-// Popup chỉ hỏi UTD trang này có việc chờ không; cookie chỉ được đọc sau khi người dùng bấm.
-let pending = null
+// --- Nút "Tải video này" trên trang (GĐ3): bật/tắt, mặc định bật. ---
+api.storage.local.get("videoButton").then(
+  (stored) => {
+    videoSwitch.checked = stored.videoButton !== false
+  },
+  () => undefined,
+)
+videoSwitch.addEventListener("change", () => {
+  void api.storage.local.set({ videoButton: videoSwitch.checked })
+})
 
-/** `detail`: câu lỗi thật của trình duyệt (vd mẫu quyền không có trong manifest), hiện thay câu chung. */
-function showAuthError(code, detail) {
-  authStatus.textContent = detail || t(AUTH_ERRORS[code] ?? "authDenied")
+// --- Đăng nhập (S-70, S-71; notes/auth-plan.md §8, Q11) ---
+// Quyền đã xin một lần lúc cài; popup chỉ hỏi UTD trang này có việc chờ không. Cookie chỉ đọc khi người dùng bấm.
+// Công tắc "Đăng nhập trên trang này" (mặc định bật) tắt riêng một trang: `signin-off:<trang>`.
+let pending = null
+const offKey = (site) => `signin-off:${site}`
+
+function showAuthError(code) {
+  authStatus.textContent = t(AUTH_ERRORS[code] ?? "authDenied")
   authStatus.className = "error"
   authCard.dataset.s = "S-71"
 }
@@ -81,9 +94,8 @@ async function loadAuth(tab) {
   pending = { ...info, tabId: tab.id }
   authSite.textContent = info.site
   authCard.hidden = false
-  authSwitch.checked = await api.permissions
-    .contains({ permissions: ["cookies"], origins: [info.origin] })
-    .catch(() => false)
+  const key = offKey(info.site)
+  authSwitch.checked = !(await api.storage.local.get(key).catch(() => ({})))[key]
   if (info.sensitive) {
     authStatus.textContent = t("authSensitive")
   }
@@ -95,29 +107,11 @@ async function loadAuth(tab) {
   }
 }
 
-/**
- * Phải gọi ngay trong cú bấm (trước mọi `await` khác): trình duyệt chỉ hỏi quyền khi người dùng vừa bấm.
- * `true` = đã cho phép; `false` = người dùng từ chối; chuỗi = trình duyệt ném lỗi (câu lỗi của nó).
- */
-function askPermission() {
-  return api.permissions
-    .request({ permissions: ["cookies"], origins: [pending.origin] })
-    .catch((error) => String(error?.message || error))
-}
-
-/** Không được phép thì báo (câu lỗi thật nếu có) và bỏ tick. */
-function refused(granted) {
-  if (granted === true) return false
-  showAuthError("auth.denied", typeof granted === "string" ? granted : null)
-  authSwitch.checked = false
-  return true
-}
-
+// Bấm "Dùng đăng nhập" / "Tiếp tục" là đồng ý dùng đăng nhập ở trang này (cả trang nhạy cảm): bật lại nếu đã tắt.
 authUse.addEventListener("click", async () => {
-  if (refused(await askPermission())) return
   authSwitch.checked = true
   authUse.disabled = true
-  await api.storage.local.set({ [`sensitive:${pending.site}`]: Boolean(pending.sensitive) })
+  await api.storage.local.remove(offKey(pending.site))
   const reply = await api.runtime
     .sendMessage({ type: "utd.auth-renew", tabId: pending.tabId, site: pending.site, urls: pending.urls })
     .catch(() => null)
@@ -133,12 +127,8 @@ authUse.addEventListener("click", async () => {
 })
 
 authSwitch.addEventListener("change", async () => {
-  if (authSwitch.checked) {
-    if (refused(await askPermission())) return
-    await api.storage.local.set({ [`sensitive:${pending.site}`]: Boolean(pending.sensitive) })
-  } else {
-    await api.permissions.remove({ origins: [pending.origin] }).catch(() => false)
-  }
+  if (authSwitch.checked) await api.storage.local.remove(offKey(pending.site))
+  else await api.storage.local.set({ [offKey(pending.site)]: true })
   authStatus.textContent = ""
   authStatus.className = ""
   if (!authUse.hidden) {

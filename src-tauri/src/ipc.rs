@@ -33,6 +33,16 @@ struct PipeRequest {
     /// Cookie đăng nhập đọc trong cú bấm (tin nhắn bản 2); kiểm ở `auth::accept`.
     #[serde(default)]
     auth: Option<crate::auth::AuthPayload>,
+    /// Nút trên trang (`media-formats`): nguồn của thẻ `<video>`, tải thẳng khi yt-dlp không đọc được trang.
+    #[serde(default)]
+    src: Option<String>,
+    /// Nút trên trang (`media-download`): định dạng người dùng chọn (như hộp Tải media gửi).
+    #[serde(default)]
+    selector: Option<String>,
+    #[serde(default)]
+    audio_format: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 /// Câu trả cho extension khi link cần người dùng xác nhận cảnh báo trước khi tải (S-22).
@@ -59,6 +69,10 @@ enum Route {
     AuthPending,
     /// Popup gửi cookie (người dùng vừa bấm cho phép): tải tiếp việc đang chờ.
     AuthRenew,
+    /// Nút "Tải video này" trên trang: định dạng cho bảng chọn (GĐ3).
+    MediaFormats,
+    /// Bảng trên trang: tải với định dạng đã chọn, không mở hộp Tải media.
+    MediaDownload,
     /// Download trình duyệt vừa bắt đầu (tự bắt link tải, takeover.rs): nhận nếu dò được file.
     Takeover,
 }
@@ -72,6 +86,10 @@ fn route(request: &PipeRequest, token: &str) -> Route {
         match kind {
             "auth-pending" => Route::AuthPending,
             "auth-renew" if request.auth.is_some() => Route::AuthRenew,
+            "media-formats" => Route::MediaFormats,
+            "media-download" if request.selector.as_deref().is_some_and(|selector| !selector.trim().is_empty()) => {
+                Route::MediaDownload
+            }
             "takeover" => Route::Takeover,
             _ => Route::Reject("Yêu cầu từ trình duyệt không hợp lệ."),
         }
@@ -117,6 +135,9 @@ struct PipeResponse {
     /// Trả lời popup (`auth-pending`, `auth-renew`): trang, số việc chờ… Không bao giờ có cookie.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auth: Option<serde_json::Value>,
+    /// Trả lời `media-formats`: tiêu đề, các định dạng cho bảng trên trang.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    media: Option<serde_json::Value>,
 }
 
 impl PipeResponse {
@@ -126,6 +147,7 @@ impl PipeResponse {
             task_id: Some(task_id),
             message: None,
             auth: None,
+            media: None,
         }
     }
 
@@ -136,6 +158,7 @@ impl PipeResponse {
             task_id: None,
             message: Some(message.into()),
             auth: None,
+            media: None,
         }
     }
 
@@ -145,6 +168,7 @@ impl PipeResponse {
             task_id: None,
             message: Some(message.into()),
             auth: None,
+            media: None,
         }
     }
 
@@ -156,8 +180,23 @@ impl PipeResponse {
                 task_id: None,
                 message: None,
                 auth: Some(value),
+                media: None,
             },
             Err(code) => Self::error(code),
+        }
+    }
+
+    /// Trả lời `media-formats`: lỗi giữ nguyên câu có mã (`[media.login] …`) để tiện ích biết cần đăng nhập.
+    fn media(result: Result<serde_json::Value, String>) -> Self {
+        match result {
+            Ok(value) => Self {
+                ok: true,
+                task_id: None,
+                message: None,
+                auth: None,
+                media: Some(value),
+            },
+            Err(message) => Self::error(message),
         }
     }
 }
@@ -501,6 +540,32 @@ where
         Route::Media => open_media(&app, request, crate::media_pages::MEDIA_PAGE_NOTE),
         Route::Channel => open_media(&app, request, crate::media_pages::CHANNEL_PAGE_NOTE),
         Route::AuthPending => PipeResponse::auth(crate::auth::flow::pending(&app, &request.url)),
+        Route::MediaFormats => {
+            let urls: Vec<&str> = std::iter::once(request.url.as_str())
+                .chain(request.page_url.as_deref())
+                .collect();
+            let grant = crate::auth::flow::grant_from_click(&app, request.auth.take(), &urls);
+            let result =
+                crate::video_button::formats(&app, &request.url, request.src.as_deref(), grant).await;
+            PipeResponse::media(result)
+        }
+        Route::MediaDownload => {
+            let urls: Vec<&str> = std::iter::once(request.url.as_str())
+                .chain(request.page_url.as_deref())
+                .collect();
+            let grant = crate::auth::flow::grant_from_click(&app, request.auth.take(), &urls);
+            let picked = crate::video_button::PageDownload {
+                url: request.url,
+                page_url: crate::media_pages::clean_page_url(request.page_url),
+                title: request.title,
+                selector: request.selector.unwrap_or_default(),
+                audio_format: request.audio_format,
+            };
+            match crate::video_button::download(app.clone(), picked, grant).await {
+                Ok(task_id) => PipeResponse::ok(task_id),
+                Err(message) => PipeResponse::error(message),
+            }
+        }
         Route::AuthRenew => match request.auth.take() {
             Some(auth) => PipeResponse::auth(crate::auth::flow::renew(&app, &request.url, auth)),
             None => PipeResponse::error("Yêu cầu từ trình duyệt không hợp lệ."),
@@ -633,6 +698,31 @@ mod tests {
 
     fn request(token: &str, url: &str) -> PipeRequest {
         serde_json::from_value(serde_json::json!({ "token": token, "url": url })).unwrap()
+    }
+
+    #[test]
+    fn video_button_requests_route_by_kind() {
+        let ask = |value: serde_json::Value| {
+            let request: PipeRequest = serde_json::from_value(value).unwrap();
+            route(&request, TOKEN)
+        };
+        let watch = "https://www.youtube.com/watch?v=09OGSRptb0M";
+        assert_eq!(
+            ask(serde_json::json!({ "token": TOKEN, "url": watch, "kind": "media-formats" })),
+            Route::MediaFormats
+        );
+        assert_eq!(
+            ask(serde_json::json!({ "token": TOKEN, "url": watch, "kind": "media-download", "selector": "bv*+ba/b" })),
+            Route::MediaDownload
+        );
+        assert!(
+            matches!(ask(serde_json::json!({ "token": TOKEN, "url": watch, "kind": "media-download" })), Route::Reject(_)),
+            "thiếu định dạng"
+        );
+        assert!(matches!(
+            ask(serde_json::json!({ "token": "sai", "url": watch, "kind": "media-formats" })),
+            Route::Reject(_)
+        ));
     }
 
     #[test]

@@ -24,7 +24,20 @@ struct HostRequest {
     /// Bản 2: cookie đăng nhập của trang, tiện ích đọc trong cú bấm. Chuyển nguyên, app kiểm (src/auth).
     #[serde(default)]
     auth: Option<serde_json::Value>,
+    /// Bản 2, nút "Tải video này" (`media-formats`, `media-download`): nguồn `<video>`, định dạng đã chọn.
+    #[serde(default)]
+    src: Option<String>,
+    #[serde(default)]
+    selector: Option<String>,
+    #[serde(default)]
+    audio_format: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
 }
+
+/// Selector / tiêu đề dài hơn thì từ chối (app kiểm kỹ lại).
+const MAX_SELECTOR_CHARS: usize = 512;
+const MAX_TITLE_CHARS: usize = 300;
 
 fn is_web_url(value: &str) -> bool {
     value.len() <= MAX_URL_BYTES && (value.starts_with("http://") || value.starts_with("https://"))
@@ -92,6 +105,32 @@ fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
             }
             Ok(serde_json::json!({ "url": url, "kind": request.kind, "auth": auth }))
         }
+        // Nút "Tải video này" trên trang: hỏi định dạng (`src` = nguồn `<video>` nếu có), tải định dạng đã chọn.
+        "media-formats" | "media-download" if request.version >= 2 => {
+            let url = request.url.trim();
+            if !is_web_url(url) {
+                return Err("Chỉ hỗ trợ URL HTTP/HTTPS.".into());
+            }
+            let src = request.src.as_deref().map(str::trim).filter(|src| is_web_url(src));
+            let selector = request.selector.as_deref().map(str::trim).filter(|selector| !selector.is_empty());
+            let title = request.title.as_deref().map(str::trim).filter(|title| !title.is_empty());
+            if request.kind == "media-download"
+                && (selector.is_none_or(|selector| selector.chars().count() > MAX_SELECTOR_CHARS)
+                    || title.is_some_and(|title| title.chars().count() > MAX_TITLE_CHARS))
+            {
+                return Err("Yêu cầu từ trình duyệt không hợp lệ.".into());
+            }
+            Ok(serde_json::json!({
+                "url": url,
+                "pageUrl": page_url,
+                "kind": request.kind,
+                "src": src,
+                "selector": selector,
+                "audioFormat": request.audio_format,
+                "title": title,
+                "auth": auth,
+            }))
+        }
         _ => Err("Yêu cầu từ trình duyệt không hợp lệ.".into()),
     }
 }
@@ -105,6 +144,9 @@ struct HostResponse {
     /// Trả lời `auth-pending` / `auth-renew` (trang, số task chờ…), không có cookie.
     #[serde(skip_serializing_if = "Option::is_none")]
     auth: Option<serde_json::Value>,
+    /// Trả lời `media-formats`: các định dạng cho bảng trên trang.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<serde_json::Value>,
 }
 
 pub fn invoked() -> bool {
@@ -137,6 +179,7 @@ pub fn run() -> i32 {
                 task_id: None,
                 message: Some(message),
                 auth: None,
+                media: None,
             });
             1
         }
@@ -183,7 +226,8 @@ fn connect(
     let directory = config_path.parent().ok_or_else(|| NOT_RUNNING.to_string())?;
     let stream = std::os::unix::net::UnixStream::connect(crate::ipc::socket_path(directory))
         .map_err(|_| NOT_RUNNING.to_string())?;
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(15)));
+    // Phân tích định dạng (nút trên trang) có thể mất tới vài chục giây.
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(60)));
     Ok(stream)
 }
 
@@ -212,6 +256,8 @@ fn exchange<S: Read + Write>(mut stream: S, payload: &str) -> Result<HostRespons
         message: Option<String>,
         #[serde(default)]
         auth: Option<serde_json::Value>,
+        #[serde(default)]
+        media: Option<serde_json::Value>,
     }
     let response: Response =
         serde_json::from_str(line.trim()).map_err(|_| "UTD trả về dữ liệu lạ.".to_string())?;
@@ -220,6 +266,7 @@ fn exchange<S: Read + Write>(mut stream: S, payload: &str) -> Result<HostRespons
         task_id: response.task_id,
         message: response.message,
         auth: response.auth,
+        media: response.media,
     })
 }
 
@@ -379,6 +426,38 @@ mod tests {
         assert!(takeover(2, "blob:https://example.com/1").is_err());
         let plain = pipe_payload(&message(serde_json::json!({ "version": 1, "type": "download", "url": "https://a.b/c" })));
         assert_eq!(plain.unwrap().get("kind"), None, "link thường như cũ");
+    }
+
+    /// Nút "Tải video này": hỏi định dạng, tải định dạng đã chọn; bản 1 không có hai loại này.
+    #[test]
+    fn video_button_requests_need_version_two_and_a_selector() {
+        let formats = pipe_payload(&message(serde_json::json!({
+            "version": 2, "type": "media-formats", "url": "https://www.youtube.com/watch?v=x",
+            "src": "blob:https://www.youtube.com/1", "pageUrl": "https://www.youtube.com/watch?v=x",
+        })))
+        .unwrap();
+        assert_eq!(formats["kind"], "media-formats");
+        assert_eq!(formats["src"], serde_json::Value::Null, "blob: không gửi");
+        let old = message(serde_json::json!({ "version": 1, "type": "media-formats", "url": "https://a.b/" }));
+        assert!(pipe_payload(&old).is_err());
+
+        let pick = |selector: &str, title: String| {
+            pipe_payload(&message(serde_json::json!({
+                "version": 2, "type": "media-download", "url": "https://www.youtube.com/watch?v=x",
+                "selector": selector, "audioFormat": "m4a", "title": title,
+            })))
+        };
+        let payload = pick("137+140/bv*+ba/b", "Video".into()).unwrap();
+        assert_eq!(payload["selector"], "137+140/bv*+ba/b");
+        assert_eq!(payload["audioFormat"], "m4a");
+        assert!(pick("  ", "Video".into()).is_err());
+        assert!(pick(&"x".repeat(MAX_SELECTOR_CHARS + 1), "Video".into()).is_err());
+        assert!(pick("best", "t".repeat(MAX_TITLE_CHARS + 1)).is_err());
+
+        let reply = "{\"ok\":true,\"taskId\":null,\"message\":null,\"media\":{\"title\":\"Video\"}}
+";
+        let response = exchange(&mut peer(reply), "{}").unwrap();
+        assert_eq!(response.media.unwrap()["title"], "Video");
     }
 
     #[test]

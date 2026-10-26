@@ -11,7 +11,7 @@ mod output;
 /// `parts::discard_parts`: dọn luồng con trước khi xoá task media khỏi danh sách.
 pub(crate) mod parts;
 mod preset;
-mod probe;
+pub(crate) mod probe;
 mod probe_cache;
 mod resolve;
 mod rollup;
@@ -182,8 +182,7 @@ pub(crate) async fn interactive_tools(auto: Option<&Auto>) -> Result<tools::Medi
         })
 }
 
-/// Phân tích một link (hộp Tải media). yt-dlp lỗi kiểu extractor ⇒ kiểm bản mới, có thì cài rồi phân
-/// tích lại một lần.
+/// Phân tích một link (hộp Tải media).
 #[tauri::command]
 pub async fn media_probe(
     app: AppHandle,
@@ -192,7 +191,30 @@ pub async fn media_probe(
 ) -> Result<probe::MediaProbeResult, String> {
     let url = validate_url(&url).map_err(|error| error.to_string())?;
     let grant = crate::commands::signed_in(&app, auth_grant.as_deref(), url.as_str());
-    let auto = auto_tools(&app);
+    let result = analyze(&app, url.as_str(), grant.as_deref()).await;
+    // S-14: popup tiện ích đếm hộp này vào việc chờ đăng nhập của trang.
+    if let Err(message) = &result
+        && needs_sign_in(message)
+        && let Some(site) = crate::auth::site::of_url(url.as_str())
+    {
+        app.state::<AppState>().auth.wait_dialog(&site, url.as_str());
+    }
+    result
+}
+
+/// Câu lỗi Phân tích nghĩa là nguồn đòi đăng nhập (cho phép trang đó là đọc được).
+pub(crate) fn needs_sign_in(message: &str) -> bool {
+    message.starts_with("[media.login]") || message.starts_with("[auth.")
+}
+
+/// Phân tích một link (hộp Tải media, nút trên trang). yt-dlp lỗi kiểu extractor ⇒ kiểm bản mới, có thì cài rồi
+/// phân tích lại một lần.
+pub(crate) async fn analyze(
+    app: &AppHandle,
+    url: &str,
+    grant: Option<&crate::auth::Grant>,
+) -> Result<probe::MediaProbeResult, String> {
+    let auto = auto_tools(app);
     let mut retried = false;
     loop {
         let tools = interactive_tools(auto.as_ref()).await?;
@@ -200,16 +222,10 @@ pub async fn media_probe(
             || auto
                 .as_ref()
                 .is_some_and(|auto| auto.will_install(sources::Tool::Ffmpeg));
-        let failure = match probe::probe(&tools, url.as_str(), ffmpeg, grant.as_deref()).await {
+        let failure = match probe::probe(&tools, url, ffmpeg, grant).await {
             Ok(result) => return Ok(result),
             Err(failure) => failure,
         };
-        // S-14: popup tiện ích đếm hộp này vào việc chờ đăng nhập của trang.
-        if (failure.message.starts_with("[media.login]") || failure.message.starts_with("[auth."))
-            && let Some(site) = crate::auth::site::of_url(url.as_str())
-        {
-            app.state::<AppState>().auth.wait_dialog(&site, url.as_str());
-        }
         let refreshed = match &auto {
             Some(auto) if !retried && failure.outdated => {
                 auto.refresh_after_failure(&tools.yt_dlp_version).await
@@ -239,7 +255,7 @@ pub async fn add_media_download(
     Ok(task)
 }
 
-fn enqueue_media(app: AppHandle, mut input: AddMediaInput) -> Result<DownloadTask, String> {
+pub(crate) fn enqueue_media(app: AppHandle, mut input: AddMediaInput) -> Result<DownloadTask, String> {
     let (journal, queue) = {
         let state = app.state::<AppState>();
         (state.journal.clone(), state.queue.clone())
