@@ -103,6 +103,7 @@ export function ChannelDialog({
     [social, all],
   )
   const entries = social ? socialEntries : all
+  const counts = useMemo(() => sourceCounts(socialEntries), [socialEntries])
   const scoped = useMemo(
     () => (social ? inScope(socialEntries, sources, kinds) : all),
     [social, socialEntries, sources, kinds, all],
@@ -168,9 +169,11 @@ export function ChannelDialog({
             <>
               {social ? (
                 <SourceChips
-                  counts={sourceCounts(socialEntries)}
+                  counts={counts}
                   sources={sources}
-                  onToggle={(source) => setSources((current) => toggleIn(current, SOCIAL_SOURCES, source))}
+                  onToggle={(source) =>
+                    setSources((current) => toggleIn(current, SOCIAL_SOURCES, source, counts.map(([shown]) => shown)))
+                  }
                   kinds={kinds}
                   kindCounts={social.platform === "facebook" ? null : kindCounts(socialEntries)}
                   onToggleKind={(kind) => setKinds((current) => toggleIn(current, ["photo", "video"], kind))}

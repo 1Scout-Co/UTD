@@ -770,6 +770,23 @@ test('S-61 hàng loạt: danh sách từ trình duyệt mở hộp; chip loại 
   expect(await desktop.calls('social_close')).toEqual([{ listingId: 'sb-abcdef123456' }])
 })
 
+test('S-61 hàng loạt: bỏ hết các nhóm đang hiện ⇒ quay về mọi nhóm (không thành danh sách trống); bỏ Video ⇒ chỉ Ảnh', async ({ page }) => {
+  await page.addInitScript(mockSocialDesktop, false)
+  await page.goto('/')
+  await app(page).open()
+  const dialog = page.getByRole('dialog')
+  const chips = dialog.getByRole('group', { name: 'Loại' })
+  await expect(dialog.getByRole('button', { name: 'Tải 5 mục' })).toBeVisible()
+  // Hồ sơ chỉ có 4 nhóm (không có nhóm Ảnh / Video kiểu Facebook): bỏ cả 4.
+  for (const name of [/^Bài viết/, /^Reels/, /^Tin\s*\d/, /^Tin nổi bật/]) await chips.getByRole('button', { name }).click()
+  await expect(dialog.getByRole('button', { name: 'Tải 5 mục' })).toBeVisible()
+  await expect(chips.getByRole('button', { name: /^Bài viết/ })).toHaveAttribute('aria-pressed', 'true')
+  // Chỉ Ảnh: p1, s1 (p3 đã tải bị ẩn).
+  await chips.getByRole('button', { name: /^Video/ }).click()
+  await expect(dialog.getByRole('button', { name: 'Tải 2 mục' })).toBeVisible()
+  await expect(dialog.getByText('Không có mục khớp bộ lọc.')).toHaveCount(0)
+})
+
 test('S-63 hàng loạt: bị chặn tạm ⇒ câu rõ, không có nút thử lại; a11y không lỗi', async ({ page }) => {
   await page.addInitScript(mockSocialDesktop, true)
   await page.goto('/')

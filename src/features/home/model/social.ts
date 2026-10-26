@@ -56,11 +56,14 @@ export function kindCounts(entries: SocialEntry[]): Record<SocialKind, number> {
   return counts
 }
 
-/** Bỏ chọn một chip: `null` = mọi nhóm/loại; bỏ hết thì quay về mọi nhóm. */
-export function toggleIn<T>(current: ReadonlySet<T> | null, all: T[], value: T): ReadonlySet<T> | null {
+/**
+ * Bỏ chọn một chip: `null` = mọi nhóm/loại. Bỏ hết các chip đang hiện (`shown`: nhóm có mục; nhóm chưa có mục vẫn để
+ * chọn, tiện ích còn đang lấy) thì quay về mọi nhóm, không thành danh sách trống.
+ */
+export function toggleIn<T>(current: ReadonlySet<T> | null, all: T[], value: T, shown: T[] = all): ReadonlySet<T> | null {
   const next = new Set(current ?? all)
   if (!next.delete(value)) next.add(value)
-  return next.size === 0 || all.every((item) => next.has(item)) ? null : next
+  return !shown.some((item) => next.has(item)) || all.every((item) => next.has(item)) ? null : next
 }
 
 /** Mục thuộc nhóm và loại đang chọn. */
