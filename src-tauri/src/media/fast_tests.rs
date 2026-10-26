@@ -27,6 +27,7 @@ struct Hit {
     method: String,
     range_len: Option<u64>,
     user_agent: Option<String>,
+    referer: Option<String>,
     cookie: bool,
 }
 
@@ -116,6 +117,7 @@ fn answer(
         method: method.clone(),
         range_len: None,
         user_agent: header("user-agent"),
+        referer: header("referer"),
         cookie: header("cookie").is_some(),
     };
     let reply = match routes.get(&path) {
@@ -787,6 +789,44 @@ async fn fresh_links_refused_twice_still_fall_back_to_yt_dlp() {
         "không để lại .part: {:?}",
         lab.files()
     );
+}
+
+/// Video đọc thẳng từ trang (Tin Facebook, `page_streams`): luồng hình + tiếng tiện ích gửi, tải song song rồi ghép,
+/// không hỏi yt-dlp. Link hỏng trước byte nào ⇒ `Fallback` (runner báo "mở lại trang", không chạy yt-dlp).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn page_streams_download_and_merge_without_yt_dlp() {
+    use crate::media::page_streams::{self, Kind, PageStream};
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    let page = |video: &str, audio: &str| {
+        let streams = [
+            PageStream { url: server.url(video), kind: Kind::Video, codecs: Some("avc1.64001f".into()), size_bytes: None },
+            PageStream { url: server.url(audio), kind: Kind::Audio, codecs: Some("mp4a.40.2".into()), size_bytes: None },
+        ];
+        page_streams::Fixed(page_streams::resolved(&streams, Some("https://www.facebook.com/stories/1/2/")))
+    };
+    let (mut task, job) = lab.parent_for(
+        "https://www.facebook.com/stories/1/2/",
+        Some("https://www.facebook.com/stories/1/2/"),
+        page_streams::SELECTOR,
+    );
+    let resolver = page("/v.mp4", "/a.m4a");
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_finished(&lab, &task);
+    assert!(
+        server
+            .hits("/v.mp4")
+            .iter()
+            .all(|hit| hit.referer.as_deref() == Some("https://www.facebook.com/")),
+        "gửi gốc trang như trình phát của trang"
+    );
+
+    let (mut gone, job) = lab.parent_for("https://www.facebook.com/stories/1/3/", None, page_streams::SELECTOR);
+    let resolver = page("/gone", "/gone");
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut gone, &job).await.unwrap(), FastEnd::Fallback);
 }
 
 #[test]

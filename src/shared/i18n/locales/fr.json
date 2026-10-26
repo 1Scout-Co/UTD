@@ -651,6 +651,8 @@
   "err.media.changed": "Le flux média a changé sur le serveur. Cliquez sur Reprendre pour réessayer.",
   "err.media.failed": "Impossible de télécharger le média. Cliquez sur Reprendre pour réessayer.",
   "err.media.expired": "Le lien du média a expiré et n’a pas pu être renouvelé. Retirez-le et retéléchargez-le.",
+  "err.media.page_expired": "Le lien vidéo de la page a expiré. Rouvrez la page puis cliquez sur Télécharger cette vidéo.",
+  "err.media.page_streams": "Le flux vidéo de la page n’est pas valide.",
   "err.media.path_escape": "Le fichier média a été écrit hors du dossier choisi.",
   "err.media.empty_output": "Le fichier média téléchargé est vide.",
   "err.media.no_output": "Les fichiers de flux téléchargés sont introuvables. Cliquez sur Reprendre pour les retélécharger.",

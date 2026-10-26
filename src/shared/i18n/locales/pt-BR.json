@@ -651,6 +651,8 @@
   "err.media.changed": "O fluxo de mídia no servidor mudou. Clique em Retomar para tentar novamente.",
   "err.media.failed": "Não foi possível baixar a mídia. Clique em Retomar para tentar novamente.",
   "err.media.expired": "O link da mídia expirou e não pôde ser renovado. Remova-o e baixe novamente.",
+  "err.media.page_expired": "O link do vídeo da página expirou. Reabra a página e clique em Baixar este vídeo.",
+  "err.media.page_streams": "O fluxo de vídeo da página não é válido.",
   "err.media.path_escape": "O arquivo de mídia foi gravado fora da pasta escolhida.",
   "err.media.empty_output": "O arquivo de mídia baixado está vazio.",
   "err.media.no_output": "Os arquivos de fluxo baixados não foram encontrados. Clique em Retomar para baixá-los novamente.",

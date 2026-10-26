@@ -14,7 +14,7 @@
     }
   ],
   "background": {
-    "scripts": ["background.js", "takeover.js"]
+    "scripts": ["background.js", "takeover.js", "page-media.js"]
   },
   "action": {
     "default_title": "__MSG_actionTitle__",

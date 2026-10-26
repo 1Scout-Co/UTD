@@ -651,6 +651,8 @@
   "err.media.changed": "El flujo multimedia del servidor ha cambiado. Haz clic en Reanudar para reintentarlo.",
   "err.media.failed": "No se pudo descargar el contenido multimedia. Haz clic en Reanudar para reintentarlo.",
   "err.media.expired": "El enlace multimedia ha caducado y no se pudo renovar. Quítalo y descárgalo de nuevo.",
+  "err.media.page_expired": "El enlace del vídeo de la página ha caducado. Vuelve a abrir la página y pulsa Descargar este vídeo.",
+  "err.media.page_streams": "La transmisión de vídeo de la página no es válida.",
   "err.media.path_escape": "El archivo multimedia se escribió fuera de la carpeta elegida.",
   "err.media.empty_output": "El archivo multimedia descargado está vacío.",
   "err.media.no_output": "No se encuentran los archivos de flujo descargados. Haz clic en Reanudar para descargarlos de nuevo.",

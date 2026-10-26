@@ -26,6 +26,7 @@
   "videoAdding": { "message": "UTD'ye ekleniyor…" },
   "videoAdded": { "message": "UTD'ye eklendi" },
   "videoFailed": { "message": "UTD bu videoyu okuyamıyor." },
+  "videoNoStream": { "message": "Henüz video akışı bulunamadı. Videoyu oynatıp yeniden tıklayın." },
   "videoSignIn": { "message": "Bu video için oturum açmak gerekiyor. Sitede oturum açıp tekrar deneyin." },
   "videoClose": { "message": "Kapat" },
   "videoButtonSwitch": { "message": "Sayfalarda \"Bu videoyu indir\" düğmesini göster" },

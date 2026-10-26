@@ -20,6 +20,10 @@
   // YouTube: chỉ trang xem video (video xem thử ở trang chủ / danh sách không phải video của trang).
   const YOUTUBE = /(^|\.)youtube\.com$/
   const YOUTUBE_VIDEO = /^\/(watch|shorts\/|live\/|embed\/)/
+  // Facebook: đọc luồng của video đang xem ngay trong trang (Tin, bảng tin: yt-dlp không đọc được; notes/fb-media.md).
+  const FACEBOOK = /(^|\.)facebook\.com$/
+  // Đọc trong trang mà nền không trả lời chừng này ms thì thôi, không để bảng treo.
+  const PAGE_MEDIA_TIMEOUT = 8000
 
   const CSS = `
     :host { all: initial; }
@@ -160,7 +164,7 @@
     if (duration) hideTimer = setTimeout(hide, duration)
     if (!frame) frame = requestAnimationFrame(follow)
     const url = analysisUrl()
-    if (KNOWN.test(location.hostname) && !prefetched.has(url)) {
+    if (KNOWN.test(location.hostname) && !FACEBOOK.test(location.hostname) && !prefetched.has(url)) {
       prefetched.add(url)
       void formatsFor(url, sourceOf(video), false)
     }
@@ -260,7 +264,27 @@
     place()
   }
 
-  async function open(url, src, at) {
+  /**
+   * Luồng của video đang xem đọc thẳng trong trang (nền chạy page-media.js): `{ title, formats, manifests, files }`,
+   * không đọc được thì `null`. Điểm gửi đi là giữa video đang gắn nút (hoặc chỗ chuột phải) để chọn đúng video.
+   */
+  function pageMedia(point) {
+    const rect = target?.getBoundingClientRect()
+    const at = rect ? { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 } : point
+    const asked = api.runtime
+      .sendMessage({ type: "utd.page-media", x: at?.x ?? null, y: at?.y ?? null })
+      .then((reply) => (reply?.ok ? reply.media : null))
+      .catch(() => null)
+    return Promise.race([asked, new Promise((resolve) => setTimeout(() => resolve(null), PAGE_MEDIA_TIMEOUT))])
+  }
+
+  function showFormats(media, url) {
+    const rows = (media.formats ?? []).map((format) => row(format, media, url))
+    render(header(media.title), ...rows)
+    rows[0]?.focus()
+  }
+
+  async function open(url, src, at, point) {
     build()
     if (at) {
       target = null
@@ -269,30 +293,51 @@
     panel.hidden = false
     render(header(null), status(t("videoReading"), null, true))
     if (!frame) frame = requestAnimationFrame(follow)
+    // Chỉ đọc trong trang khi bảng là của chính trang đang mở (không phải link chuột phải trỏ đi nơi khác).
+    const here = url === location.href
+    const facebook = FACEBOOK.test(location.hostname)
+    let found = here && facebook ? await pageMedia(point) : null
+    if (panel.hidden) return
+    if (found?.formats.length) return showFormats(found, url)
     let reply = await formatsFor(url, src, false)
     if (!reply.ok && SIGN_IN.test(reply.code ?? "")) {
       render(header(null), status(t("videoReading"), null, true))
       reply = await formatsFor(url, src, true)
     }
     if (panel.hidden) return
+    // yt-dlp không đọc được trang (UTD có chạy): bắt luồng media trang đã tải, kiểu IDM.
+    if (!reply.ok && reply.code && here) {
+      found ??= await pageMedia(point)
+      if (panel.hidden) return
+      if (found?.formats.length) return showFormats(found, url)
+      const manifest = found?.manifests[0]
+      const file = found?.files[0]
+      if (manifest) {
+        const viaManifest = await formatsFor(manifest, null, false)
+        if (viaManifest.ok) reply = viaManifest
+      } else if (file) {
+        reply = { ok: true, media: { title: found.title, webpageUrl: url, formats: [{ id: "file", direct: file }] } }
+      }
+      if (panel.hidden) return
+    }
     if (!reply.ok) {
       const signIn = SIGN_IN.test(reply.code ?? "")
-      // Mã lỗi của UTD (yt-dlp không đọc được…) ⇒ câu chung; không mã (UTD chưa chạy…) ⇒ câu của nền.
-      const text = signIn ? t("videoSignIn") : reply.code ? t("videoFailed") : reply.message || t("videoFailed")
+      // Mã lỗi của UTD (yt-dlp không đọc được…) ⇒ câu chung — Facebook: chưa thấy luồng nào, cho video phát rồi bấm
+      // lại; không mã (UTD chưa chạy…) ⇒ câu của nền.
+      const failed = facebook && here ? t("videoNoStream") : t("videoFailed")
+      const text = signIn && !facebook ? t("videoSignIn") : reply.code ? failed : reply.message || failed
       render(header(null), status(text, "error"))
       return
     }
-    const media = reply.media
-    const rows = (media.formats ?? []).map((format) => row(format, media, url))
-    render(header(media.title), ...rows)
-    rows[0]?.focus()
+    showFormats(reply.media, url)
   }
 
   function label(format) {
     if (format.id === "best") return t("videoBest")
     if (format.id === "audio-m4a") return t("videoAudio")
     if (format.id === "audio-mp3") return "MP3"
-    if (format.id === "file") return t("videoFile")
+    if (format.id === "file" || format.id === "stream") return t("videoFile")
+    if (format.id === "hd" || format.id === "sd") return format.id.toUpperCase()
     return /^\d+$/.test(format.id) ? `${format.id}p` : format.id
   }
 
@@ -330,7 +375,10 @@
     for (const button of panel.querySelectorAll(".row")) button.disabled = true
     panel.append(status(t("videoAdding"), null, true))
     place()
-    const message = format.direct
+    // Dòng lấy từ trang (`streams`): UTD tải các luồng đó; dòng của yt-dlp: tải theo selector.
+    const message = format.streams
+      ? { type: "utd.video-streams", title: media.title, streams: format.streams }
+      : format.direct
       ? { type: "utd.video-file", url: format.direct }
       : {
           type: "utd.video-download",
@@ -463,7 +511,7 @@
       void open(message.url, sourceOf(video))
     } else {
       pill.hidden = true
-      void open(message.url, null, { top: point.y + PILL_HEIGHT, right: point.x + 136, bottom: point.y, left: point.x })
+      void open(message.url, null, { top: point.y + PILL_HEIGHT, right: point.x + 136, bottom: point.y, left: point.x }, point)
     }
     reply({ ok: true })
     return false

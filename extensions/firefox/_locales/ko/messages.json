@@ -26,6 +26,7 @@
   "videoAdding": { "message": "UTD에 추가하는 중…" },
   "videoAdded": { "message": "UTD에 추가됨" },
   "videoFailed": { "message": "UTD에서 이 동영상을 읽을 수 없습니다." },
+  "videoNoStream": { "message": "아직 동영상 스트림을 찾지 못했습니다. 동영상을 재생한 뒤 다시 누르세요." },
   "videoSignIn": { "message": "이 동영상은 로그인이 필요합니다. 사이트에서 로그인한 다음 다시 시도하세요." },
   "videoClose": { "message": "닫기" },
   "videoButtonSwitch": { "message": "페이지에 '이 동영상 다운로드' 버튼 표시" },

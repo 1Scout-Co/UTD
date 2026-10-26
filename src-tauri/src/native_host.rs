@@ -33,6 +33,9 @@ struct HostRequest {
     audio_format: Option<String>,
     #[serde(default)]
     title: Option<String>,
+    /// Bản 2, `media-streams`: luồng tiện ích đọc thẳng từ trang (Tin Facebook…), app kiểm (media/page_streams.rs).
+    #[serde(default)]
+    streams: Vec<serde_json::Value>,
 }
 
 /// Selector / tiêu đề dài hơn thì từ chối (app kiểm kỹ lại).
@@ -129,6 +132,25 @@ fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
                 "audioFormat": request.audio_format,
                 "title": title,
                 "auth": auth,
+            }))
+        }
+        // Bảng trên trang: luồng đọc thẳng từ trình phát của trang (1 luồng có tiếng, hoặc hình + tiếng). Không cookie.
+        "media-streams" if request.version >= 2 => {
+            let url = request.url.trim();
+            let title = request.title.as_deref().map(str::trim).filter(|title| !title.is_empty());
+            let streams_ok = (1..=2).contains(&request.streams.len())
+                && request.streams.iter().all(|stream| {
+                    stream.get("url").and_then(serde_json::Value::as_str).is_some_and(is_web_url)
+                });
+            if !is_web_url(url) || !streams_ok || title.is_some_and(|title| title.chars().count() > MAX_TITLE_CHARS) {
+                return Err("Yêu cầu từ trình duyệt không hợp lệ.".into());
+            }
+            Ok(serde_json::json!({
+                "url": url,
+                "pageUrl": page_url,
+                "kind": request.kind,
+                "title": title,
+                "streams": request.streams,
             }))
         }
         _ => Err("Yêu cầu từ trình duyệt không hợp lệ.".into()),
@@ -458,6 +480,30 @@ mod tests {
 ";
         let response = exchange(&mut peer(reply), "{}").unwrap();
         assert_eq!(response.media.unwrap()["title"], "Video");
+    }
+
+    /// Luồng đọc thẳng từ trang: bản 2, 1–2 luồng http(s), không kèm cookie.
+    #[test]
+    fn page_streams_are_version_two_web_links() {
+        let streams = |version: u32, list: serde_json::Value| {
+            pipe_payload(&message(serde_json::json!({
+                "version": version, "type": "media-streams", "url": "https://www.facebook.com/stories/1/2/",
+                "title": "Tin", "streams": list, "auth": { "site": "facebook.com" },
+            })))
+        };
+        let pair = serde_json::json!([
+            { "url": "https://video.fbcdn.net/v.mp4", "kind": "video" },
+            { "url": "https://video.fbcdn.net/a.mp4", "kind": "audio" },
+        ]);
+        let payload = streams(2, pair.clone()).unwrap();
+        assert_eq!(payload["kind"], "media-streams");
+        assert_eq!(payload["streams"], pair);
+        assert_eq!(payload.get("auth"), None, "không chuyển cookie");
+        assert!(streams(1, pair).is_err());
+        assert!(streams(2, serde_json::json!([])).is_err());
+        assert!(streams(2, serde_json::json!([{ "url": "blob:https://www.facebook.com/1", "kind": "both" }])).is_err());
+        let many = serde_json::json!([{ "url": "https://a.b/1" }, { "url": "https://a.b/2" }, { "url": "https://a.b/3" }]);
+        assert!(streams(2, many).is_err());
     }
 
     #[test]

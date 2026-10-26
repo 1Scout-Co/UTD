@@ -24,13 +24,20 @@ const PAGE = `<!doctype html><html><body style="margin:0;font:14px sans-serif">
 
 type Reply = Record<string, unknown>
 
-// API trình duyệt giả cho content script: `__ext.replies` = câu trả lời lần lượt cho `utd.video-formats`.
-function stubContentApi(input: { messages: Record<string, { message: string }>; replies: Reply[]; enabled: boolean }) {
+// API trình duyệt giả cho content script: `__ext.replies` = câu trả lời lần lượt cho `utd.video-formats`;
+// `pageMedia` = câu trả lời lần lượt cho `utd.page-media` (nền đọc luồng trong trang, page-media.js).
+function stubContentApi(input: {
+  messages: Record<string, { message: string }>
+  replies: Reply[]
+  enabled: boolean
+  pageMedia?: Reply[]
+}) {
   const sent: Record<string, unknown>[] = []
   const store: Record<string, unknown> = { videoButton: input.enabled }
   const changed: ((changes: Record<string, { newValue: unknown }>, area: string) => void)[] = []
   const onMessage: ((message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean)[] = []
   const replies = [...input.replies]
+  const pageMedia = [...(input.pageMedia ?? [])]
   ;(window as unknown as Record<string, unknown>).chrome = {
     i18n: { getMessage: (key: string) => input.messages[key]?.message ?? '', getUILanguage: () => 'vi' },
     storage: {
@@ -45,6 +52,7 @@ function stubContentApi(input: { messages: Record<string, { message: string }>; 
           await new Promise((resolve) => setTimeout(resolve, 300))
           return replies.shift() ?? { ok: false, message: 'hết câu trả lời' }
         }
+        if (message.type === 'utd.page-media') return pageMedia.shift() ?? { ok: false }
         return { ok: true, taskId: 't1' }
       },
     },
@@ -221,4 +229,76 @@ test('tắt "Hiện nút Tải video" trong popup ⇒ không có nút; chuột p
   await page.evaluate(() => (window as unknown as { __ext: { toggle: (value: boolean) => void } }).__ext.toggle(true))
   await hover(page, '#main')
   await expect(pill(page)).toBeVisible()
+})
+
+// Tin Facebook (notes/fb-media.md): yt-dlp không đọc được ⇒ bảng lấy luồng đọc thẳng trong trang (nền chạy page-media.js).
+const STORY = 'https://www.facebook.com/stories/111/UzpfSVNDOjIyMg==/'
+const CDN = 'https://video.fbcdn.test'
+const STORY_MEDIA = {
+  ok: true,
+  media: {
+    title: 'Như Quỳnh',
+    formats: [
+      {
+        id: '1080',
+        sizeBytes: 2_580_000,
+        streams: [
+          { url: `${CDN}/v1080.mp4`, kind: 'video', codecs: 'avc1.640028', sizeBytes: 2_500_000 },
+          { url: `${CDN}/a.mp4`, kind: 'audio', codecs: 'mp4a.40.5', sizeBytes: 80_000 },
+        ],
+      },
+      { id: 'hd', sizeBytes: null, streams: [{ url: `${CDN}/hd.mp4`, kind: 'both', codecs: null, sizeBytes: null }] },
+      { id: 'sd', sizeBytes: null, streams: [{ url: `${CDN}/sd.mp4`, kind: 'both', codecs: null, sizeBytes: null }] },
+    ],
+    manifests: [],
+    files: [],
+  },
+}
+
+async function openAt(page: Page, url: string, replies: Reply[], pageMedia: Reply[]) {
+  await page.route(`${new URL(url).origin}/**`, (route) => route.fulfill({ contentType: 'text/html', body: PAGE }))
+  await page.addInitScript(stubContentApi, { messages: MESSAGES, replies, enabled: true, pageMedia })
+  await page.goto(url)
+  await page.addScriptTag({ path: 'extensions/chromium/content.js' })
+  await page.waitForTimeout(50)
+}
+
+test('Tin Facebook ⇒ bảng ra định dạng đọc trong trang (1080p ghép, HD, SD); chọn ⇒ UTD tải đúng luồng, không chạy yt-dlp', async ({ page }) => {
+  await openAt(page, STORY, [], [STORY_MEDIA])
+  const video = await hover(page, '#main')
+  await pill(page).click()
+  const rows = panel(page).locator('.row')
+  await expect(rows).toHaveText(['1080p≈ 2,5 MB', 'HD', 'SD'])
+  await expect(panel(page).locator('.title')).toHaveText('Như Quỳnh')
+  await rows.first().click()
+  await expect(panel(page)).toContainText('Đã thêm vào UTD')
+  const messages = await sent(page)
+  expect(messages.map((message) => message.type)).toEqual(['utd.page-media', 'utd.video-streams'])
+  // Điểm hỏi là giữa video đang gắn nút: page-media.js chọn đúng video đó.
+  expect(messages[0].x).toBeCloseTo(video.x + video.width / 2, 0)
+  expect(messages[0].y).toBeCloseTo(video.y + video.height / 2, 0)
+  expect(messages[1]).toEqual({ type: 'utd.video-streams', title: 'Như Quỳnh', streams: STORY_MEDIA.media.formats[0].streams })
+})
+
+test('Facebook chưa có luồng nào và yt-dlp không đọc được ⇒ báo gọn "Chưa thấy luồng video", không treo', async ({ page }) => {
+  const empty = { ok: true, media: { title: null, formats: [], manifests: [], files: [] } }
+  await openAt(page, STORY, [{ ok: false, code: 'media.unsupported', message: 'x' }], [empty])
+  await hover(page, '#main')
+  await pill(page).click()
+  await expect(panel(page).locator('.status.error')).toHaveText('Chưa thấy luồng video. Cho video phát rồi bấm lại.')
+  expect((await sent(page)).map((message) => message.type)).toEqual(['utd.page-media', 'utd.video-formats'])
+})
+
+test('trang khác yt-dlp không đọc được ⇒ bắt manifest HLS trang đã tải, UTD đọc định dạng từ đó (kiểu IDM)', async ({ page }) => {
+  const sniffed = { ok: true, media: { title: null, formats: [], manifests: ['https://cdn.utd.test/hls/master.m3u8'], files: [] } }
+  await openAt(page, 'http://video.utd.test/watch', [{ ok: false, code: 'media.unsupported', message: 'x' }, media()], [sniffed])
+  await hover(page, '#main')
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(FORMATS.length)
+  const messages = await sent(page)
+  expect(messages.map((message) => [message.type, message.url])).toEqual([
+    ['utd.video-formats', 'http://video.utd.test/watch'],
+    ['utd.page-media', undefined],
+    ['utd.video-formats', 'https://cdn.utd.test/hls/master.m3u8'],
+  ])
 })

@@ -635,6 +635,8 @@
   "err.media.changed": "Der Medienstream auf dem Server hat sich geändert. Zum erneuten Versuch auf Fortsetzen klicken.",
   "err.media.failed": "Medien konnten nicht heruntergeladen werden. Zum erneuten Versuch auf Fortsetzen klicken.",
   "err.media.expired": "Der Medienlink ist abgelaufen und konnte nicht erneuert werden. Eintrag entfernen und neu herunterladen.",
+  "err.media.page_expired": "Der Videolink der Seite ist abgelaufen. Seite neu öffnen und auf „Dieses Video herunterladen“ klicken.",
+  "err.media.page_streams": "Der Videostream der Seite ist ungültig.",
   "err.media.path_escape": "Die Mediendatei wurde außerhalb des gewählten Ordners geschrieben.",
   "err.media.empty_output": "Die heruntergeladene Mediendatei ist leer.",
   "err.media.no_output": "Die heruntergeladenen Streamdateien fehlen. Zum erneuten Herunterladen auf Fortsetzen klicken.",

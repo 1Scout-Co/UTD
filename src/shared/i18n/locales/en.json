@@ -635,6 +635,8 @@
   "err.media.changed": "The media stream on the server changed. Click Resume to try again.",
   "err.media.failed": "Couldn't download the media. Click Resume to try again.",
   "err.media.expired": "The media link expired and couldn't be refreshed. Remove it and download again.",
+  "err.media.page_expired": "The video link from the page has expired. Reopen the page and click Download this video.",
+  "err.media.page_streams": "The video stream from the page is not valid.",
   "err.media.path_escape": "The media file was written outside the chosen folder.",
   "err.media.empty_output": "The downloaded media file is empty.",
   "err.media.no_output": "The downloaded stream files are missing. Click Resume to download them again.",

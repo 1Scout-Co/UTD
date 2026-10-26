@@ -200,6 +200,7 @@ fn remove_task(journal: &Journal, task_id: &str, delete_files: bool) -> Result<(
     if task.kind == TaskKind::Media {
         crate::media::parts::discard_parts(journal, task_id);
         crate::media::parts::discard_leftovers(&task);
+        crate::media::page_streams::forget(journal, task_id);
     }
     journal
         .delete_task(task_id)

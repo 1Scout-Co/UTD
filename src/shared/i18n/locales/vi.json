@@ -619,6 +619,8 @@
   "err.media.changed": "Luồng media trên máy chủ đã đổi. Bấm Tiếp tục để thử lại.",
   "err.media.failed": "Không tải được media. Bấm Tiếp tục để thử lại.",
   "err.media.expired": "Link media đã hết hạn và không lấy lại được. Xoá rồi tải lại.",
+  "err.media.page_expired": "Link video trên trang đã hết hạn. Mở lại trang rồi bấm Tải video này.",
+  "err.media.page_streams": "Luồng video trên trang không hợp lệ.",
   "err.media.path_escape": "File media được ghi ra ngoài thư mục đã chọn.",
   "err.media.empty_output": "File media tải về rỗng.",
   "err.media.no_output": "Không thấy file luồng đã tải. Bấm Tiếp tục để tải lại.",

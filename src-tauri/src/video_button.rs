@@ -145,6 +145,45 @@ pub(crate) async fn download(
     Ok(task.id)
 }
 
+/// Dòng người dùng bấm khi bảng lấy luồng thẳng từ trang (Tin Facebook…, yt-dlp không đọc được): UTD tải các luồng
+/// đó (hình + tiếng thì ghép), không chạy yt-dlp, không cookie.
+pub(crate) async fn download_streams(app: AppHandle, request: PageStreams) -> Result<String, String> {
+    let page = validate_url(request.url.trim()).map_err(|error| error.to_string())?;
+    let streams = crate::media::page_streams::checked(request.streams)?;
+    let title: String = request
+        .title
+        .unwrap_or_default()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_TITLE_CHARS)
+        .collect();
+    let input = AddMediaInput {
+        url: page.to_string(),
+        title,
+        selector: crate::media::page_streams::SELECTOR.into(),
+        quality: None,
+        audio_format: None,
+        page_url: Some(page.to_string()),
+        dest_dir: None,
+        later: false,
+        subfolder: None,
+        channel: None,
+        auth_grant: None,
+    };
+    let task = tauri::async_runtime::spawn_blocking(move || crate::media::enqueue_page(app, input, &streams))
+        .await
+        .map_err(|error| error.to_string())??;
+    log::info!("video button: task={} queued (page streams)", task.id);
+    Ok(task.id)
+}
+
+/// Luồng tiện ích đọc từ trình phát của trang `url`.
+pub(crate) struct PageStreams {
+    pub url: String,
+    pub title: Option<String>,
+    pub streams: Vec<crate::media::page_streams::PageStream>,
+}
+
 /// Định dạng người dùng bấm trong bảng trên trang.
 pub(crate) struct PageDownload {
     pub url: String,

@@ -43,6 +43,9 @@ struct PipeRequest {
     audio_format: Option<String>,
     #[serde(default)]
     title: Option<String>,
+    /// Nút trên trang (`media-streams`): luồng đọc thẳng từ trình phát của trang (Tin Facebook…).
+    #[serde(default)]
+    streams: Option<Vec<crate::media::page_streams::PageStream>>,
 }
 
 /// Câu trả cho extension khi link cần người dùng xác nhận cảnh báo trước khi tải (S-22).
@@ -73,6 +76,8 @@ enum Route {
     MediaFormats,
     /// Bảng trên trang: tải với định dạng đã chọn, không mở hộp Tải media.
     MediaDownload,
+    /// Bảng trên trang: tải luồng tiện ích đọc thẳng từ trang (yt-dlp không đọc được trang đó).
+    MediaStreams,
     /// Download trình duyệt vừa bắt đầu (tự bắt link tải, takeover.rs): nhận nếu dò được file.
     Takeover,
 }
@@ -89,6 +94,9 @@ fn route(request: &PipeRequest, token: &str) -> Route {
             "media-formats" => Route::MediaFormats,
             "media-download" if request.selector.as_deref().is_some_and(|selector| !selector.trim().is_empty()) => {
                 Route::MediaDownload
+            }
+            "media-streams" if request.streams.as_ref().is_some_and(|streams| !streams.is_empty()) => {
+                Route::MediaStreams
             }
             "takeover" => Route::Takeover,
             _ => Route::Reject("Yêu cầu từ trình duyệt không hợp lệ."),
@@ -562,6 +570,17 @@ where
                 audio_format: request.audio_format,
             };
             match crate::video_button::download(app.clone(), picked, grant).await {
+                Ok(task_id) => PipeResponse::ok(task_id),
+                Err(message) => PipeResponse::error(message),
+            }
+        }
+        Route::MediaStreams => {
+            let picked = crate::video_button::PageStreams {
+                url: request.url,
+                title: request.title,
+                streams: request.streams.unwrap_or_default(),
+            };
+            match crate::video_button::download_streams(app.clone(), picked).await {
                 Ok(task_id) => PipeResponse::ok(task_id),
                 Err(message) => PipeResponse::error(message),
             }
