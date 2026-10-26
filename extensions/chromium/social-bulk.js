@@ -372,12 +372,22 @@ async function socialInstagram(job) {
   const { id } = job.head
   await job.flush()
   const own = (item) => !item.owner || item.owner.toLowerCase() === user.toLowerCase()
+  // Một phần lỗi (Instagram trả 500…) thì bỏ phần đó, lấy tiếp phần sau; bị chặn / cần đăng nhập thì dừng hẳn.
+  const part = async (source, read) => {
+    if (!job.wants(source)) return
+    try {
+      await read()
+    } catch (reason) {
+      if (reason?.message === "social.rate_limited" || reason?.message === "social.login") throw reason
+      job.failure = job.failure ?? "social.partial"
+    }
+  }
   // Tin hết hạn sau 24 giờ: lấy trước.
-  if (job.wants("stories")) {
+  await part("stories", async () => {
     const reply = await job.instagram(`/api/v1/feed/reels_media/?reel_ids=${id}`)
     await job.push(reply.items.map((item) => ({ ...item, page: null })), "stories")
-  }
-  if (job.wants("highlights")) {
+  })
+  await part("highlights", async () => {
     const tray = await job.instagram(`/api/v1/highlights/${id}/highlights_tray/`)
     const highlights = (Array.isArray(tray.meta?.tray) ? tray.meta.tray : []).filter((item) => /^highlight:\d+$/.test(item?.id ?? ""))
     for (let index = 0; index < highlights.length && job.wants("highlights"); index += 5) {
@@ -391,8 +401,8 @@ async function socialInstagram(job) {
         await job.push(reply.items.filter((media) => ids.has(String(media.id))).map((media) => ({ ...media, page: null })), "highlights", title)
       }
     }
-  }
-  if (job.wants("reels")) {
+  })
+  await part("reels", async () => {
     let cursor = ""
     do {
       const form = { target_user_id: id, page_size: "50", include_feed_video: "true" }
@@ -402,15 +412,15 @@ async function socialInstagram(job) {
       const paging = reply.meta?.paging_info ?? {}
       cursor = paging.more_available ? String(paging.max_id ?? "") : ""
     } while (cursor && job.wants("reels") && !job.past("reels"))
-  }
-  if (job.wants("posts")) {
+  })
+  await part("posts", async () => {
     let cursor = ""
     do {
       const reply = await job.instagram(`/api/v1/feed/user/${id}/?count=30${cursor ? `&max_id=${encodeURIComponent(cursor)}` : ""}`)
       await job.push(reply.items.filter(own), "posts")
       cursor = reply.meta?.more_available ? String(reply.meta?.next_max_id ?? "") : ""
     } while (cursor && job.wants("posts") && !job.past("posts"))
-  }
+  })
 }
 
 async function socialThreads(job) {
@@ -534,53 +544,55 @@ function socialPageInfo() {
 }
 
 /**
- * Instagram: mã số, tên, ảnh đại diện của hồ sơ `user` từ dữ liệu có sẵn trong trang (thẻ meta, JSON nhúng); không có thì
- * từ HTML của chính trang hồ sơ (một lần tải trang thường, không qua API bị giới hạn). Không thấy ⇒ null.
+ * Instagram: mã số, tên, ảnh đại diện của hồ sơ `user` từ HTML mới tải của chính trang hồ sơ (một lần tải trang thường,
+ * không qua API bị giới hạn). Không dùng dữ liệu đang có trong trang: chuyển trang ngay trong Instagram thì đó có thể là
+ * của hồ sơ trước. Không thấy ⇒ null.
  */
 async function socialInstagramUser(user) {
-  const owner = document.querySelector('meta[property="instapp:owner_user_id"]')?.getAttribute("content") ?? ""
-  const named = new RegExp(`"username":"${user.replace(/\./g, "\\.")}"`, "gi")
+  const name = user.replace(/\./g, "\\.")
   const string = (raw) => {
     try {
-      return raw === null ? null : JSON.parse(`"${raw}"`)
+      return raw === undefined ? null : JSON.parse(`"${raw}"`)
     } catch {
       return null
     }
   }
-  // Mỗi chỗ có `"username":"<user>"`: lấy trường gần nhất của cùng đối tượng.
   const read = (text) => {
-    for (const hit of text.matchAll(named)) {
-      const start = Math.max(0, hit.index - 4000)
-      const window = text.slice(start, hit.index + 4000)
-      const near = (pattern) => {
-        let best = null
-        for (const match of window.matchAll(pattern)) {
-          const distance = Math.abs(start + match.index - hit.index)
-          if (!best || distance < best.distance) best = { value: match[1], distance }
-        }
-        return best?.value ?? null
-      }
-      const id = /^\d+$/.test(owner) ? owner : (near(/"(?:pk|pk_id)":"(\d{1,25})"/g) ?? near(/"id":"(\d{1,25})"/g))
-      if (!id) continue
-      const avatar = string(near(/"profile_pic_url(?:_hd)?":"((?:[^"\\]|\\.){10,2000})"/g))
-      return {
-        id,
-        name: string(near(/"full_name":"((?:[^"\\]|\\.){0,300})"/g)),
-        avatar: avatar && /^https:\/\//.test(avatar) ? avatar : null,
-        followers: Number(near(/"follower_count":(\d{1,12})/g)) || null,
-      }
+    if (!new RegExp(`"username":"${name}"`, "i").test(text)) return null
+    // Đối tượng hồ sơ `"pk":"<mã>","username":"<user>"…`, hoặc thông số đường dẫn của trang (`page_logging`). Chỗ có
+    // `"username":"<user>"` khác (biến của truy vấn…) đứng cạnh mã của bài viết, người xem: không đoán theo khoảng cách.
+    const pair = text.match(new RegExp(`"(?:pk|pk_id|id)":"(\\d{1,25})","username":"${name}"`, "i"))
+    const id = pair?.[1] ?? text.match(/"profile_id":"(\d{1,25})"/)?.[1] ?? text.match(/"profilePage_(\d{1,25})"/)?.[1]
+    if (!id) return null
+    const found = { id, name: null, avatar: null, followers: null }
+    // Tên, ảnh đại diện, số người theo dõi: trong cùng đối tượng, ngay sau `"pk":"<mã>","username":"<user>"`.
+    const at = pair ? pair.index : -1
+    if (at >= 0) {
+      const object = text.slice(at, at + 8000)
+      const avatar = string(object.match(/"profile_pic_url(?:_hd)?":"((?:[^"\\]|\\.){10,2000})"/)?.[1])
+      found.name = string(object.match(/"full_name":"((?:[^"\\]|\\.){0,300})"/)?.[1])
+      found.avatar = avatar && /^https:\/\//.test(avatar) ? avatar : null
+      found.followers = Number(object.match(/"follower_count":(\d{1,12})/)?.[1]) || null
     }
-    const id = /^\d+$/.test(owner) ? owner : text.match(/"profilePage_(\d{1,25})"/)?.[1]
-    return id ? { id, name: null, avatar: null, followers: null } : null
+    return found
   }
-  // JSON lồng trong chuỗi có dấu `\"`.
-  const search = (text) => read(text) ?? read(text.replaceAll('\\"', '"'))
-  const found = search(Array.from(document.scripts, (script) => script.textContent ?? "").join("\n"))
-  if (found) return found
   const request = typeof browser === "object" && typeof content === "object" && content?.fetch ? content.fetch.bind(content) : fetch
   try {
     const response = await request(`${location.origin}/${encodeURIComponent(user)}/`, { credentials: "include" })
-    return response.ok ? search(await response.text()) : null
+    // Chuyển sang trang đăng nhập / xác minh: không phải trang hồ sơ.
+    if (!response.ok || !new URL(response.url).pathname.toLowerCase().startsWith(`/${user.toLowerCase()}`)) return null
+    const text = await response.text()
+    // JSON lồng trong chuỗi có dấu `\"`.
+    const found = read(text) ?? read(text.replaceAll('\\"', '"'))
+    if (!found || (found.name && found.avatar)) return found
+    // HTML tải bằng fetch thường không kèm dữ liệu hồ sơ: tên "NASA (@nasa) • Instagram…" và ảnh từ thẻ Open Graph.
+    const head = new DOMParser().parseFromString(text.slice(0, text.indexOf("</head>") + 7), "text/html")
+    const meta = (property) => head.querySelector(`meta[property="${property}"]`)?.getAttribute("content") ?? ""
+    const title = meta("og:title").match(/^(.{1,200}?)\s*\(@[\w.]+\)/)?.[1]
+    const image = meta("og:image")
+    found.name = found.name || title || null
+    found.avatar = found.avatar || (/^https:\/\//.test(image) ? image : null)
+    return found
   } catch {
     return null
   }
