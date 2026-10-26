@@ -7,7 +7,7 @@
 // gửi cookie. Danh sách đi sang UTD từng đợt (`social-list`); mỗi đợt UTD trả lời đi tiếp hay dừng (nút Dừng, đóng hộp)
 // và loại nào còn cần lấy. Giữa hai yêu cầu luôn nghỉ ngẫu nhiên 2–4 s và không quá 70 yêu cầu / 10 phút để tránh bị
 // khoá tạm vì gọi nhiều.
-//   - Instagram: API nội bộ của chính trang web (`/api/v1/…`, như gallery-dl), đọc thẳng, không cần cuộn.
+//   - Instagram: truy vấn GraphQL của chính trang web (như Social Bulk Downloader), đọc thẳng, không cần cuộn.
 //   - Facebook, Threads: tiện ích tự cuộn trang (Facebook: lần lượt thẻ Ảnh / Video / Reels / Tin nổi bật), đọc ảnh/video
 //     trong dữ liệu JSON trang tự nạp (social-harvest.js). Không phụ thuộc mã truy vấn GraphQL hay đổi.
 
@@ -25,6 +25,17 @@ const SOCIAL_IDLE_ROUNDS = 5
 // Ảnh Facebook trong lưới nhỏ hơn chừng này (cạnh dài) ⇒ mở trang ảnh lấy bản gốc.
 const SOCIAL_FULL_SIZE = 900
 const SOCIAL_IG_APP_ID = "936619743392459"
+// Instagram: truy vấn GraphQL web của trang (`doc_id` + tên truy vấn), như tiện ích Social Bulk Downloader 1.8.8 dùng
+// (notes/social-bulk.md). `/api/v1/…` gọi từ tiện ích bị trả trang HTML / 429. `v2` = `/api/graphql`, còn lại
+// `/graphql/query`. Instagram đổi mã ⇒ phần đó báo social.changed, cập nhật mã ở đây.
+const SOCIAL_IG_QUERIES = {
+  user: { doc: "27981003384861049", name: "ProfileRootContentQuery", v2: true },
+  posts: { doc: "27672504985785333", name: "PolarisProfilePostsTabContentQuery_connection" },
+  reels: { doc: "28143376935350124", name: "PolarisProfileReelsTabContentQuery_connection" },
+  stories: { doc: "28284433337819802", name: "PolarisStoriesV3ReelPageStandaloneQuery" },
+  highlights: { doc: "26970053832668570", name: "PolarisProfileStoryHighlightsTrayContentQuery", v2: true },
+  highlight: { doc: "38282502831363383", name: "PolarisStoriesV3HighlightsPageQuery" },
+}
 const SOCIAL_IG_RESERVED = new Set(["p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about", "legal", "developer", "web", "api", "challenge", "emails", "session"])
 const SOCIAL_FB_RESERVED = new Set([
   "watch", "reel", "reels", "photo", "photo.php", "photos", "videos", "video.php", "marketplace", "gaming", "events", "search",
@@ -318,15 +329,17 @@ class SocialJob {
     return kept
   }
 
-  /** Instagram: một lần gọi API của trang (đọc ảnh/video ngay trong trang). */
-  async instagram(path, form = null) {
+  /** Instagram: một truy vấn GraphQL của trang (`SOCIAL_IG_QUERIES[query]`), đọc ảnh/video ngay trong trang. */
+  async instagram(query, variables) {
+    const { doc, name, v2 } = SOCIAL_IG_QUERIES[query]
     await this.pace()
-    const reply = await this.run(socialInstagramCall, [path, form, SOCIAL_IG_APP_ID]).catch(() => null)
+    const reply = await this.run(socialInstagramCall, [v2 ? "/api/graphql" : "/graphql/query", doc, name, JSON.stringify(variables), SOCIAL_IG_APP_ID]).catch(() => null)
     if (!reply) throw new Error("social.changed")
     const code = socialInstagramError(reply)
     if (code) {
       // Để chẩn đoán (trang service worker của tiện ích): mã HTTP và câu báo của Instagram, không có dữ liệu hồ sơ.
-      console.warn("UTD social", code, path.split("?")[0], reply.status, reply.meta?.message ?? "", reply.type ?? "", reply.head ?? "")
+      const message = reply.meta?.message ?? reply.meta?.errors?.[0]?.message ?? ""
+      console.warn("UTD social", code, name, reply.status, message, reply.type ?? "", reply.head ?? "")
       throw new Error(code)
     }
     return reply
@@ -340,33 +353,37 @@ class SocialJob {
 function socialInstagramError(reply) {
   const meta = reply.meta && typeof reply.meta === "object" ? reply.meta : {}
   const text = (value) => (typeof value === "string" ? value.toLowerCase() : "")
-  const message = `${text(meta.message)} ${text(meta.error_type)}`
-  const failed = meta.status === "fail"
-  if (reply.status === 429 || meta.spam === true || (failed && /wait a few minutes|checkpoint_required|challenge_required|feedback_required|spam/.test(message))) return "social.rate_limited"
-  if (reply.status === 401 || reply.status === 403 || /\/accounts\/login|\/challenge/.test(reply.url ?? "") || (failed && (meta.require_login === true || /login_required/.test(message)))) return "social.login"
+  // Lỗi GraphQL: `{"errors":[{"message":…}],"data":null}`.
+  const errors = Array.isArray(meta.errors) ? meta.errors.map((item) => `${text(item?.message)} ${text(item?.summary)}`).join(" ") : ""
+  const message = `${text(meta.message)} ${text(meta.error_type)} ${errors}`
+  const failed = meta.status === "fail" || errors !== ""
+  // Chưa đăng nhập: Instagram trả 401 "Please wait a few minutes…" kèm `require_login: true`.
+  if (failed && meta.require_login === true) return "social.login"
+  if (reply.status === 429 || meta.spam === true || (failed && /wait a few minutes|rate limit|try again later|checkpoint_required|challenge_required|feedback_required|spam/.test(message))) return "social.rate_limited"
+  if (reply.status === 401 || reply.status === 403 || /\/accounts\/login|\/challenge/.test(reply.url ?? "") || (failed && /login_required|not logged in/.test(message))) return "social.login"
   if (reply.status === 404) return "social.not_found"
-  if (reply.status !== 200 || !reply.meta) return "social.changed"
+  if (reply.status !== 200 || !reply.meta?.data) return "social.changed"
   return null
 }
 
 async function socialInstagram(job) {
   const { user } = job.plan
-  // web_profile_info bị Instagram giới hạn rất gắt (429 ngay lần đầu): đọc mã hồ sơ có sẵn trong trang trước.
+  // Mã hồ sơ từ HTML trang (`profile_id`, như Social Bulk Downloader); không có thì hỏi GraphQL theo tên.
   await job.pace()
   const found = await job.run(socialInstagramUser, [user]).catch(() => null)
   if (found?.id) {
     job.head = { id: found.id, name: found.name || user, handle: user, avatar: found.avatar ?? null, followers: found.followers ?? null, private: false }
   } else {
-    const info = await job.instagram(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(user)}`)
-    const profile = info.meta?.data?.user
-    if (!profile?.id) throw new Error("social.not_found")
+    const info = await job.instagram("user", { username: user })
+    const profile = info.meta?.data?.xig_user_by_username
+    if (!profile?.pk) throw new Error("social.not_found")
     job.head = {
-      id: String(profile.id),
+      id: String(profile.pk),
       name: profile.full_name || user,
       handle: user,
-      avatar: profile.profile_pic_url_hd || profile.profile_pic_url || null,
-      followers: Number(profile.edge_followed_by?.count) || null,
-      private: Boolean(profile.is_private && !profile.followed_by_viewer),
+      avatar: profile.profile_pic_url || null,
+      followers: Number(profile.follower_count) || null,
+      private: profile.is_private === true,
     }
   }
   const { id } = job.head
@@ -382,43 +399,71 @@ async function socialInstagram(job) {
       job.failure = job.failure ?? "social.partial"
     }
   }
+  // Trang sau của một danh sách GraphQL (`page_info`); hết trang / không có ⇒ null.
+  const next = (connection) => (connection?.page_info?.has_next_page && connection.page_info.end_cursor ? String(connection.page_info.end_cursor) : null)
+  const story = (item) => ({ ...item, page: null })
   // Tin hết hạn sau 24 giờ: lấy trước.
   await part("stories", async () => {
-    const reply = await job.instagram(`/api/v1/feed/reels_media/?reel_ids=${id}`)
-    await job.push(reply.items.map((item) => ({ ...item, page: null })), "stories")
+    const reply = await job.instagram("stories", { reel_ids_arr: [id], __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true })
+    if (!reply.meta.data.xdt_api__v1__feed__reels_media) throw new Error("social.changed")
+    await job.push(reply.items.map(story), "stories")
   })
   await part("highlights", async () => {
-    const tray = await job.instagram(`/api/v1/highlights/${id}/highlights_tray/`)
-    const highlights = (Array.isArray(tray.meta?.tray) ? tray.meta.tray : []).filter((item) => /^highlight:\d+$/.test(item?.id ?? ""))
-    for (let index = 0; index < highlights.length && job.wants("highlights"); index += 5) {
-      const chunk = highlights.slice(index, index + 5)
-      const query = chunk.map((item) => `reel_ids=${encodeURIComponent(item.id)}`).join("&")
-      const reply = await job.instagram(`/api/v1/feed/reels_media/?${query}`)
-      // Mỗi tin nổi bật một tên (album): đọc lại từng tin trong trả lời.
-      for (const item of chunk) {
-        const ids = new Set((reply.meta?.reels?.[item.id]?.itemIds ?? []).map(String))
-        const title = typeof item.title === "string" ? item.title.slice(0, 100) : null
-        await job.push(reply.items.filter((media) => ids.has(String(media.id))).map((media) => ({ ...media, page: null })), "highlights", title)
-      }
+    const tray = await job.instagram("highlights", { user_id: id })
+    const edges = tray.meta.data.highlights?.edges
+    if (!Array.isArray(edges)) throw new Error("social.changed")
+    const highlights = edges.map((edge) => edge?.node).filter((node) => /^highlight:\d+$/.test(node?.id ?? ""))
+    for (const highlight of highlights) {
+      if (!job.wants("highlights")) break
+      const reply = await job.instagram("highlight", {
+        first: 1,
+        initial_reel_id: highlight.id,
+        reel_ids: [highlight.id],
+        __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true,
+      })
+      // Mỗi tin nổi bật một tên (album): chỉ giữ các tin của đúng tin nổi bật này.
+      const ids = new Set((reply.reels?.[highlight.id] ?? []).map(String))
+      const title = typeof highlight.title === "string" ? highlight.title.slice(0, 100) : null
+      await job.push(reply.items.filter((media) => ids.has(String(media.id))).map(story), "highlights", title)
     }
   })
   await part("reels", async () => {
-    let cursor = ""
+    let cursor = null
     do {
-      const form = { target_user_id: id, page_size: "50", include_feed_video: "true" }
-      if (cursor) form.max_id = cursor
-      const reply = await job.instagram("/api/v1/clips/user/", form)
-      await job.push(reply.items.filter(own), "reels")
-      const paging = reply.meta?.paging_info ?? {}
-      cursor = paging.more_available ? String(paging.max_id ?? "") : ""
+      const reply = await job.instagram("reels", {
+        after: cursor,
+        data: { include_feed_video: true, page_size: 12, target_user_id: id },
+        first: 4,
+        id,
+        __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+      })
+      const connection = reply.meta.data.fetch__XDTUserDict?.clips_connection
+      if (!connection) throw new Error("social.changed")
+      // Danh sách reels có thể chỉ có ảnh bìa: mục vẫn là video, UTD tải từ trang reel.
+      const reels = reply.items.filter(own).map((item) => (item.kind === "video" ? item : { ...item, kind: "video", url: null, page: item.page?.replace("/p/", "/reel/") ?? null }))
+      await job.push(reels, "reels")
+      cursor = next(connection)
     } while (cursor && job.wants("reels") && !job.past("reels"))
   })
   await part("posts", async () => {
-    let cursor = ""
+    let cursor = null
     do {
-      const reply = await job.instagram(`/api/v1/feed/user/${id}/?count=30${cursor ? `&max_id=${encodeURIComponent(cursor)}` : ""}`)
+      const reply = await job.instagram("posts", {
+        username: user,
+        after: cursor,
+        before: null,
+        data: { count: 12, include_reel_media_seen_timestamp: true, include_relationship_info: true, latest_besties_reel_media: true, latest_reel_media: true },
+        first: 12,
+        include_multi_captions: true,
+        last: null,
+        __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: true,
+        __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+        __relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider: false,
+      })
+      const connection = reply.meta.data.xdt_api__v1__feed__user_timeline_graphql_connection
+      if (!connection) throw new Error("social.changed")
       await job.push(reply.items.filter(own), "posts")
-      cursor = reply.meta?.more_available ? String(reply.meta?.next_max_id ?? "") : ""
+      cursor = next(connection)
     } while (cursor && job.wants("posts") && !job.past("posts"))
   })
 }
@@ -599,12 +644,28 @@ async function socialInstagramUser(user) {
 }
 
 /**
- * Gọi API của trang Instagram bằng phiên đăng nhập của chính trang (cùng nguồn, không cần cookie riêng). Ảnh/video
+ * Gửi một truy vấn GraphQL của trang Instagram bằng phiên đăng nhập của chính trang (cùng nguồn, không cần cookie riêng),
+ * như web Instagram: `doc_id` + `variables`, mã `fb_dtsg` / `lsd` của trang, header app id / CSRF / tên truy vấn. Ảnh/video
  * trong câu trả lời đọc bằng social-harvest.js; phần còn lại (con trỏ trang sau, thông tin hồ sơ) trả về gọn.
  */
-async function socialInstagramCall(path, form, appId) {
+async function socialInstagramCall(path, doc, name, variables, appId) {
   const harvest = window[Symbol.for("utd.social-harvest")]
-  const cookie = (name) => document.cookie.split("; ").find((item) => item.startsWith(`${name}=`))?.slice(name.length + 1) ?? ""
+  const cookie = (key) => document.cookie.split("; ").find((item) => item.startsWith(`${key}=`))?.slice(key.length + 1) ?? ""
+  // Mã của trang (đọc một lần): `require` của web Meta, không có thì từ dữ liệu nhúng.
+  const TOKENS = Symbol.for("utd.social-ig-tokens")
+  if (!window[TOKENS]) {
+    const module = (key) => {
+      try {
+        return typeof window.require === "function" ? (window.require(key)?.token ?? "") : ""
+      } catch {
+        return ""
+      }
+    }
+    const scripts = Array.from(document.scripts, (script) => script.textContent ?? "").join("\n")
+    const embedded = (key) => scripts.match(new RegExp(`"${key}",\\[\\],\\{"token":"([^"]{1,300})"`))?.[1] ?? ""
+    window[TOKENS] = { dtsg: module("DTSGInitialData") || embedded("DTSGInitialData"), lsd: module("LSD") || embedded("LSD") }
+  }
+  const { dtsg, lsd } = window[TOKENS]
   let claim = "0"
   try {
     claim = sessionStorage.getItem("www-claim-v2") || "0"
@@ -613,16 +674,16 @@ async function socialInstagramCall(path, form, appId) {
   }
   const headers = {
     "X-IG-App-ID": appId,
-    "X-ASBD-ID": "129477",
     "X-IG-WWW-Claim": claim,
     "X-CSRFToken": cookie("csrftoken"),
+    "X-FB-Friendly-Name": name,
     "X-Requested-With": "XMLHttpRequest",
   }
-  const init = { credentials: "include", headers }
-  if (form) {
-    init.method = "POST"
-    init.body = new URLSearchParams(form)
-  }
+  if (lsd) headers["X-FB-LSD"] = lsd
+  const body = new URLSearchParams({ doc_id: doc, variables, fb_api_req_friendly_name: name, fb_api_caller_class: "RelayModern", server_timestamps: "true" })
+  if (dtsg) body.set("fb_dtsg", dtsg)
+  if (lsd) body.set("lsd", lsd)
+  const init = { method: "POST", credentials: "include", headers, body }
   const request = typeof browser === "object" && typeof content === "object" && content?.fetch ? content.fetch.bind(content) : fetch
   try {
     const response = await request(new URL(path, location.origin).href, init)
@@ -639,16 +700,18 @@ async function socialInstagramCall(path, form, appId) {
     harvest?.take()
     if (data && harvest) harvest.read(data)
     const items = harvest && data ? harvest.take().items : []
-    let meta = null
-    if (data) {
-      const strip = new Set(["items", "carousel_media", "image_versions2", "video_versions", "media"])
-      meta = JSON.parse(text, (key, value) => (strip.has(key) ? undefined : value))
-      // Tin nổi bật: id từng tin của mỗi bucket (để gắn tên).
-      for (const [reelId, reel] of Object.entries(data.reels ?? {})) {
-        if (meta.reels?.[reelId]) meta.reels[reelId].itemIds = (reel.items ?? []).map((item) => String(item.pk ?? item.id))
-      }
+    const strip = new Set(["items", "carousel_media", "image_versions2", "video_versions", "media"])
+    const meta = JSON.parse(text, (key, value) => (strip.has(key) ? undefined : value))
+    // Tin / tin nổi bật: id các tin của từng bucket (`{"id":"highlight:1","items":[…]}`), để gắn tên tin nổi bật.
+    const reels = {}
+    const stack = [data]
+    for (let budget = 20000; stack.length > 0 && budget > 0; budget -= 1) {
+      const node = stack.pop()
+      if (!node || typeof node !== "object") continue
+      if (typeof node.id === "string" && Array.isArray(node.items)) reels[node.id] = node.items.map((item) => String(item?.pk ?? item?.id))
+      for (const child of Array.isArray(node) ? node : Object.values(node)) if (child && typeof child === "object") stack.push(child)
     }
-    return { status: response.status, url: response.url, meta, items }
+    return { status: response.status, url: response.url, meta, items, reels }
   } catch {
     return { status: 0, url: "", meta: null, items: [] }
   }

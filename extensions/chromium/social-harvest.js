@@ -74,10 +74,12 @@
       const { best, small } = images(child)
       const video = bestVideo(child)
       const id = String(child.pk ?? child.id ?? `${base}_${index}`).replace(/[^\w:.-]/g, "_")
-      const file = video ?? best
+      // `media_type: 2` = video; danh sách có lúc thiếu link video ⇒ không lấy ảnh bìa thay (UTD tải từ trang bài).
+      const isVideo = Boolean(video) || child.media_type === 2
+      const file = isVideo ? video : best
       put({
         id,
-        kind: video ? "video" : "photo",
+        kind: isVideo ? "video" : "photo",
         url: file?.url ?? null,
         width: file?.width ?? 0,
         height: file?.height ?? 0,

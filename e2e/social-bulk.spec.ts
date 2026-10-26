@@ -106,7 +106,7 @@ async function runBulk(page: Page) {
 const sent = (page: Page) => page.evaluate(() => (window as unknown as { __bg: { native: Native[] } }).__bg.native)
 const entriesOf = (messages: Native[]) => messages.flatMap((message) => (message.social.entries as Entry[]) ?? [])
 
-// --- Instagram: API nội bộ của trang (/api/v1/…) ---
+// --- Instagram: truy vấn GraphQL của trang (`/graphql/query`, `/api/graphql`, doc_id như Social Bulk Downloader) ---
 
 const igImage = (name: string) => ({
   candidates: [
@@ -119,91 +119,117 @@ const igVideo = (name: string) => [
   { url: `${IG_CDN}/o1/v/t16/${name}_480.mp4?oh=1`, width: 480, height: 854, type: 102 },
 ]
 const NASA = { username: 'nasa', pk: '528817151' }
+const IG_ALL = ['9001', '9101', '8001', '8003', '7001001', '7001002', '7002']
 
 // HTML trang hồ sơ như Instagram thật: `"username":"nasa"` cũng nằm trong biến của truy vấn, cạnh mã của bài viết / người
 // xem (mồi dễ nhặt nhầm). `pair`: có đối tượng hồ sơ `"pk":…,"username":…`; `route`: chỉ có thông số đường dẫn + thẻ OG
-// (HTML tải bằng fetch thật).
+// (HTML tải bằng fetch thật). Trang nào cũng có mã `fb_dtsg` / `lsd` nhúng sẵn.
 const IG_DECOY = '"variables":{"username":"nasa"},"viewer":{"pk":"111","username":"toi"},"media":{"pk":"3999305299946080602"}'
 const IG_HTML = {
   pair: `{${IG_DECOY},"data":{"xig_user_by_username":${JSON.stringify({ pk: '528817151', username: 'nasa', profile_pic_url: `${IG_CDN}/v/avatar.jpg`, full_name: 'NASA', follower_count: 97000000 })}}}`,
   route: `{${IG_DECOY},"page_logging":{"name":"profilePage","params":{"page_id":"profilePage_528817151","profile_id":"528817151","sub_path":"posts"}},"url":"\\/nasa\\/","params":{"username":"nasa"}}`,
 }
+const IG_TOKENS = '{"define":[["DTSGInitialData",[],{"token":"dtsg-abc"},258],["LSD",[],{"token":"lsd-xyz"},323]]}'
 
-// `guard`: câu trả lời API mở đầu bằng `for (;;);` (CSRFGuard của web Instagram).
-function igRoutes(page: Page, options: { feedStatus?: number; storiesStatus?: number; profile?: 'pair' | 'route'; guard?: boolean } = {}) {
-  const requests: { url: string; method: string; headers: Record<string, string>; body: string | null }[] = []
+type IgRequest = { path: string; name: string; doc: string; variables: Record<string, unknown>; body: URLSearchParams; headers: Record<string, string> }
+
+// `guard`: câu trả lời mở đầu bằng `for (;;);` (CSRFGuard của web Instagram). `postsStatus` / `storiesStatus`: phần đó lỗi.
+function igRoutes(page: Page, options: { postsStatus?: number; storiesStatus?: number; profile?: 'pair' | 'route'; guard?: boolean } = {}) {
+  const requests: IgRequest[] = []
   page.route('https://www.instagram.com/**', (route) => {
     const request = route.request()
     const url = new URL(request.url())
-    if (!url.pathname.startsWith('/api/')) {
+    if (url.pathname !== '/graphql/query' && url.pathname !== '/api/graphql') {
       const og = `<meta property="og:title" content="NASA (&#064;nasa) &#x2022; Instagram photos and videos"><meta property="og:image" content="${IG_CDN}/v/avatar.jpg">`
-      const script = options.profile ? `<script type="application/json">${IG_HTML[options.profile]}</script>` : ''
-      return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><html><head><title>NASA (@nasa) • Instagram</title>${og}</head><body><p>NASA</p>${script}</body></html>` })
+      const data = options.profile ? `<script type="application/json">${IG_HTML[options.profile]}</script>` : ''
+      const body = `<!doctype html><html><head><title>NASA (@nasa) • Instagram</title>${og}</head><body><p>NASA</p><script type="application/json">${IG_TOKENS}</script>${data}</body></html>`
+      return route.fulfill({ contentType: 'text/html; charset=utf-8', body })
     }
-    requests.push({ url: url.pathname + url.search, method: request.method(), headers: request.headers(), body: request.postData() })
-    const json = (body: unknown, status = 200) =>
-      route.fulfill({ status, contentType: 'application/json', body: `${options.guard ? 'for (;;);' : ''}${JSON.stringify(body)}` })
-    if (url.pathname === '/api/v1/feed/reels_media/' && options.storiesStatus) {
-      return json({ message: "We're sorry, but something went wrong. Please try again.", status: 'fail' }, options.storiesStatus)
-    }
-    if (url.pathname === '/api/v1/users/web_profile_info/') {
+    const body = new URLSearchParams(request.postData() ?? '')
+    const name = request.headers()['x-fb-friendly-name'] ?? ''
+    const variables = JSON.parse(body.get('variables') ?? '{}') as Record<string, unknown>
+    requests.push({ path: url.pathname, name, doc: body.get('doc_id') ?? '', variables, body, headers: request.headers() })
+    const json = (value: unknown, status = 200) =>
+      route.fulfill({ status, contentType: 'application/json', body: `${options.guard ? 'for (;;);' : ''}${JSON.stringify(value)}` })
+    if (name === 'ProfileRootContentQuery') {
       if (options.profile) return json({ message: '', status: 'fail' }, 429)
-      // Chữ "spam", "wait a few minutes" trong tiểu sử / chú thích không phải lỗi bị chặn.
+      // Chữ "spam", "wait a few minutes" trong tiểu sử không phải lỗi bị chặn.
       return json({
         data: {
-          user: {
-            id: '528817151', full_name: 'NASA', profile_pic_url_hd: `${IG_CDN}/v/avatar.jpg`, edge_followed_by: { count: 97000000 }, is_private: false,
-            biography: 'No spam! Launch in a few hours, please wait a few minutes. require_login',
-            edge_owner_to_timeline_media: { edges: [{ node: { edge_media_to_caption: { edges: [{ node: { text: 'feedback_required spam' } }] } } }] },
+          xig_user_by_username: {
+            pk: '528817151', username: 'nasa', full_name: 'NASA', profile_pic_url: `${IG_CDN}/v/avatar.jpg`, follower_count: 97000000, is_private: false,
+            biography: 'No spam! Launch in a few hours, please wait a few minutes. require_login feedback_required',
           },
         },
         status: 'ok',
       })
     }
-    if (url.pathname === '/api/v1/feed/reels_media/' && url.search === '?reel_ids=528817151') {
-      return json({ reels: { 528817151: { id: '528817151', items: [{ pk: '9001', taken_at: 1790000000, code: 'S1', image_versions2: igImage('story'), user: NASA }] } } })
-    }
-    if (url.pathname === '/api/v1/highlights/528817151/highlights_tray/') {
-      return json({ tray: [{ id: 'highlight:17', title: 'Sao Hoả', cover_media: {} }, { id: 'oops', title: 'x' }] })
-    }
-    if (url.pathname === '/api/v1/feed/reels_media/') {
-      return json({ reels: { 'highlight:17': { id: 'highlight:17', title: 'Sao Hoả', items: [{ pk: '9101', taken_at: 1700000000, video_versions: igVideo('mars'), image_versions2: igImage('mars'), user: NASA }] } } })
-    }
-    if (url.pathname === '/api/v1/clips/user/') {
+    if (name === 'PolarisStoriesV3ReelPageStandaloneQuery') {
+      if (options.storiesStatus) return json({ message: "We're sorry, but something went wrong. Please try again.", status: 'fail' }, options.storiesStatus)
       return json({
-        items: [
-          { media: { pk: '8001', code: 'R1', taken_at: 1780000000, product_type: 'clips', video_versions: igVideo('reel'), image_versions2: igImage('reel'), user: NASA, caption: { text: 'Phóng tàu' } } },
-          // Reel của người khác (hợp tác) không lẫn vào.
-          { media: { pk: '8002', code: 'R2', taken_at: 1780000001, product_type: 'clips', video_versions: igVideo('other'), user: { username: 'spacex' } } },
-        ],
-        paging_info: { more_available: false, max_id: null },
+        data: { xdt_api__v1__feed__reels_media: { reels_media: [{ id: '528817151', items: [{ pk: '9001', taken_at: 1790000000, code: 'S1', image_versions2: igImage('story'), user: NASA }] }] } },
       })
     }
-    if (url.pathname === '/api/v1/feed/user/528817151/') {
-      if (options.feedStatus) return json({ message: 'Please wait a few minutes before you try again.', status: 'fail' }, options.feedStatus)
-      if (!url.searchParams.get('max_id')) {
-        return json({
-          items: [
-            {
-              pk: '7001', code: 'P1', taken_at: 1770000000, user: NASA, caption: { text: 'Thiên hà\nxoắn ốc' },
-              carousel_media: [
-                { pk: '7001001', image_versions2: igImage('c1') },
-                { pk: '7001002', video_versions: igVideo('c2'), image_versions2: igImage('c2') },
-              ],
-            },
-          ],
-          more_available: true,
-          next_max_id: 'cursor-2',
-        })
-      }
-      return json({ items: [{ pk: '7002', code: 'P2', taken_at: 1760000000, user: NASA, image_versions2: igImage('p2') }], more_available: false })
+    if (name === 'PolarisProfileStoryHighlightsTrayContentQuery') {
+      return json({ data: { highlights: { edges: [{ node: { id: 'highlight:17', title: 'Sao Hoả', cover_media: {} } }, { node: { id: 'oops', title: 'x' } }] } } })
     }
-    return json({ message: 'not found' }, 404)
+    if (name === 'PolarisStoriesV3HighlightsPageQuery') {
+      // Kèm một tin nổi bật khác trong câu trả lời: không lẫn vào tin nổi bật đang hỏi.
+      return json({
+        data: {
+          xdt_api__v1__feed__reels_media__connection: {
+            edges: [
+              { node: { id: 'highlight:17', title: 'Sao Hoả', items: [{ pk: '9101', taken_at: 1700000000, video_versions: igVideo('mars'), image_versions2: igImage('mars'), user: NASA }] } },
+              { node: { id: 'highlight:18', title: 'Khác', items: [{ pk: '9201', taken_at: 1700000000, image_versions2: igImage('other'), user: NASA }] } },
+            ],
+          },
+        },
+      })
+    }
+    if (name === 'PolarisProfileReelsTabContentQuery_connection') {
+      return json({
+        data: {
+          fetch__XDTUserDict: {
+            clips_connection: {
+              edges: [
+                { node: { media: { pk: '8001', code: 'R1', taken_at: 1780000000, product_type: 'clips', media_type: 2, video_versions: igVideo('reel'), image_versions2: igImage('reel'), user: NASA, caption: { text: 'Phóng tàu' } } } },
+                // Reel của người khác (hợp tác) không lẫn vào.
+                { node: { media: { pk: '8002', code: 'R2', taken_at: 1780000001, product_type: 'clips', media_type: 2, video_versions: igVideo('other'), user: { username: 'spacex' } } } },
+                // Chỉ có ảnh bìa: vẫn là video, tải từ trang reel.
+                { node: { media: { pk: '8003', code: 'R3', taken_at: 1780000002, image_versions2: igImage('r3'), user: NASA } } },
+              ],
+              page_info: { has_next_page: false, end_cursor: null },
+            },
+          },
+        },
+      })
+    }
+    if (name === 'PolarisProfilePostsTabContentQuery_connection') {
+      // 401 thật của Instagram khi chưa đăng nhập: cùng câu "wait a few minutes", kèm `require_login`.
+      const login = options.postsStatus === 401 ? { require_login: true } : {}
+      if (options.postsStatus) return json({ message: 'Please wait a few minutes before you try again.', status: 'fail', ...login }, options.postsStatus)
+      const connection = (edges: unknown[], next: string | null) => ({
+        data: { xdt_api__v1__feed__user_timeline_graphql_connection: { edges, page_info: { has_next_page: Boolean(next), end_cursor: next } } },
+      })
+      if (!variables.after) {
+        return json(connection([{
+          node: {
+            pk: '7001', code: 'P1', taken_at: 1770000000, user: NASA, caption: { text: 'Thiên hà\nxoắn ốc' },
+            carousel_media: [
+              { pk: '7001001', image_versions2: igImage('c1') },
+              { pk: '7001002', video_versions: igVideo('c2'), image_versions2: igImage('c2') },
+            ],
+          },
+        }], 'cursor-2'))
+      }
+      return json(connection([{ node: { pk: '7002', code: 'P2', taken_at: 1760000000, user: NASA, image_versions2: igImage('p2') } }], null))
+    }
+    return json({ errors: [{ message: 'unknown doc_id' }], data: null })
   })
   return requests
 }
 
-test('Instagram: Tin, tin nổi bật, reels, bài viết (carousel tách từng ảnh/video) qua API của trang, đúng header, gửi UTD từng đợt', async ({ page, context }) => {
+test('Instagram: Tin, tin nổi bật, reels, bài viết (carousel tách từng ảnh/video) qua GraphQL của trang, đúng doc_id/header/mã trang, gửi UTD từng đợt', async ({ page, context }) => {
   await context.addCookies([{ name: 'csrftoken', value: 'tok123', domain: '.instagram.com', path: '/', secure: true }])
   const requests = igRoutes(page)
   await loadExtension(page, 'https://www.instagram.com/nasa/')
@@ -218,6 +244,7 @@ test('Instagram: Tin, tin nổi bật, reels, bài viết (carousel tách từng
     ['stories', '9001', 'photo'],
     ['highlights', '9101', 'video'],
     ['reels', '8001', 'video'],
+    ['reels', '8003', 'video'],
     ['posts', '7001001', 'photo'],
     ['posts', '7001002', 'video'],
     ['posts', '7002', 'photo'],
@@ -225,44 +252,52 @@ test('Instagram: Tin, tin nổi bật, reels, bài viết (carousel tách từng
   const byId = Object.fromEntries(entries.map((entry) => [entry.id, entry]))
   expect(byId['9001']).toMatchObject({ url: `${IG_CDN}/v/t51/story_1080.jpg?stp=dst-jpg&oh=1`, page: null, timestamp: 1790000000 })
   expect(byId['9101']).toMatchObject({ url: `${IG_CDN}/o1/v/t16/mars_720.mp4?oh=1`, album: 'Sao Hoả' })
-  expect(byId['8001']).toMatchObject({ page: 'https://www.instagram.com/reel/R1/', title: 'Phóng tàu' })
+  expect(byId['8001']).toMatchObject({ url: `${IG_CDN}/o1/v/t16/reel_720.mp4?oh=1`, page: 'https://www.instagram.com/reel/R1/', title: 'Phóng tàu' })
+  expect(byId['8003']).toMatchObject({ url: null, page: 'https://www.instagram.com/reel/R3/' })
   expect(byId['7001002']).toMatchObject({ url: `${IG_CDN}/o1/v/t16/c2_720.mp4?oh=1`, page: 'https://www.instagram.com/p/P1/', title: 'Thiên hà xoắn ốc' })
 
-  // Gọi từ trong trang bằng phiên của trang: header của web Instagram, mã CSRF từ cookie trang, không cần cookie riêng.
-  expect(requests.map((request) => request.url)).toEqual([
-    '/api/v1/users/web_profile_info/?username=nasa',
-    '/api/v1/feed/reels_media/?reel_ids=528817151',
-    '/api/v1/highlights/528817151/highlights_tray/',
-    '/api/v1/feed/reels_media/?reel_ids=highlight%3A17',
-    '/api/v1/clips/user/',
-    '/api/v1/feed/user/528817151/?count=30',
-    '/api/v1/feed/user/528817151/?count=30&max_id=cursor-2',
+  // Gọi từ trong trang bằng phiên của trang: như web Instagram (doc_id + variables, mã fb_dtsg/lsd của trang, CSRF từ
+  // cookie trang), không cần cookie riêng.
+  expect(requests.map((request) => [request.path, request.name, request.doc])).toEqual([
+    ['/api/graphql', 'ProfileRootContentQuery', '27981003384861049'],
+    ['/graphql/query', 'PolarisStoriesV3ReelPageStandaloneQuery', '28284433337819802'],
+    ['/api/graphql', 'PolarisProfileStoryHighlightsTrayContentQuery', '26970053832668570'],
+    ['/graphql/query', 'PolarisStoriesV3HighlightsPageQuery', '38282502831363383'],
+    ['/graphql/query', 'PolarisProfileReelsTabContentQuery_connection', '28143376935350124'],
+    ['/graphql/query', 'PolarisProfilePostsTabContentQuery_connection', '27672504985785333'],
+    ['/graphql/query', 'PolarisProfilePostsTabContentQuery_connection', '27672504985785333'],
   ])
-  expect(requests[0].headers['x-ig-app-id']).toBe('936619743392459')
-  expect(requests[0].headers['x-csrftoken']).toBe('tok123')
-  expect(requests[4]).toMatchObject({ method: 'POST', body: 'target_user_id=528817151&page_size=50&include_feed_video=true' })
+  expect(requests[0].variables).toEqual({ username: 'nasa' })
+  expect(requests[1].variables).toMatchObject({ reel_ids_arr: ['528817151'] })
+  expect(requests[2].variables).toEqual({ user_id: '528817151' })
+  expect(requests[3].variables).toMatchObject({ initial_reel_id: 'highlight:17', reel_ids: ['highlight:17'] })
+  expect(requests[4].variables).toMatchObject({ id: '528817151', after: null, data: { target_user_id: '528817151', include_feed_video: true } })
+  expect(requests[5].variables).toMatchObject({ username: 'nasa', after: null, first: 12 })
+  expect(requests[6].variables).toMatchObject({ username: 'nasa', after: 'cursor-2' })
+  expect(requests[0].headers).toMatchObject({ 'x-ig-app-id': '936619743392459', 'x-csrftoken': 'tok123', 'x-fb-lsd': 'lsd-xyz' })
+  expect([requests[0].body.get('fb_dtsg'), requests[0].body.get('lsd')]).toEqual(['dtsg-abc', 'lsd-xyz'])
   await expect(page.locator('#utd-social-pill')).toBeAttached()
 })
 
 test('Instagram: UTD bỏ chọn nhóm ⇒ tiện ích không gọi phần đó; bị chặn tạm (429) ⇒ dừng, báo mã, giữ phần đã có', async ({ page }) => {
-  const requests = igRoutes(page, { feedStatus: 429 })
+  const requests = igRoutes(page, { postsStatus: 429 })
   await loadExtension(page, 'https://www.instagram.com/stories/nasa/')
   // Người dùng chỉ để lại Tin và Bài viết trong hộp của UTD.
   await page.evaluate(() => {
     ;(window as unknown as { __reply: unknown }).__reply = { ok: true, media: { go: true, sources: ['stories', 'posts'], since: null } }
   })
   const messages = await runBulk(page)
-  expect(requests.map((request) => request.url.split('?')[0])).toEqual([
-    '/api/v1/users/web_profile_info/',
-    '/api/v1/feed/reels_media/',
-    '/api/v1/feed/user/528817151/',
+  expect(requests.map((request) => request.name)).toEqual([
+    'ProfileRootContentQuery',
+    'PolarisStoriesV3ReelPageStandaloneQuery',
+    'PolarisProfilePostsTabContentQuery_connection',
   ])
   expect(entriesOf(messages).map((entry) => entry.id)).toEqual(['9001'])
   expect(messages.at(-1)?.social.done).toEqual({ complete: false, error: 'social.rate_limited' })
 })
 
 for (const profile of ['pair', 'route'] as const) {
-  test(`Instagram: mã hồ sơ đọc từ HTML trang (${profile === 'pair' ? 'đối tượng hồ sơ' : 'thông số đường dẫn + thẻ OG; API trả kèm for (;;);'}), không nhặt mã mồi ⇒ không gọi web_profile_info (bị 429)`, async ({ page }) => {
+  test(`Instagram: mã hồ sơ đọc từ HTML trang (${profile === 'pair' ? 'đối tượng hồ sơ' : 'thông số đường dẫn + thẻ OG; câu trả lời kèm for (;;);'}), không nhặt mã mồi ⇒ không hỏi GraphQL theo tên`, async ({ page }) => {
     const requests = igRoutes(page, { profile, guard: profile === 'route' })
     await loadExtension(page, 'https://www.instagram.com/nasa/')
     const messages = await runBulk(page)
@@ -270,16 +305,23 @@ for (const profile of ['pair', 'route'] as const) {
       id: '528817151', name: 'NASA', handle: 'nasa', avatar: `${IG_CDN}/v/avatar.jpg`, followers: profile === 'pair' ? 97000000 : null, private: false,
     })
     expect(messages.at(-1)?.social.done).toEqual({ complete: true, error: null })
-    expect(requests.map((request) => request.url)).not.toContain('/api/v1/users/web_profile_info/?username=nasa')
-    expect(entriesOf(messages).map((entry) => entry.id)).toEqual(['9001', '9101', '8001', '7001001', '7001002', '7002'])
+    expect(requests.map((request) => request.name)).not.toContain('ProfileRootContentQuery')
+    expect(entriesOf(messages).map((entry) => entry.id)).toEqual(IG_ALL)
   })
 }
+
+test('Instagram: bài viết đòi đăng nhập (401 + require_login) ⇒ báo cần đăng nhập, không phải bị chặn', async ({ page }) => {
+  igRoutes(page, { profile: 'pair', postsStatus: 401 })
+  await loadExtension(page, 'https://www.instagram.com/nasa/')
+  const messages = await runBulk(page)
+  expect(messages.at(-1)?.social.done).toEqual({ complete: false, error: 'social.login' })
+})
 
 test('Instagram: một phần lỗi (Tin trả 500) ⇒ bỏ phần đó, vẫn lấy reels + bài viết, báo danh sách có thể chưa đủ', async ({ page }) => {
   igRoutes(page, { profile: 'pair', storiesStatus: 500 })
   await loadExtension(page, 'https://www.instagram.com/nasa/')
   const messages = await runBulk(page)
-  expect(entriesOf(messages).map((entry) => entry.id)).toEqual(['8001', '7001001', '7001002', '7002'])
+  expect(entriesOf(messages).map((entry) => entry.id)).toEqual(IG_ALL.filter((id) => id !== '9001'))
   expect(messages.at(-1)?.social.done).toEqual({ complete: false, error: 'social.partial' })
 })
 

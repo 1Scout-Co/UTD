@@ -40,7 +40,7 @@ Nhánh `claude/social-bulk-e821de` (cắt từ main `93ed9a3`). Chủ dự án y
 | facebook-gql-scraper (`85849e2`) | GraphQL với `doc_id` tìm trong mã JS của trang; `ProfileCometAppCollectionListRendererPaginationQuery`, `...ReelsRendererPaginationQuery`, nhóm `GroupsCometFeedRegularStoriesPaginationQuery` (L612–676, L1003). Báo "GraphQL document with ID … was not found" = `doc_id` đã đổi. |
 | facebook-cli (`f50ef61`) | "Không bao giờ viết cứng doc id… biến `__relay_internal__pv__*` bắt buộc, không đoán được" (graphql.go L14–25); mã 1675004 "Rate limit exceeded" ở HTTP 200 (L27–34). |
 | HushFacebookWeb, notes/fb-media.md | Tin Facebook: `data.bucket.unified_stories_with_notes.edges[].node.attachments[0].media` (Photo/Video); dữ liệu tới qua `JSON.parse` (khối `data-sjs` + câu trả lời GraphQL) — UTD đã dùng và thử thật trong `fb-media.js`. |
-| Social Bulk Downloader (Chrome Web Store `cnejldbhpclimaappoekdhmeieehfdpb`, v1.8.8) | Chỉ đọc mô tả công khai, không tải mã: tải ảnh, video, reels, Tin, Tin nổi bật từ hồ sơ, trang, nhóm, bài viết; dán nhiều link; lọc theo khoảng ngày; đặt tên file; huỷ giữa chừng. Trang không ghi nền tảng, quyền hay nhịp gọi. |
+| Social Bulk Downloader (Chrome Web Store `cnejldbhpclimaappoekdhmeieehfdpb`, v1.8.8) | Mô tả công khai: tải ảnh, video, reels, Tin, Tin nổi bật từ hồ sơ, trang, nhóm, bài viết; lọc theo ngày; huỷ giữa chừng. **Đọc mã bản đã cài trên máy chủ dự án (2026-10-26, không chép)**, `Instagram.f1e86f7f.js`: nền dùng `webRequest` bắt header/thân thật của trang (`x-ig-app-id`, `x-csrftoken`, `fb_dtsg`) rồi gửi `POST https://www.instagram.com/graphql/query` (hoặc `/api/graphql`) với `doc_id` + `variables` + `x-fb-friendly-name`. Mã hồ sơ: `"profile_id"` trong HTML trang, dự phòng `ProfileRootContentQuery` (`27981003384861049`, `xig_user_by_username.pk`). Bài viết `27672504985785333` (`xdt_api__v1__feed__user_timeline_graphql_connection`, 12/trang); reels `28143376935350124` (`fetch__XDTUserDict.clips_connection`, chỉ có mã bài ⇒ hỏi từng reel); Tin `28284433337819802` (`xdt_api__v1__feed__reels_media.reels_media[0].items`); danh sách tin nổi bật `26970053832668570` (`/api/graphql`, `highlights.edges`); từng tin nổi bật `38282502831363383` (`xdt_api__v1__feed__reels_media__connection`). |
 
 Nghiên cứu đầy đủ (từng dòng, header, đường dẫn JSON): phụ lục ở cuối.
 
@@ -48,11 +48,11 @@ Nghiên cứu đầy đủ (từng dòng, header, đường dẫn JSON): phụ l
 
 | Loại | Cách lấy | Ghi chú |
 |---|---|---|
-| Instagram — bài viết (ảnh, video, carousel) | `GET /api/v1/feed/user/<id>/?count=30&max_id=` gọi từ trong trang | carousel tách từng ảnh/video; chỉ giữ bài của chính người đó |
-| Instagram — reels | `POST /api/v1/clips/user/` | bỏ reel hợp tác của người khác |
-| Instagram — Tin | `GET /api/v1/feed/reels_media/?reel_ids=<id>` | lấy trước (hết hạn sau 24 giờ) |
-| Instagram — Tin nổi bật | `highlights_tray` rồi `reels_media` 5 tin một lần | tên tin nổi bật ⇒ album (tên file, nhãn) |
-| Instagram — người dùng | `GET /api/v1/users/web_profile_info/?username=` | tên, ảnh đại diện, người theo dõi, riêng tư |
+| Instagram — bài viết (ảnh, video, carousel) | GraphQL `PolarisProfilePostsTabContentQuery_connection` gọi từ trong trang | carousel tách từng ảnh/video; chỉ giữ bài của chính người đó |
+| Instagram — reels | GraphQL `PolarisProfileReelsTabContentQuery_connection` | bỏ reel hợp tác của người khác; danh sách chỉ có ảnh bìa (thử thật: `media_type: 2`, không `video_versions`) ⇒ mục video không link file, yt-dlp tải từ `/reel/<mã>/` |
+| Instagram — Tin | GraphQL `PolarisStoriesV3ReelPageStandaloneQuery` | lấy trước (hết hạn sau 24 giờ) |
+| Instagram — Tin nổi bật | GraphQL `PolarisProfileStoryHighlightsTrayContentQuery` rồi `PolarisStoriesV3HighlightsPageQuery` từng cái | tên tin nổi bật ⇒ album (tên file, nhãn) |
+| Instagram — người dùng | `"profile_id"` trong HTML mới tải của `/<tên>/` + thẻ OG; dự phòng GraphQL `ProfileRootContentQuery` | tên, ảnh đại diện |
 | Threads — bài viết | dữ liệu nhúng của trang hồ sơ + **tự cuộn**, đọc JSON trang tự nạp | bỏ bài đăng lại / trích dẫn của người khác |
 | Facebook — ảnh | mở thẻ `photos_by` (`&sk=photos_by`) + tự cuộn; ảnh lưới nhỏ (< 900 px) ⇒ mở `/photo/?fbid=` lấy bản gốc | như gallery-dl; không lấy được bản gốc thì giữ ảnh lưới |
 | Facebook — video | thẻ `videos` + tự cuộn; `progressive_urls` (HD trước) / `playable_url*` / `browser_native_*` | không có link file ⇒ yt-dlp tải từ `/watch/?v=` |
@@ -63,7 +63,14 @@ Nghiên cứu đầy đủ (từng dòng, header, đường dẫn JSON): phụ l
 Vì sao không gọi GraphQL bằng `doc_id` cho Facebook/Threads: `doc_id` và biến `__relay_internal__pv__*` đổi thường xuyên
 (go-threads, facebook-cli, instaloader đều ghi). Để trang tự gọi (bằng mã đang dùng) rồi đọc theo `JSON.parse` thì không
 phụ thuộc chúng — chỉ phụ thuộc hình dạng object media (`Photo`/`Video`, `image_versions2`/`video_versions`), ổn định hơn
-nhiều. Instagram có API REST web ổn định nhiều năm (gallery-dl dùng mặc định) nên gọi thẳng, nhanh và đủ hơn cuộn.
+nhiều. Instagram gọi thẳng GraphQL như Social Bulk Downloader (nhanh, đủ hơn cuộn); `doc_id` để một chỗ
+(`SOCIAL_IG_QUERIES` trong social-bulk.js), Instagram đổi thì phần đó báo `social.changed` và sửa mã ở đó.
+
+Thử thật với chủ dự án (2026-10-26, đã đăng nhập): `GET /api/v1/users/web_profile_info/` trả **429** ngay lần đầu;
+`/api/v1/feed/user/…`, `/api/v1/clips/user/`, `highlights_tray` gọi từ tiện ích trả **200 kèm trang HTML** của web
+(không phải JSON); `/api/v1/feed/reels_media/` trả 500 ⇒ bỏ hẳn REST `/api/v1/`. Thử GraphQL trên instagram.com không đăng
+nhập (hồ sơ công khai): `ProfileRootContentQuery`, tin nổi bật, reels trả 200 JSON đúng khoá; bài viết trả 401
+`require_login` (cần đăng nhập). Câu trả lời có thể mở đầu bằng `for (;;);` (CSRFGuard của web Instagram) ⇒ bóc trước khi đọc.
 
 ## Thiết kế
 
@@ -132,6 +139,7 @@ không bao giờ hiện chữ do trang gửi.
 ## Giới hạn và rủi ro
 
 - **Cần đăng nhập** trên trình duyệt cho Tin, tin nổi bật, tài khoản riêng tư, phần lớn Facebook. Tiện ích không đăng nhập hộ.
+- **Instagram đổi `doc_id`**: phần đó báo "danh sách có thể chưa đủ", các phần khác vẫn lấy; cập nhật `SOCIAL_IG_QUERIES`.
 - **Bị khoá tạm vì gọi nhiều**: Instagram 429 / `checkpoint_required` / `challenge_required` / "Please wait a few minutes";
   Facebook `CometErrorRoot.react`. UTD dừng ngay, không thử lại; nhịp mặc định chậm (2–4 s, ≤ 70/10 phút) — hồ sơ rất lớn
   sẽ lâu (Facebook: mỗi ảnh lưới nhỏ thêm 1 yêu cầu ⇒ ~7 ảnh/phút). Có thể bấm Dừng bất cứ lúc nào và tải phần đã có.
