@@ -273,9 +273,53 @@ test('trang không hỗ trợ (bài viết lẻ, trang chủ) ⇒ báo trên tra
     { platform: 'facebook', kind: 'group', photos: 'https://www.facebook.com/groups/12345/media/photos', reels: null, base: 'https://www.facebook.com/groups/12345' },
     { platform: 'facebook', kind: 'story', photos: null, reels: null, base: null },
     null,
-    null,
+    { platform: 'threads', kind: null, photos: null, reels: null, base: 'https://www.threads.net/@zuck' },
     null,
   ])
+})
+
+// --- Threads: dữ liệu nhúng trong trang + tự cuộn (trang tự nạp thêm bằng GraphQL) ---
+
+const threadPost = (pk: string, username: string, extra: Record<string, unknown>) => ({
+  thread_items: [{ post: { pk, id: `${pk}_1`, code: `C${pk}`, taken_at: 1785000000, user: { username }, caption: { text: `Bài ${pk}` }, ...extra } }],
+})
+
+test('Threads: bài của chính người đó (ảnh, carousel ảnh + video), tự cuộn tới hết; bài đăng lại của người khác bị bỏ', async ({ page }) => {
+  const first = {
+    require: [['ScheduledServerJS', 'handle', null, [{ __bbox: { result: { data: { mediaData: { edges: [
+      { node: threadPost('501', 'zuck', { image_versions2: igImage('t501') }) },
+      { node: threadPost('502', 'someone', { image_versions2: igImage('t502') }) },
+    ] } } } } }]]],
+  }
+  const next = { data: { mediaData: { edges: [{ node: threadPost('503', 'zuck', { carousel_media: [{ pk: '503001', image_versions2: igImage('t503a') }, { pk: '503002', video_versions: igVideo('t503b') }] }) }] } } }
+  await page.route('https://www.threads.com/**', (route) =>
+    route.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<!doctype html><html><head><meta property="og:title" content="Mark Zuckerberg (@zuck) • Threads"></head><body style="height:3000px">
+        <script type="application/json" data-sjs>${JSON.stringify(first)}</script></body></html>`,
+    }),
+  )
+  await loadExtension(page, 'https://www.threads.com/@zuck')
+  // Trang tự nạp thêm khi cuộn tới cuối (một lần): câu trả lời GraphQL đi qua JSON.parse như trang thật.
+  await page.evaluate((text) => {
+    let loaded = false
+    window.scrollTo = (() => {
+      if (!loaded) JSON.parse(text)
+      loaded = true
+    }) as typeof window.scrollTo
+  }, JSON.stringify(next))
+  const messages = await runBulk(page)
+  expect(messages[0].social.head).toMatchObject({ id: 'zuck', name: 'Mark Zuckerberg (@zuck)', handle: 'zuck' })
+  const entries = entriesOf(messages)
+  expect(entries.map((entry) => [entry.source, entry.id, entry.kind])).toEqual([
+    ['posts', '501', 'photo'],
+    ['posts', '503001', 'photo'],
+    ['posts', '503002', 'video'],
+  ])
+  expect(entries[0].page).toBe('https://www.threads.com/@zuck/post/C501')
+  expect(messages.at(-1)?.social.done).toEqual({ complete: true, error: null })
+  const executed = await page.evaluate(() => (window as unknown as { __bg: { executed: { world: string | null; file?: string }[] } }).__bg.executed)
+  expect(executed).toContainEqual({ world: 'MAIN', file: 'social-harvest.js' })
 })
 
 // --- Facebook: lần lượt thẻ Ảnh / Video / Reels / tin nổi bật, đọc JSON trang nạp ---

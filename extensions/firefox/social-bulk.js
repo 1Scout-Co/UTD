@@ -1,4 +1,4 @@
-// Tải hàng loạt ảnh/video từ Facebook, Instagram bằng UTD (notes/social-bulk.md). Chạy trong nền (Chromium
+// Tải hàng loạt ảnh/video từ Facebook, Instagram, Threads bằng UTD (notes/social-bulk.md). Chạy trong nền (Chromium
 // nạp bằng importScripts, Firefox nạp sau background.js theo manifest). Tên ở đây đều có tiền tố social/SOCIAL để không
 // đụng tên của background.js; dùng chung `api`, `t`, `sendNative` của nó.
 //
@@ -8,7 +8,7 @@
 // và loại nào còn cần lấy. Giữa hai yêu cầu luôn nghỉ ngẫu nhiên 2–4 s và không quá 70 yêu cầu / 10 phút để tránh bị
 // khoá tạm vì gọi nhiều.
 //   - Instagram: API nội bộ của chính trang web (`/api/v1/…`, như gallery-dl), đọc thẳng, không cần cuộn.
-//   - Facebook: tiện ích tự cuộn trang (Facebook: lần lượt thẻ Ảnh / Video / Reels / Tin nổi bật), đọc ảnh/video
+//   - Facebook, Threads: tiện ích tự cuộn trang (Facebook: lần lượt thẻ Ảnh / Video / Reels / Tin nổi bật), đọc ảnh/video
 //     trong dữ liệu JSON trang tự nạp (social-harvest.js). Không phụ thuộc mã truy vấn GraphQL hay đổi.
 
 const SOCIAL_PART_ENTRIES = 150
@@ -49,6 +49,11 @@ function socialPlan(url) {
     const name = /^[\w.]{1,30}$/.test(user ?? "") ? user : null
     if (!name || name === "highlights" || (parts[0] !== "stories" && SOCIAL_IG_RESERVED.has(name))) return null
     return { platform: "instagram", user: name, id: name }
+  }
+  if (/(^|\.)threads\.(net|com)$/.test(host)) {
+    const user = parts[0]?.startsWith("@") ? parts[0].slice(1) : null
+    if (!user || !/^[\w.]{1,30}$/.test(user)) return null
+    return { platform: "threads", user, id: user, base: `${page.origin}/@${user}` }
   }
   if (!/(^|\.)facebook\.com$/.test(host)) return null
   if (parts[0] === "stories" && /^\d+$/.test(parts[1] ?? "")) {
@@ -391,6 +396,16 @@ async function socialInstagram(job) {
   }
 }
 
+async function socialThreads(job) {
+  const { user, base } = job.plan
+  if (!(await job.open(base))) throw new Error("social.changed")
+  const info = await job.run(socialPageInfo, [], null).catch(() => null)
+  job.head = { id: user, name: info?.name || user, handle: user, avatar: info?.image ?? null }
+  await job.flush()
+  // Bài đăng lại / trích dẫn của người khác cũng hiện ở hồ sơ: chỉ giữ bài của chính người này.
+  await job.scroll("posts", (item) => item.owner?.toLowerCase() === user.toLowerCase())
+}
+
 async function socialFacebook(job) {
   const { plan } = job
   const info = await job.run(socialPageInfo, [], null).catch(() => null)
@@ -446,6 +461,8 @@ async function socialStart(tab) {
     if (plan.platform === "instagram") {
       if (!(await job.inject())) throw new Error("social.changed")
       await socialInstagram(job)
+    } else if (plan.platform === "threads") {
+      await socialThreads(job)
     } else {
       await socialFacebook(job)
     }

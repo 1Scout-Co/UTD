@@ -230,12 +230,12 @@ async function installMenus() {
       title: t("menuAll"),
       contexts: ["page", "link", "image", "selection"],
     },
-    // Tải hàng loạt Facebook / Instagram (social-bulk.js): chỉ hiện trên các trang đó.
+    // Tải hàng loạt Facebook / Instagram / Threads (social-bulk.js): chỉ hiện trên các trang đó.
     {
       id: MENU_SOCIAL,
       title: t("menuSocial"),
       contexts: ["page", "link", "image", "video"],
-      documentUrlPatterns: ["*://*.facebook.com/*", "*://*.instagram.com/*"],
+      documentUrlPatterns: ["*://*.facebook.com/*", "*://*.instagram.com/*", "*://*.threads.net/*", "*://*.threads.com/*"],
     },
   ]) {
     try {
