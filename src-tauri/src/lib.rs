@@ -21,6 +21,7 @@ mod recover;
 mod state;
 mod titlebar;
 mod updater;
+mod video_button;
 
 #[cfg(windows)]
 use std::path::Path;

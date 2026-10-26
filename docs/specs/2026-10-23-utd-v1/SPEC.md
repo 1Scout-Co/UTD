@@ -120,14 +120,16 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 
 #### Đăng nhập (cookie của trình duyệt)
 
-Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25). Cookie chỉ đọc trong cú bấm trên trình duyệt, cho phép theo từng trang (quyền của trình duyệt), chỉ nằm trong RAM của app. Mã S-70–S-73 (ngoài khoảng S-40–S-59 đang chừa).
+Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25). Cookie chỉ đọc trong cú bấm trên trình duyệt, chỉ nằm trong RAM của app. Quyền xin một lần lúc cài tiện ích (mọi trang + cookies, Q11 chủ dự án quyết 2026-10-26); tắt riêng từng trang trong popup. Mã S-70–S-75 (ngoài khoảng S-40–S-59 đang chừa).
 
 | mã | khi | thấy gì | làm được gì |
 |---|---|---|---|
-| S-70 | Có dữ liệu (popup extension) | Trang đang mở có task chờ đăng nhập: "google.com · 2 tải chờ"; trang nhạy cảm (ngân hàng, gov…) ghi rõ | Dùng đăng nhập / Tiếp tục (n); bật/tắt "Đăng nhập trên trang này" |
+| S-70 | Có dữ liệu (popup extension) | Trang đang mở có task chờ đăng nhập: "google.com · 2 tải chờ"; trang nhạy cảm (ngân hàng, gov…) ghi rõ; công tắc "Hiện nút Tải video này trên trang" | Dùng đăng nhập / Tiếp tục (n); bật/tắt "Đăng nhập trên trang này" (mặc định bật), bật/tắt nút trên trang |
 | S-71 | Lỗi (popup extension) | Trình duyệt chưa cho phép, hoặc tiện ích không được chạy ở cửa sổ riêng tư | Thử lại |
 | S-72 | Lỗi (danh sách, chi tiết) | Task "Cần đăng nhập": chưa có cookie, đăng nhập hết hạn, hoặc app vừa mở lại. Chờ như link hết hạn (tự cứu, chờ link mới) | Mở trang, Cập nhật link… (download thường), huỷ |
 | S-73 | Có dữ liệu (Cài đặt › Tích hợp) | Công tắc "Dùng đăng nhập của trình duyệt" (mặc định bật), số trang đang giữ cookie, cảnh báo khoá tài khoản | Quên cookie |
+| S-74 | Có dữ liệu (trang web, tiện ích) | Rê chuột vào video (hoặc video vừa phát): nút nhỏ "⬇ Tải video này" ngay trên mép trên-phải video, không đè điều khiển của trình phát | Bấm ⇒ S-75 |
+| S-75 | Đang tải / Có dữ liệu / Lỗi (trang web, tiện ích) | Bảng định dạng ngay trên trang: "Đang đọc định dạng…"; Tốt nhất · 2160p … 144p · Chỉ âm thanh (M4A) · MP3, mỗi dòng kèm dung lượng ước tính; lỗi ngắn (cần đăng nhập, không đọc được, UTD chưa chạy); "Đã thêm vào UTD". Chuột phải › UTD mở cùng bảng ở chỗ bấm | Chọn một dòng ⇒ UTD tải luôn (không mở hộp Tải media); Esc / bấm ra ngoài để đóng |
 
 ### Làm được gì
 
@@ -140,7 +142,8 @@ Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25).
 - Quản lý hàng đợi, tìm/lọc, retry, giới hạn tốc độ toàn cục và theo tác vụ (S-01, S-27).
 - Cài đặt mạng/proxy cơ bản, số kết nối, giới hạn theo host, ngôn ngữ VI/EN, auto-update (S-27–S-31).
 - Onboarding cài native host/extension và tải thử (S-32–S-33).
-- Tải nội dung cần đăng nhập (video giới hạn tuổi/riêng tư, file Drive…) bằng đăng nhập của trình duyệt, cho phép theo từng trang (S-14, S-70–S-73).
+- Tải nội dung cần đăng nhập (video giới hạn tuổi/riêng tư, file Drive…) bằng đăng nhập của trình duyệt, quyền xin một lần lúc cài, tắt riêng từng trang (S-14, S-70–S-73).
+- Nút "Tải video này" trên mọi trang có video, chọn định dạng ngay trên trang rồi tải luôn, kiểu IDM (S-74, S-75).
 - Dữ liệu local, không tài khoản, không telemetry; cookie chỉ dùng khi opt-in (P-01–P-04).
 
 ### Để sau

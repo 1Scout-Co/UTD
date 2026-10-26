@@ -130,27 +130,35 @@ mod tests {
         scheme_ok && host_ok && path_ok
     }
 
+    /// Q11 (notes/auth-plan.md GĐ3): xin một lần lúc cài — quyền mọi trang phủ mọi trang UTD đọc cookie, `cookies`
+    /// bắt buộc, content script (nút "Tải video này") trên mọi trang http(s). Không còn xin quyền theo trang.
     #[test]
-    fn both_extensions_may_request_every_pattern_utd_asks_for() {
+    fn both_extensions_ask_once_for_every_site() {
         assert!(!covers("http://*/*", "*://*.google.com/*"), "lỗi bản thử thật 2026-10-25");
         for manifest in [
             include_str!("../../../extensions/chromium/manifest.json"),
             include_str!("../../../extensions/firefox/manifest.json"),
         ] {
             let manifest: serde_json::Value = serde_json::from_str(manifest).expect("manifest");
-            let declared: Vec<&str> = manifest["optional_host_permissions"]
-                .as_array()
-                .expect("optional_host_permissions")
-                .iter()
-                .filter_map(|value| value.as_str())
-                .collect();
+            let list = |key: &str| -> Vec<String> {
+                manifest[key]
+                    .as_array()
+                    .map(|items| items.iter().filter_map(|value| value.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default()
+            };
+            let hosts = list("host_permissions");
             for site in ["google.com", "dropbox.com", "127.0.0.1", "[::1]", "localhost"] {
                 let pattern = permission_pattern(site);
                 assert!(
-                    declared.iter().any(|declared| covers(declared, &pattern)),
-                    "{pattern} không nằm trong {declared:?}"
+                    hosts.iter().any(|declared| covers(declared, &pattern)),
+                    "{pattern} không nằm trong {hosts:?}"
                 );
             }
+            assert!(list("permissions").contains(&"cookies".to_string()));
+            assert!(list("optional_host_permissions").is_empty(), "không xin theo trang nữa");
+            let scripts = &manifest["content_scripts"][0];
+            assert_eq!(scripts["js"], serde_json::json!(["content.js"]));
+            assert_eq!(scripts["matches"], serde_json::json!(["http://*/*", "https://*/*"]));
         }
     }
 

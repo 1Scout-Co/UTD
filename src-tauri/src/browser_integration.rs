@@ -19,6 +19,10 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../extensions/chromium/background.js"),
     ),
     (
+        "chromium/content.js",
+        include_bytes!("../../extensions/chromium/content.js"),
+    ),
+    (
         "chromium/popup.html",
         include_bytes!("../../extensions/chromium/popup.html"),
     ),
@@ -41,6 +45,10 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
     (
         "firefox/background.js",
         include_bytes!("../../extensions/firefox/background.js"),
+    ),
+    (
+        "firefox/content.js",
+        include_bytes!("../../extensions/firefox/content.js"),
     ),
     (
         "firefox/popup.html",
