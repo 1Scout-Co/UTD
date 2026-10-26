@@ -5,6 +5,8 @@
 //!
 //! Nghiên cứu và lý do chọn yt-dlp: `docs/specs/2026-10-23-utd-v1/notes/tiktok-channel.md`.
 
+/// Hồ sơ Douyin: danh sách tiện ích gửi sang (`douyin::push`), link MP4 của từng video (`douyin::streams_for`).
+pub(crate) mod douyin;
 mod entries;
 mod profile;
 mod seen;
@@ -109,14 +111,21 @@ pub async fn channel_list(
     }
     let listing_url = crate::media_pages::channel_listing_url(&url)
         .ok_or_else(|| "[channel.not_channel] Đây không phải link kênh TikTok hoặc kênh/playlist YouTube.".to_string())?;
+    // Hồ sơ Douyin: danh sách do tiện ích lấy trong tab gửi sang (douyin.rs), không chạy yt-dlp.
+    if douyin::profile_url(&listing_url).is_some() {
+        let journal = app.state::<AppState>().journal.clone();
+        let (serial, cancel) = register(&listing_id);
+        tauri::async_runtime::spawn(async move {
+            let done = douyin::list(&journal, &listing_url, &on_event, &cancel).await;
+            let _ = on_event.deliver(done);
+            unregister(&listing_id, serial);
+        });
+        return Ok(());
+    }
     // Như Phân tích: lần đầu mở app thì chờ yt-dlp/deno đang tự tải.
     let tools = Arc::new(interactive_tools(auto_tools(&app).as_ref()).await?);
     let journal = app.state::<AppState>().journal.clone();
-    let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
-    let cancel = CancellationToken::new();
-    if let Some((_, previous)) = listings().insert(listing_id.clone(), (serial, cancel.clone())) {
-        previous.cancel();
-    }
+    let (serial, cancel) = register(&listing_id);
     let ready = Arc::new(Notify::new());
     spawn_profile(
         tools.clone(),
@@ -146,15 +155,30 @@ pub async fn channel_list(
         }
         ready.notify_one();
         let _ = on_event.deliver(done);
-        let mut running = listings();
-        if running
-            .get(&listing_id)
-            .is_some_and(|(current, _)| *current == serial)
-        {
-            running.remove(&listing_id);
-        }
+        unregister(&listing_id, serial);
     });
     Ok(())
+}
+
+/// Ghi lượt liệt kê mới (lượt cũ cùng mã bị huỷ): (số thứ tự, token huỷ).
+fn register(listing_id: &str) -> (u64, CancellationToken) {
+    let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
+    let cancel = CancellationToken::new();
+    if let Some((_, previous)) = listings().insert(listing_id.to_string(), (serial, cancel.clone())) {
+        previous.cancel();
+    }
+    (serial, cancel)
+}
+
+/// Lượt đã xong: bỏ khỏi danh sách nếu chưa bị lượt mới cùng mã thay.
+fn unregister(listing_id: &str, serial: u64) {
+    let mut running = listings();
+    if running
+        .get(listing_id)
+        .is_some_and(|(current, _)| *current == serial)
+    {
+        running.remove(listing_id);
+    }
 }
 
 /// Dừng lượt liệt kê (nút Dừng, đóng hộp). Danh sách đã nhận vẫn dùng được.

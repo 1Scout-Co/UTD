@@ -302,6 +302,7 @@ test('nền: chạy page-media.js trong trang, bỏ phần không hợp lệ; d�
   await page.goto('http://ext.utd.test/')
   await page.addScriptTag({ path: 'extensions/chromium/page-media.js' })
   await page.addScriptTag({ path: 'extensions/chromium/background.js' })
+  await page.addScriptTag({ path: 'extensions/chromium/douyin-channel.js' })
   const ask = (message: Record<string, unknown>) =>
     page.evaluate(
       (message) =>
@@ -347,6 +348,7 @@ test('nền: UTD trả câu lỗi không mã (vd channel_page: <link>) ⇒ mã c
   await page.addInitScript(stubBackground, { found: null, native: { ok: false, message: 'channel_page: https://www.tiktok.com/@_littledav_' } })
   await page.goto('http://ext.utd.test/')
   await page.addScriptTag({ path: 'extensions/chromium/background.js' })
+  await page.addScriptTag({ path: 'extensions/chromium/douyin-channel.js' })
   const reply = await page.evaluate(
     () =>
       new Promise((resolve) => {

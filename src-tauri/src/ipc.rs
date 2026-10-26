@@ -46,6 +46,9 @@ struct PipeRequest {
     /// Nút trên trang (`media-streams`): luồng đọc thẳng từ trình phát của trang (Tin Facebook…).
     #[serde(default)]
     streams: Option<Vec<crate::media::page_streams::PageStream>>,
+    /// Tiện ích (`channel-entries`): một phần danh sách hồ sơ Douyin lấy trong tab.
+    #[serde(default)]
+    channel: Option<crate::media::channel::douyin::Part>,
 }
 
 /// Câu trả cho extension khi link cần người dùng xác nhận cảnh báo trước khi tải (S-22).
@@ -78,6 +81,8 @@ enum Route {
     MediaDownload,
     /// Bảng trên trang: tải luồng tiện ích đọc thẳng từ trang (yt-dlp không đọc được trang đó).
     MediaStreams,
+    /// Một phần danh sách hồ sơ Douyin cho hộp Tải cả kênh (media/channel/douyin.rs).
+    ChannelEntries,
     /// Download trình duyệt vừa bắt đầu (tự bắt link tải, takeover.rs): nhận nếu dò được file.
     Takeover,
 }
@@ -98,6 +103,7 @@ fn route(request: &PipeRequest, token: &str) -> Route {
             "media-streams" if request.streams.as_ref().is_some_and(|streams| !streams.is_empty()) => {
                 Route::MediaStreams
             }
+            "channel-entries" if request.channel.is_some() => Route::ChannelEntries,
             "takeover" => Route::Takeover,
             _ => Route::Reject("Yêu cầu từ trình duyệt không hợp lệ."),
         }
@@ -585,6 +591,13 @@ where
                 Err(message) => PipeResponse::error(message),
             }
         }
+        Route::ChannelEntries => match request.channel.take() {
+            Some(part) => match crate::media::channel::douyin::push(&request.url, part) {
+                Ok(()) => PipeResponse::note(""),
+                Err(message) => PipeResponse::error(message),
+            },
+            None => PipeResponse::error("Yêu cầu từ trình duyệt không hợp lệ."),
+        },
         Route::AuthRenew => match request.auth.take() {
             Some(auth) => PipeResponse::auth(crate::auth::flow::renew(&app, &request.url, auth)),
             None => PipeResponse::error("Yêu cầu từ trình duyệt không hợp lệ."),

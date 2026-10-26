@@ -300,7 +300,7 @@ test('trang khác yt-dlp không đọc được ⇒ bắt manifest HLS trang đ�
   const messages = await sent(page)
   expect(messages.map((message) => [message.type, message.url])).toEqual([
     ['utd.video-formats', 'http://video.utd.test/watch'],
-    ['utd.page-media', undefined],
+    ['utd.page-media', 'http://video.utd.test/watch'],
     ['utd.video-formats', 'https://cdn.utd.test/hls/master.m3u8'],
   ])
 })
@@ -361,4 +361,77 @@ test('TikTok lưới video trên hồ sơ: đúng ô đang rê (cả bài ảnh)
   await expect(panel(page).locator('.row')).toHaveCount(FORMATS.length)
   // Bài ảnh: yt-dlp không nhận /photo/, gửi dạng /video/ (yt-dlp ra nhạc của bài).
   expect((await sent(page)).at(-1)?.url).toBe('https://www.tiktok.com/@_littledav_/video/7400000000000000003')
+})
+
+// Douyin (extensions/*/douyin.js + douyin-page.js; notes/douyin.md): yt-dlp không đọc được Douyin ⇒ bảng hỏi trong
+// trang trước, với link riêng `/video/<mã>` của đúng video (feed: `feed-active-video` mang `data-e2e-vid`; lưới hồ sơ:
+// link của ô; khung `?modal_id=`).
+const DOUYIN_FEED = `<!doctype html><html><head><title>抖音-记录美好生活</title></head><body style="margin:0">
+<div data-e2e="feed-item" style="padding:30px 40px"><div data-e2e="feed-active-video" data-e2e-vid="7300000000000000001">
+  <video id="main" width="360" height="640" style="display:block;background:#000"></video></div></div>
+</body></html>`
+
+const DOUYIN_GRID = `<!doctype html><html><head><title>主页 - 抖音</title></head><body style="margin:0">
+<ul data-e2e="user-post-list" style="display:flex;gap:10px;padding:40px;list-style:none">
+  <li><a href="//www.douyin.com/video/7300000000000000011"><video id="tile1" width="200" height="300" style="display:block;background:#000"></video></a></li>
+  <li><div><video id="tile2" width="200" height="300" style="display:block;background:#000"></video></div><a href="/note/7300000000000000012">图文</a></li>
+</ul>
+</body></html>`
+
+const DOUYIN_MEDIA = {
+  ok: true,
+  media: {
+    title: 'Video Douyin thử',
+    formats: [
+      { id: '1080', sizeBytes: 9 * MB, streams: [{ url: 'https://v3-web.douyinvod.com/a/1080.mp4', kind: 'both', codecs: null, sizeBytes: 9 * MB }] },
+      { id: '720', sizeBytes: 5 * MB, streams: [{ url: 'https://v3-web.douyinvod.com/a/720.mp4', kind: 'both', codecs: null, sizeBytes: 5 * MB }] },
+    ],
+    manifests: [],
+    files: [],
+  },
+}
+
+test('Douyin feed: đọc trong trang với link /video/<mã> của video đang phát; chọn ⇒ UTD tải MP4 không watermark', async ({ page }) => {
+  await openAt(page, 'https://www.douyin.com/?recommend=1', [], [DOUYIN_MEDIA], DOUYIN_FEED, ['douyin.js', 'content.js'])
+  await hover(page, '#main')
+  await pill(page).click()
+  const rows = panel(page).locator('.row')
+  await expect(rows).toHaveText(['1080p≈ 9 MB', '720p≈ 5 MB'])
+  await rows.first().click()
+  await expect(panel(page)).toContainText('Đã thêm vào UTD')
+  const messages = await sent(page)
+  expect(messages.map((message) => [message.type, message.url])).toEqual([
+    ['utd.page-media', 'https://www.douyin.com/video/7300000000000000001'],
+    ['utd.video-streams', undefined],
+  ])
+  expect(messages[1].streams).toEqual(DOUYIN_MEDIA.media.formats[0].streams)
+})
+
+test('Douyin lưới hồ sơ và khung modal_id: đúng ô đang rê (link bọc hoặc cạnh video), không chạy yt-dlp khi rê qua', async ({ page }) => {
+  await openAt(page, 'https://www.douyin.com/user/MS4wLjABAAAAtest', [], [DOUYIN_MEDIA, DOUYIN_MEDIA], DOUYIN_GRID, ['douyin.js', 'content.js'])
+  await hover(page, '#tile1')
+  await hover(page, '#tile2')
+  await page.waitForTimeout(200)
+  expect(await sent(page)).toEqual([])
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(2)
+  expect((await sent(page))[0].url).toBe('https://www.douyin.com/video/7300000000000000012')
+  await page.keyboard.press('Escape')
+  await hover(page, '#tile1')
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(2)
+  expect((await sent(page)).at(-1)?.url).toBe('https://www.douyin.com/video/7300000000000000011')
+})
+
+test('Douyin chưa đọc được (Douyin chặn, yt-dlp cũng không) ⇒ báo gọn, không treo', async ({ page }) => {
+  const empty = { ok: true, media: { title: null, formats: [], manifests: [], files: [] } }
+  const body = DOUYIN_FEED.replace('data-e2e="feed-active-video" data-e2e-vid="7300000000000000001"', 'data-e2e="feed-active-video"')
+  await openAt(page, 'https://www.douyin.com/jingxuan?modal_id=7300000000000000099', [{ ok: false, code: 'media.unsupported', message: 'x' }], [empty], body, ['douyin.js', 'content.js'])
+  await hover(page, '#main')
+  await pill(page).click()
+  await expect(panel(page).locator('.status.error')).toHaveText('Chưa thấy luồng video. Cho video phát rồi bấm lại.')
+  expect((await sent(page)).map((message) => [message.type, message.url])).toEqual([
+    ['utd.page-media', 'https://www.douyin.com/video/7300000000000000099'],
+    ['utd.video-formats', 'https://www.douyin.com/video/7300000000000000099'],
+  ])
 })

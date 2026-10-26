@@ -22,6 +22,14 @@
   const YOUTUBE_VIDEO = /^\/(watch|shorts\/|live\/|embed\/)/
   // Facebook: đọc luồng của video đang xem ngay trong trang (Tin, bảng tin: yt-dlp không đọc được; notes/fb-media.md).
   const FACEBOOK = /(^|\.)facebook\.com$/
+  const DOUYIN = /(^|\.)douyin\.com$/
+  const hostOf = (url) => {
+    try {
+      return new URL(url).hostname
+    } catch {
+      return ""
+    }
+  }
   // Đọc trong trang mà nền không trả lời chừng này ms thì thôi, không để bảng treo.
   const PAGE_MEDIA_TIMEOUT = 8000
 
@@ -275,11 +283,11 @@
    * Luồng của video đang xem đọc thẳng trong trang (nền chạy page-media.js): `{ title, formats, manifests, files }`,
    * không đọc được thì `null`. Điểm gửi đi là giữa video đang gắn nút (hoặc chỗ chuột phải) để chọn đúng video.
    */
-  function pageMedia(point) {
+  function pageMedia(point, url) {
     const rect = target?.getBoundingClientRect()
     const at = rect ? { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 } : point
     const asked = api.runtime
-      .sendMessage({ type: "utd.page-media", x: at?.x ?? null, y: at?.y ?? null })
+      .sendMessage({ type: "utd.page-media", x: at?.x ?? null, y: at?.y ?? null, url })
       .then((reply) => (reply?.ok ? reply.media : null))
       .catch(() => null)
     return Promise.race([asked, new Promise((resolve) => setTimeout(() => resolve(null), PAGE_MEDIA_TIMEOUT))])
@@ -302,8 +310,12 @@
     if (!frame) frame = requestAnimationFrame(follow)
     // Chỉ đọc trong trang khi bảng là của chính trang đang mở (không phải link chuột phải trỏ đi nơi khác).
     const here = url === location.href
+    // Facebook (Tin, bảng tin) và Douyin (yt-dlp hỏng từ 2026-09; douyin.js đã đổi sang link của video) đọc trong
+    // trang trước yt-dlp.
     const facebook = FACEBOOK.test(location.hostname)
-    let found = here && facebook ? await pageMedia(point) : null
+    const douyin = DOUYIN.test(location.hostname) && DOUYIN.test(hostOf(url))
+    const pageFirst = (here && facebook) || douyin
+    let found = pageFirst ? await pageMedia(point, url) : null
     if (panel.hidden) return
     if (found?.formats.length) return showFormats(found, url)
     let reply = await formatsFor(url, src, false)
@@ -314,7 +326,7 @@
     if (panel.hidden) return
     // yt-dlp không đọc được trang (UTD có chạy): bắt luồng media trang đã tải, kiểu IDM.
     if (!reply.ok && reply.code && here) {
-      found ??= await pageMedia(point)
+      found ??= await pageMedia(point, url)
       if (panel.hidden) return
       if (found?.formats.length) return showFormats(found, url)
       const manifest = found?.manifests[0]
@@ -331,8 +343,8 @@
       const signIn = SIGN_IN.test(reply.code ?? "")
       // Mã lỗi của UTD (yt-dlp không đọc được…) ⇒ câu chung — Facebook: chưa thấy luồng nào, cho video phát rồi bấm
       // lại; không mã (UTD chưa chạy…) ⇒ câu của nền.
-      const failed = facebook && here ? t("videoNoStream") : t("videoFailed")
-      const text = signIn && !facebook ? t("videoSignIn") : reply.code ? failed : reply.message || failed
+      const failed = pageFirst ? t("videoNoStream") : t("videoFailed")
+      const text = signIn && !pageFirst ? t("videoSignIn") : reply.code ? failed : reply.message || failed
       render(header(null), status(text, "error"))
       return
     }

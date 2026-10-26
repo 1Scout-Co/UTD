@@ -43,6 +43,18 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../extensions/chromium/tiktok.js"),
     ),
     (
+        "chromium/douyin.js",
+        include_bytes!("../../extensions/chromium/douyin.js"),
+    ),
+    (
+        "chromium/douyin-page.js",
+        include_bytes!("../../extensions/chromium/douyin-page.js"),
+    ),
+    (
+        "chromium/douyin-channel.js",
+        include_bytes!("../../extensions/chromium/douyin-channel.js"),
+    ),
+    (
         "chromium/popup.html",
         include_bytes!("../../extensions/chromium/popup.html"),
     ),
@@ -89,6 +101,18 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
     (
         "firefox/tiktok.js",
         include_bytes!("../../extensions/firefox/tiktok.js"),
+    ),
+    (
+        "firefox/douyin.js",
+        include_bytes!("../../extensions/firefox/douyin.js"),
+    ),
+    (
+        "firefox/douyin-page.js",
+        include_bytes!("../../extensions/firefox/douyin-page.js"),
+    ),
+    (
+        "firefox/douyin-channel.js",
+        include_bytes!("../../extensions/firefox/douyin-channel.js"),
     ),
     (
         "firefox/popup.html",
@@ -414,7 +438,7 @@ mod tests {
                 .map(|(_, bytes)| serde_json::from_slice::<serde_json::Value>(bytes).unwrap())
                 .unwrap();
             assert!(manifest["permissions"].as_array().unwrap().contains(&"downloads".into()));
-            for script in ["background.js", "takeover.js", "takeover-keys.js", "page-media.js", "fb-media.js", "tiktok.js"] {
+            for script in ["background.js", "takeover.js", "takeover-keys.js", "page-media.js", "fb-media.js", "tiktok.js", "douyin.js", "douyin-page.js", "douyin-channel.js"] {
                 assert!(bundled(&format!("{browser}/{script}")), "{browser}/{script}");
             }
         }
@@ -424,7 +448,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             firefox["background"]["scripts"],
-            serde_json::json!(["background.js", "takeover.js", "page-media.js"])
+            serde_json::json!(["background.js", "takeover.js", "page-media.js", "douyin-channel.js"])
         );
         let background = String::from_utf8_lossy(include_bytes!("../../extensions/chromium/background.js"));
         assert!(background.contains("importScripts(\"takeover.js\")"));

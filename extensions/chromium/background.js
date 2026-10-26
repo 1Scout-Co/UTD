@@ -62,6 +62,7 @@ const VIDEO_PAGES = [
   /^(www\.)?twitch\.tv\/videos\/\d+/,
   /^clips\.twitch\.tv\/[\w-]+/,
   /^(www\.)?bilibili\.com\/video\/\w+/,
+  /^(www\.)?douyin\.com\/(video|note)\/\d+/,
 ]
 
 // --- Đăng nhập của trình duyệt (docs/specs/2026-10-23-utd-v1/notes/auth-plan.md §4) ---
@@ -249,6 +250,8 @@ function pickUrl(info, tab) {
 async function download(info, tab) {
   const url = pickUrl(info, tab)
   if (!url) return
+  // Trang hồ sơ Douyin: tải cả hồ sơ, danh sách lấy ngay trong tab (douyin-channel.js).
+  if (await douyinPart()?.channel(url, tab).catch(() => false)) return
   const auth = await authFor(url, tab?.url, tab).catch(() => null)
   await sendToUtd(
     withAuth({ version: 1, type: "download", url, pageUrl: tab?.url ?? null, suggestedName: null }, auth),
@@ -468,7 +471,12 @@ function cleanPageMedia(found) {
  * Luồng của video ở điểm (x, y) đọc thẳng trong trang. Thế giới MAIN để thấy dữ liệu trình phát của trang; trình
  * duyệt không cho (Firefox < 128) thì chạy như content script, hàm tự đọc qua `wrappedJSObject`.
  */
-async function pageMedia({ x, y }, tab) {
+async function pageMedia({ x, y, url }, tab) {
+  // Douyin: API của chính trang (douyin-page.js) cho video ở link `url` mà douyin.js tìm được.
+  if (douyinPart()?.hosts.test(hostOf(tab.url ?? "")) && webUrl(url)) {
+    const found = await douyinPart().call(tab, "media", [url]).catch(() => null)
+    return found ? { ok: true, media: cleanPageMedia(found) } : { ok: false }
+  }
   const target = { tabId: tab.id, frameIds: [0] }
   const args = [Number.isFinite(x) ? x : null, Number.isFinite(y) ? y : null]
   for (const world of ["MAIN", null]) {
@@ -510,6 +518,11 @@ const fromPopup = (sender) =>
 if (typeof importScripts === "function") importScripts("takeover.js")
 // Hàm đọc luồng trong trang (page-media.js): Chromium nạp ở đây; Firefox nạp theo manifest.
 if (typeof importScripts === "function") importScripts("page-media.js")
+// Douyin: gọi API trong trang, tải cả hồ sơ (douyin-channel.js). Chromium nạp ở đây; Firefox nạp theo manifest.
+if (typeof importScripts === "function") importScripts("douyin-channel.js")
+// Phần Douyin nếu đã nạp (thiếu file thì các trang khác vẫn chạy như thường).
+const douyinPart = () =>
+  typeof douyinChannel === "function" ? { channel: douyinChannel, call: douyinCall, hosts: DOUYIN_HOSTS } : null
 
 // Facebook: fb-media.js ghi nhớ link file video trong dữ liệu JSON của trang (thế giới MAIN, từ document_start) để
 // nút "Tải video này" tìm đúng video đang xem. Đăng ký lúc chạy như takeover-keys.js; Firefox < 128 không cho thế
@@ -553,7 +566,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return answer(videoFile({ url: message.url }, tab))
     }
     if (message?.type === "utd.page-media") {
-      return answer(pageMedia({ x: message.x, y: message.y }, tab))
+      return answer(pageMedia({ x: message.x, y: message.y, url: message.url }, tab))
     }
     if (message?.type === "utd.video-streams") {
       const streams = cleanStreams(message.streams)
@@ -573,10 +586,12 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     api.tabs
       .get(message.tabId)
       .catch(() => null)
-      .then((tab) => authFor(url, url, tab).catch(() => null))
-      .then((auth) =>
-        sendToUtd(withAuth({ version: 1, type: "download", url, pageUrl: url, suggestedName: null }, auth)),
-      )
+      .then(async (tab) => {
+        // Trang hồ sơ Douyin: tải cả hồ sơ (douyin-channel.js).
+        if (await douyinPart()?.channel(url, tab).catch(() => false)) return { ok: true }
+        const auth = await authFor(url, url, tab).catch(() => null)
+        return sendToUtd(withAuth({ version: 1, type: "download", url, pageUrl: url, suggestedName: null }, auth))
+      })
       .then(sendResponse)
     return true
   }

@@ -16,10 +16,15 @@
       "matches": ["https://*.tiktok.com/*"],
       "js": ["tiktok.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["https://*.douyin.com/*"],
+      "js": ["douyin.js"],
+      "run_at": "document_start"
     }
   ],
   "background": {
-    "scripts": ["background.js", "takeover.js", "page-media.js"]
+    "scripts": ["background.js", "takeover.js", "page-media.js", "douyin-channel.js"]
   },
   "action": {
     "default_title": "__MSG_actionTitle__",
