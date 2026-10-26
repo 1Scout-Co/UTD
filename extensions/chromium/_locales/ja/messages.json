@@ -26,6 +26,7 @@
   "videoAdding": { "message": "UTD に追加中…" },
   "videoAdded": { "message": "UTD に追加しました" },
   "videoFailed": { "message": "UTD はこの動画を読み込めません。" },
+  "videoNoStream": { "message": "動画のストリームがまだ見つかりません。動画を再生してからもう一度押してください。" },
   "videoSignIn": { "message": "この動画にはログインが必要です。サイトでログインしてから、もう一度お試しください。" },
   "videoClose": { "message": "閉じる" },
   "videoButtonSwitch": { "message": "ページに「この動画をダウンロード」ボタンを表示" },

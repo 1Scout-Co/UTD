@@ -427,6 +427,65 @@ async function videoDownload({ url, title, selector, audioFormat, signIn }, tab)
   return sendToUtd(withAuth(payload, auth))
 }
 
+// --- Luồng đọc thẳng từ trang (page-media.js; notes/fb-media.md): Tin Facebook, video trong bảng tin… ---
+const STREAM_KINDS = new Set(["video", "audio", "both"])
+
+/** Một luồng hợp lệ (link https, loại đã biết) hoặc `null`. */
+function cleanStream(stream) {
+  if (!stream || !webUrl(stream.url) || !/^https:/i.test(stream.url) || !STREAM_KINDS.has(stream.kind)) return null
+  const codecs = typeof stream.codecs === "string" && /^[\w.-]{1,64}$/.test(stream.codecs) ? stream.codecs : null
+  const sizeBytes = Number.isSafeInteger(stream.sizeBytes) && stream.sizeBytes > 0 ? stream.sizeBytes : null
+  return { url: stream.url, kind: stream.kind, codecs, sizeBytes }
+}
+
+/** 1 luồng có hình, hoặc hình + tiếng; khác thì `null`. */
+function cleanStreams(list) {
+  if (!Array.isArray(list) || list.length < 1 || list.length > 2) return null
+  const streams = list.map(cleanStream)
+  if (streams.some((stream) => !stream)) return null
+  const kinds = streams.map((stream) => stream.kind).sort().join("+")
+  return ["both", "video", "audio+video"].includes(kinds) ? streams : null
+}
+
+/** Kết quả của page-media.js (chạy trong trang, không tin hẳn): giữ đúng hình dạng mong đợi. */
+function cleanPageMedia(found) {
+  const formats = (Array.isArray(found?.formats) ? found.formats : []).slice(0, 8).flatMap((format) => {
+    const streams = cleanStreams(format?.streams)
+    const id = typeof format?.id === "string" && /^[\w-]{1,16}$/.test(format.id) ? format.id : null
+    if (!streams || !id) return []
+    const sizeBytes = Number.isSafeInteger(format.sizeBytes) && format.sizeBytes > 0 ? format.sizeBytes : null
+    return [{ id, sizeBytes, streams }]
+  })
+  const links = (list) => (Array.isArray(list) ? list.filter(webUrl).slice(0, 4) : [])
+  const title = typeof found?.title === "string" ? found.title.slice(0, 200) : null
+  return { title, formats, manifests: links(found?.manifests), files: links(found?.files) }
+}
+
+/**
+ * Luồng của video ở điểm (x, y) đọc thẳng trong trang. Thế giới MAIN để thấy dữ liệu trình phát của trang; trình
+ * duyệt không cho (Firefox < 128) thì chạy như content script, hàm tự đọc qua `wrappedJSObject`.
+ */
+async function pageMedia({ x, y }, tab) {
+  const target = { tabId: tab.id, frameIds: [0] }
+  const args = [Number.isFinite(x) ? x : null, Number.isFinite(y) ? y : null]
+  for (const world of ["MAIN", null]) {
+    try {
+      const options = world ? { target, world, func: utdFindPageMedia, args } : { target, func: utdFindPageMedia, args }
+      const [result] = await api.scripting.executeScript(options)
+      return { ok: true, media: cleanPageMedia(result?.result) }
+    } catch {
+      // Thử cách sau.
+    }
+  }
+  return { ok: false }
+}
+
+/** Dòng của bảng lấy từ trang: UTD tải các luồng (hình + tiếng thì ghép), không cookie — link đã có chữ ký. */
+async function videoStreams({ title, streams }, tab) {
+  const payload = { version: 2, type: "media-streams", url: tab.url, pageUrl: tab.url, title, streams }
+  return sendToUtd(payload)
+}
+
 /** Dòng "Tải file video": tải thẳng nguồn của thẻ `<video>` như chuột phải › Tải bằng UTD. */
 async function videoFile({ url }, tab) {
   const auth = await authFor(url, tab?.url, tab).catch(() => null)
@@ -446,6 +505,30 @@ const fromPopup = (sender) =>
 
 // Tự bắt link tải (takeover.js). Chromium (service worker cổ điển) nạp thêm ở đây; Firefox nạp theo manifest.
 if (typeof importScripts === "function") importScripts("takeover.js")
+// Hàm đọc luồng trong trang (page-media.js): Chromium nạp ở đây; Firefox nạp theo manifest.
+if (typeof importScripts === "function") importScripts("page-media.js")
+
+// Facebook: fb-media.js ghi nhớ link file video trong dữ liệu JSON của trang (thế giới MAIN, từ document_start) để
+// nút "Tải video này" tìm đúng video đang xem. Đăng ký lúc chạy như takeover-keys.js; Firefox < 128 không cho thế
+// giới MAIN ⇒ bỏ qua, page-media.js vẫn đọc trình phát và yêu cầu mạng.
+const FB_MEDIA = "utd-fb-media"
+async function registerFacebookMedia() {
+  if (!api.scripting?.registerContentScripts) return
+  const known = await api.scripting.getRegisteredContentScripts({ ids: [FB_MEDIA] }).catch(() => [])
+  if (known.length > 0) return
+  await api.scripting
+    .registerContentScripts([
+      {
+        id: FB_MEDIA,
+        js: ["fb-media.js"],
+        matches: ["https://*.facebook.com/*"],
+        runAt: "document_start",
+        world: "MAIN",
+      },
+    ])
+    .catch(() => undefined)
+}
+void registerFacebookMedia()
 
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (fromContent(sender)) {
@@ -465,6 +548,15 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === "utd.video-file" && webUrl(message.url)) {
       return answer(videoFile({ url: message.url }, tab))
+    }
+    if (message?.type === "utd.page-media") {
+      return answer(pageMedia({ x: message.x, y: message.y }, tab))
+    }
+    if (message?.type === "utd.video-streams") {
+      const streams = cleanStreams(message.streams)
+      if (!streams) return false
+      const title = typeof message.title === "string" ? message.title.slice(0, 300) : null
+      return answer(videoStreams({ title, streams }, tab))
     }
     return false
   }

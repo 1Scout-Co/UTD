@@ -26,6 +26,7 @@
   "videoAdding": { "message": "正在添加到 UTD…" },
   "videoAdded": { "message": "已添加到 UTD" },
   "videoFailed": { "message": "UTD 无法读取此视频。" },
+  "videoNoStream": { "message": "尚未找到视频流。请先播放视频，然后再点一次。" },
   "videoSignIn": { "message": "此视频需要登录。请在网站上登录后重试。" },
   "videoClose": { "message": "关闭" },
   "videoButtonSwitch": { "message": "在页面上显示“下载此视频”按钮" },

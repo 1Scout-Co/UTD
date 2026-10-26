@@ -26,6 +26,7 @@
   "videoAdding": { "message": "正在加入 UTD…" },
   "videoAdded": { "message": "已加入 UTD" },
   "videoFailed": { "message": "UTD 無法讀取此影片。" },
+  "videoNoStream": { "message": "尚未找到影片串流。請先播放影片，再點一次。" },
   "videoSignIn": { "message": "此影片需要登入。請在網站上登入後再試一次。" },
   "videoClose": { "message": "關閉" },
   "videoButtonSwitch": { "message": "在頁面上顯示「下載此影片」按鈕" },

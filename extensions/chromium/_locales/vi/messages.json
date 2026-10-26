@@ -26,6 +26,7 @@
   "videoAdding": { "message": "Đang thêm vào UTD…" },
   "videoAdded": { "message": "Đã thêm vào UTD" },
   "videoFailed": { "message": "UTD không đọc được video này." },
+  "videoNoStream": { "message": "Chưa thấy luồng video. Cho video phát rồi bấm lại." },
   "videoSignIn": { "message": "Video này cần đăng nhập. Đăng nhập trên trang rồi thử lại." },
   "videoClose": { "message": "Đóng" },
   "videoButtonSwitch": { "message": "Hiện nút \"Tải video này\" trên trang" },

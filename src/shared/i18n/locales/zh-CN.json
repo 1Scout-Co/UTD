@@ -619,6 +619,8 @@
   "err.media.changed": "服务器上的媒体流已变化。点击“继续”重试。",
   "err.media.failed": "无法下载媒体。点击“继续”重试。",
   "err.media.expired": "媒体链接已过期且无法重新获取。请移除后重新下载。",
+  "err.media.page_expired": "页面中的视频链接已过期。请重新打开页面并点击“下载此视频”。",
+  "err.media.page_streams": "页面中的视频流无效。",
   "err.media.path_escape": "媒体文件被写到了所选文件夹之外。",
   "err.media.empty_output": "下载的媒体文件为空。",
   "err.media.no_output": "找不到已下载的流文件。点击“继续”重新下载。",

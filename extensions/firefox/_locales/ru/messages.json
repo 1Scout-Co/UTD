@@ -26,6 +26,7 @@
   "videoAdding": { "message": "Добавление в UTD…" },
   "videoAdded": { "message": "Добавлено в UTD" },
   "videoFailed": { "message": "UTD не может прочитать это видео." },
+  "videoNoStream": { "message": "Видеопоток пока не найден. Включите видео и нажмите ещё раз." },
   "videoSignIn": { "message": "Для этого видео нужен вход. Войдите на сайте и повторите попытку." },
   "videoClose": { "message": "Закрыть" },
   "videoButtonSwitch": { "message": "Показывать кнопку «Скачать это видео» на страницах" },

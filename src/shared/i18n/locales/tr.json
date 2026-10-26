@@ -635,6 +635,8 @@
   "err.media.changed": "Sunucudaki medya akışı değişti. Yeniden denemek için Sürdür'e tıklayın.",
   "err.media.failed": "Medya indirilemedi. Yeniden denemek için Sürdür'e tıklayın.",
   "err.media.expired": "Medya bağlantısının süresi doldu ve yenilenemedi. Kaldırıp yeniden indirin.",
+  "err.media.page_expired": "Sayfadaki video bağlantısının süresi doldu. Sayfayı yeniden açıp Bu videoyu indir’e tıklayın.",
+  "err.media.page_streams": "Sayfadaki video akışı geçersiz.",
   "err.media.path_escape": "Medya dosyası seçilen klasörün dışına yazıldı.",
   "err.media.empty_output": "İndirilen medya dosyası boş.",
   "err.media.no_output": "İndirilen akış dosyaları bulunamadı. Yeniden indirmek için Sürdür'e tıklayın.",

@@ -26,6 +26,7 @@
   "videoAdding": { "message": "กำลังเพิ่มลงใน UTD…" },
   "videoAdded": { "message": "เพิ่มลงใน UTD แล้ว" },
   "videoFailed": { "message": "UTD อ่านวิดีโอนี้ไม่ได้" },
+  "videoNoStream": { "message": "ยังไม่พบสตรีมวิดีโอ เล่นวิดีโอแล้วกดอีกครั้ง" },
   "videoSignIn": { "message": "วิดีโอนี้ต้องลงชื่อเข้าใช้ ลงชื่อเข้าใช้ในเว็บไซต์แล้วลองอีกครั้ง" },
   "videoClose": { "message": "ปิด" },
   "videoButtonSwitch": { "message": "แสดงปุ่ม \"ดาวน์โหลดวิดีโอนี้\" บนหน้าเว็บ" },

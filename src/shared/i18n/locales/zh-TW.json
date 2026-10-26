@@ -619,6 +619,8 @@
   "err.media.changed": "伺服器上的媒體串流已變更。按「繼續」重試。",
   "err.media.failed": "無法下載媒體。按「繼續」重試。",
   "err.media.expired": "媒體連結已過期且無法重新取得。請移除後重新下載。",
+  "err.media.page_expired": "頁面中的影片連結已過期。請重新開啟頁面並點選「下載此影片」。",
+  "err.media.page_streams": "頁面中的影片串流無效。",
   "err.media.path_escape": "媒體檔案被寫入所選資料夾之外。",
   "err.media.empty_output": "下載的媒體檔案是空的。",
   "err.media.no_output": "找不到已下載的串流檔案。按「繼續」重新下載。",

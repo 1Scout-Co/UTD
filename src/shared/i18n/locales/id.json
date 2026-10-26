@@ -619,6 +619,8 @@
   "err.media.changed": "Stream media di server telah berubah. Klik “Lanjutkan” untuk mencoba lagi.",
   "err.media.failed": "Gagal mengunduh media. Klik “Lanjutkan” untuk mencoba lagi.",
   "err.media.expired": "Tautan media kedaluwarsa dan tidak dapat diperbarui. Hapus lalu unduh ulang.",
+  "err.media.page_expired": "Tautan video dari halaman sudah kedaluwarsa. Buka ulang halaman lalu klik Unduh video ini.",
+  "err.media.page_streams": "Aliran video dari halaman tidak valid.",
   "err.media.path_escape": "File media ditulis di luar folder yang dipilih.",
   "err.media.empty_output": "File media yang diunduh kosong.",
   "err.media.no_output": "File stream yang diunduh tidak ditemukan. Klik “Lanjutkan” untuk mengunduh ulang.",

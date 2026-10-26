@@ -26,6 +26,7 @@
   "videoAdding": { "message": "UTD में जोड़ा जा रहा है…" },
   "videoAdded": { "message": "UTD में जोड़ा गया" },
   "videoFailed": { "message": "UTD यह वीडियो नहीं पढ़ सकता।" },
+  "videoNoStream": { "message": "अभी कोई वीडियो स्ट्रीम नहीं मिली। वीडियो चलाएँ, फिर दोबारा दबाएँ।" },
   "videoSignIn": { "message": "इस वीडियो के लिए साइन इन ज़रूरी है। साइट पर साइन इन करें, फिर दोबारा कोशिश करें।" },
   "videoClose": { "message": "बंद करें" },
   "videoButtonSwitch": { "message": "पेजों पर \"यह वीडियो डाउनलोड करें\" बटन दिखाएँ" },

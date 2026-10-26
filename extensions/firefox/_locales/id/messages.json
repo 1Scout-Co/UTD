@@ -26,6 +26,7 @@
   "videoAdding": { "message": "Menambahkan ke UTD…" },
   "videoAdded": { "message": "Ditambahkan ke UTD" },
   "videoFailed": { "message": "UTD tidak dapat membaca video ini." },
+  "videoNoStream": { "message": "Belum ada aliran video. Putar videonya lalu klik lagi." },
   "videoSignIn": { "message": "Video ini perlu masuk akun. Masuk di situs, lalu coba lagi." },
   "videoClose": { "message": "Tutup" },
   "videoButtonSwitch": { "message": "Tampilkan tombol \"Unduh video ini\" di halaman" },

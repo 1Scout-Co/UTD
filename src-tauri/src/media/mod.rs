@@ -8,6 +8,8 @@ mod install;
 mod install_tests;
 mod mux;
 mod output;
+/// Luồng tiện ích đọc thẳng từ trang (Tin Facebook…): `page_streams::checked`, `page_streams::forget`.
+pub(crate) mod page_streams;
 /// `parts::discard_parts`: dọn luồng con trước khi xoá task media khỏi danh sách.
 pub(crate) mod parts;
 mod preset;
@@ -277,6 +279,31 @@ pub(crate) fn enqueue_media(app: AppHandle, mut input: AddMediaInput) -> Result<
         && let Err(error) = channel::remember(&journal, pick, &task.id)
     {
         log::warn!("channel: không nhớ được video đã tải ({error})");
+    }
+    Ok(task)
+}
+
+/// Video đọc thẳng từ trang (`page_streams`, nút "Tải video này"): như `enqueue_media`, lưu link luồng trước khi
+/// xếp hàng để runner thấy ngay. Không cookie: link luồng đã có chữ ký của trang.
+pub(crate) fn enqueue_page(
+    app: AppHandle,
+    input: AddMediaInput,
+    streams: &[page_streams::PageStream],
+) -> Result<DownloadTask, String> {
+    let (journal, queue) = {
+        let state = app.state::<AppState>();
+        (state.journal.clone(), state.queue.clone())
+    };
+    let destination = crate::commands::download_dir_for(&app, input.dest_dir.as_deref())?;
+    let task = create_media(&journal, &destination, input, None)?;
+    if let Err(error) = page_streams::save(&journal, &task.id, streams) {
+        let _ = journal.delete_task(&task.id);
+        return Err(error);
+    }
+    if let Err(error) = queue.submit(vec![Entry::new(task.id.clone())], Place::Front) {
+        page_streams::forget(&journal, &task.id);
+        let _ = journal.delete_task(&task.id);
+        return Err(error);
     }
     Ok(task)
 }

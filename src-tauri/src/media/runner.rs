@@ -61,6 +61,15 @@ pub async fn run(
 /// trả ngay; chỉ chờ thật khi trạng thái đổi đúng lúc task bắt đầu (vd vừa bật lại tự tải) — lúc đó
 /// task giữ chỗ trong hàng đợi, có giới hạn `TASK_PASSES` lượt rồi báo lỗi rõ. Hàng đợi thả task vì
 /// người dùng bấm Huỷ ⇒ không bật lại lần tự tải (`wait_for_task`), task chạy và báo thiếu công cụ.
+/// Video đọc từ trang mà link luồng đã hỏng/hết hạn: chỉ trang mở lại mới có link mới.
+fn page_expired() -> TaskError {
+    error(
+        ErrorClass::Permanent,
+        "media.page_expired",
+        "Link video trên trang đã hết hạn. Mở lại trang rồi bấm Tải video này.",
+    )
+}
+
 async fn wait_tools(app: &AppHandle, cancel: &CancellationToken, audio: bool) -> bool {
     let Some(auto) = auto_tools(app) else {
         return true;
@@ -106,7 +115,14 @@ async fn attempt(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Không tìm thấy cấu hình media.".to_string())?;
 
-    if !wait_tools(&app, &cancel, job.audio_format.is_some()).await {
+    // Video đọc từ trang: luồng đã lưu thay yt-dlp; luồng tách rời cần ffmpeg ghép.
+    let page = super::page_streams::load(&journal, &job);
+    if job.selector == super::page_streams::SELECTOR && page.is_none() {
+        fail(&app, &journal, &mut task, page_expired())?;
+        return Ok(Attempt::Done);
+    }
+    let needs_ffmpeg = job.audio_format.is_some() || page.as_ref().is_some_and(|streams| streams.len() > 1);
+    if !wait_tools(&app, &cancel, needs_ffmpeg).await {
         let downloaded = task.downloaded_bytes;
         pause(&app, &journal, &mut task, downloaded)?;
         return Ok(Attempt::Done);
@@ -179,12 +195,19 @@ async fn attempt(
 
     // Luồng http(s) thường: engine UTD tự tải nhiều kết nối, nhanh hơn yt-dlp (một kết nối/luồng).
     // Lượt đầu dùng luồng của lần "Phân tích" nếu còn hạn; lấy link mới thì hỏi yt-dlp.
-    let resolver = fast::YtDlp(&tools, grant);
+    let yt_dlp = fast::YtDlp(&tools, grant);
+    let fixed = page
+        .as_deref()
+        .map(|streams| super::page_streams::Fixed(super::page_streams::resolved(streams, job.page_url.as_deref())));
+    let resolver: &dyn fast::Resolver = match &fixed {
+        Some(fixed) => fixed,
+        None => &yt_dlp,
+    };
     let fast_path = fast::Fast {
         engine: app.state::<AppState>().engine.clone(),
         journal: journal.clone(),
         sink: &app,
-        resolver: &resolver,
+        resolver,
         ffmpeg: tools.ffmpeg.clone(),
         cancel: cancel.clone(),
         started,
@@ -192,6 +215,12 @@ async fn attempt(
     };
     match fast::run(&fast_path, &mut task, &job).await {
         Ok(fast::FastEnd::Handled) => return Ok(Attempt::Done),
+        // yt-dlp không đọc được trang này (đó là lý do tiện ích đọc luồng từ trang): báo lỗi rõ, không chạy yt-dlp.
+        Ok(fast::FastEnd::Fallback) if fixed.is_some() => {
+            log::info!("media: luồng đọc từ trang không tải được, task={task_id}");
+            fail(&app, &journal, &mut task, page_expired())?;
+            return Ok(Attempt::Done);
+        }
         Ok(fast::FastEnd::Fallback) => {
             let elapsed = started.elapsed().as_millis();
             log::info!("media.timing task={task_id} fallback=yt-dlp ms={elapsed}");

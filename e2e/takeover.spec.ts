@@ -116,9 +116,12 @@ test('S-76: UTD nhận ⇒ tạm dừng, hỏi UTD kèm cookie của đúng link
   await startDownload(page, ZIP)
   await expect
     .poll(() => names(page))
-    .toEqual(['registerContentScripts', 'pause', 'native', 'cookies.getAll', 'cookies.getAll', 'native', 'cancel', 'erase'])
+    .toEqual(['registerContentScripts', 'registerContentScripts', 'pause', 'native', 'cookies.getAll', 'cookies.getAll', 'native', 'cancel', 'erase'])
   const all = await calls(page)
-  expect(all[1].args).toEqual([1])
+  // Hai lần đăng ký lúc chạy: fb-media.js (background.js, chỉ Facebook) và takeover-keys.js (takeover.js).
+  const registered = all.filter((call) => call.name === 'registerContentScripts')
+  expect(registered.map((call) => (call.args[0] as { id: string }[])[0].id)).toEqual(['utd-fb-media', 'utd-takeover-keys'])
+  expect(all[2].args).toEqual([1])
   const offer = all.filter((call) => call.name === 'native').map((call) => call.args[0] as Record<string, unknown>)[1]
   expect(offer).toMatchObject({ version: 2, type: 'takeover', url: ZIP.finalUrl, pageUrl: ZIP.referrer, suggestedName: null })
   expect((offer.auth as { site: string; cookies: { value: string }[] }).cookies[0].value).toBe('UTDCANARYtakeover')
