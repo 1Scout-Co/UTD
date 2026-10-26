@@ -47,6 +47,20 @@ https://github.com/jiji262/douyin-downloader.
    (`page_streams`), chọn bản theo chất lượng của hộp (Tốt nhất / H.264 / ≤720p / M4A / MP3).
    Link CDN hết hạn sau vài giờ: task để lâu mới chạy sẽ báo "Link video trên trang đã hết hạn" — bấm lại trên trang.
 
+### Thử thật (2026-10-26)
+
+- Chromium riêng (Playwright, phiên mới, chưa đăng nhập) nạp tiện ích của nhánh này: `douyinCall(tab, "posts")` trên hồ
+  sơ 奋斗的希瓜皮 ⇒ 19 bài kèm bản 2160/1440/1080/720p trong 2,3 s; `media(url)` ⇒ 2160…576p.
+- **Chưa đăng nhập chỉ xem được trang đầu:** trang 1 có 19 bài + `has_more=1` (hồ sơ có 28 bài, lưới hiện ô
+  "看更多最新作品 · 登录"), trang 2 trả rỗng + `has_more=0`; cuộn lưới cũng không tải thêm. Tiện ích báo `login` cho
+  trường hợp này (giữ các bài đã lấy, hộp kênh báo cần đăng nhập để xem tiếp).
+- **Có phiên chưa đăng nhập bị Douyin hạn chế hẳn** (Chrome của chủ dự án): lời gọi đã được ký đủ (`msToken, a_bogus,
+  verifyFp, fp, uifid, x-secsdk-web-signature`), mượn cả bộ tham số thật của trang (`version_name=17.4.0`, `webid`,
+  `browser_*`…) vẫn nhận 200 + 0 byte, không header xác minh. Lưới vẫn hiện vì trang lấy lúc mở.
+- Đã thử "nghe" lời gọi của chính trang thay vì tự gọi, không dùng được: SDK của Douyin thay `XMLHttpRequest` và tự gửi
+  lại yêu cầu (bọc `open`/fetch không thấy `load`); bọc `JSON.parse` từ `document_start` thì trang không tải (Douyin phát
+  hiện); ô lưới (React `itemInfo`) chỉ có mã, mô tả, ảnh bìa, không có link MP4.
+
 ### Luật cookie
 
 Không đọc cookie ở đâu cả cho Douyin: `fetch` trong trang tự kèm cookie của trình duyệt, tin `channel-entries` và

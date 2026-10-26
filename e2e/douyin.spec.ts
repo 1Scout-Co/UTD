@@ -232,3 +232,38 @@ test('tải cả hồ sơ Douyin: báo UTD trước, mở hộp kênh, lật t�
   ])
   expect(calls.some((call) => call.name === 'cookies'), 'không đọc cookie').toBe(false)
 })
+
+test('hồ sơ Douyin khi chưa đăng nhập: trang 2 rỗng dù trang 1 báo còn ⇒ giữ trang đầu, báo cần đăng nhập để xem tiếp', async ({ page }) => {
+  test.setTimeout(30_000)
+  const entry = {
+    id: '7300000000000000001',
+    url: 'https://www.douyin.com/video/7300000000000000001',
+    title: 'Video',
+    variants: [{ url: `${CDN}/1/720.mp4`, height: 720, sizeBytes: 5_000_000, h265: false }],
+  }
+  // Douyin thật (đo 2026-10-26, chưa đăng nhập): trang 1 có 19 bài + has_more=1, trang 2 rỗng + has_more=0.
+  const pages = [
+    { entries: [entry], cursor: '100', hasMore: true, author: { name: 'Người đăng' } },
+    { entries: [], cursor: '', hasMore: false, author: null },
+  ]
+  await page.route('http://ext.utd.test/**', (route) => route.fulfill({ contentType: 'text/html', body: '<p>x</p>' }))
+  await page.addInitScript(stubBackground, pages)
+  await page.goto('http://ext.utd.test/')
+  await page.addScriptTag({ path: 'extensions/chromium/background.js' })
+  await page.addScriptTag({ path: 'extensions/chromium/douyin-channel.js' })
+  await page.evaluate(() =>
+    (window as unknown as { douyinChannel: (url: string, tab: unknown) => Promise<boolean> }).douyinChannel(
+      'https://www.douyin.com/user/MS4wLjABAAAAtest',
+      { id: 3, url: 'https://www.douyin.com/user/MS4wLjABAAAAtest' },
+    ),
+  )
+  const calls = await page.evaluate(() => (window as unknown as { __bg: { calls: { name: string; args: unknown[] }[] } }).__bg.calls)
+  const parts = calls
+    .filter((call) => call.name === 'native' && (call.args[0] as { type: string }).type === 'channel-entries')
+    .map((call) => call.args[0] as { entries: unknown[]; done: boolean; error?: string })
+  expect(parts.map((part) => [part.entries.length, part.done, part.error ?? null])).toEqual([
+    [0, false, null],
+    [1, false, null],
+    [0, true, 'login'],
+  ])
+})

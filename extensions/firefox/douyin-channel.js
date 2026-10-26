@@ -88,7 +88,9 @@ async function douyinChannel(url, tab) {
       const next = typeof page.cursor === "string" ? page.cursor : ""
       const end = !page.hasMore || !next || next === cursor || entries.length === 0 || total >= DOUYIN_MAX_ENTRIES
       const author = typeof page.author?.name === "string" ? { name: page.author.name.slice(0, 120) } : null
-      await push({ entries, author, done: end })
+      // Trang trước báo còn mà trang này rỗng: chưa đăng nhập Douyin chỉ cho xem trang đầu (~18 bài, ô "登录").
+      const wall = cursor !== "0" && entries.length === 0
+      await push({ entries, author, done: end, ...(wall ? { error: "login" } : {}) })
       if (end) return true
       cursor = next
       await new Promise((resolve) => setTimeout(resolve, DOUYIN_PAGE_DELAY))
