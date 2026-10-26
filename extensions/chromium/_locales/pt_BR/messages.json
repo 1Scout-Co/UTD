@@ -38,5 +38,10 @@
   "authSensitive": { "message": "Site sensível: permita cada download você mesmo." },
   "authDenied": { "message": "O navegador não permitiu." },
   "authDisabled": { "message": "Desativado nas configurações do UTD." },
-  "authResumed": { "message": "Downloads retomados." }
+  "authResumed": { "message": "Downloads retomados." },
+  "takeoverSwitch": { "message": "Capturar downloads do navegador" },
+  "takeoverMore": { "message": "Opções" },
+  "takeoverMinSize": { "message": "Ignorar arquivos menores que (MB)" },
+  "takeoverSkipTypes": { "message": "Não capturar estes tipos" },
+  "takeoverHint": { "message": "Segure Alt ao clicar para o navegador baixar." }
 }

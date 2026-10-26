@@ -17,8 +17,8 @@ use crate::queue::DownloadQueue;
 /// Tiện ích chờ trả lời tối đa 20 s rồi tự cho trình duyệt tải tiếp; UTD dò xong trước đó.
 const PROBE_BUDGET: Duration = Duration::from_secs(12);
 
-/// Câu trả khi không nhận (tiện ích không hiện, chỉ cho trình duyệt tải tiếp).
-pub(crate) const DECLINED: &str = "[takeover.declined] Để trình duyệt tải file này.";
+/// Câu trả khi không nhận: tiện ích không hiện câu này (không cần dịch), chỉ cho trình duyệt tải tiếp.
+pub(crate) const DECLINED: &str = "UTD để trình duyệt tải file này.";
 
 /// Một download trình duyệt vừa bắt đầu. `page_url`: trang chứa link (referrer).
 pub(crate) struct Offer {

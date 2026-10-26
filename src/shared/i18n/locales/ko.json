@@ -343,6 +343,7 @@
   "dir.desktopOnly": "폴더 변경은 UTD 앱에서만 할 수 있습니다.",
   "dir.saved": "저장했습니다. 새 다운로드는 이 폴더에 저장됩니다.",
 
+  "takeover.taken": "브라우저에서 가져옴",
   "browser.title": "브라우저 연동",
   "browser.description": "링크나 동영상을 마우스 오른쪽 버튼으로 클릭해 UTD로 다운로드하세요.",
   "browser.install": "확장 프로그램 설치",

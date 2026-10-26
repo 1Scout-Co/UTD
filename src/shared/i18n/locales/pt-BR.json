@@ -349,6 +349,7 @@
   "dir.desktopOnly": "Alterar a pasta só está disponível no aplicativo UTD.",
   "dir.saved": "Salvo. Novos downloads irão para esta pasta.",
 
+  "takeover.taken": "Capturado do navegador",
   "browser.title": "Integração com o navegador",
   "browser.description": "Clique com o botão direito em um link ou vídeo para baixá-lo com o UTD.",
   "browser.install": "Instalar extensão",

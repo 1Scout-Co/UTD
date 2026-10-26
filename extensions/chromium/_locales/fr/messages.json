@@ -38,5 +38,10 @@
   "authSensitive": { "message": "Site sensible : autorisez chaque téléchargement vous-même." },
   "authDenied": { "message": "Le navigateur ne l’a pas autorisé." },
   "authDisabled": { "message": "Désactivé dans les paramètres d’UTD." },
-  "authResumed": { "message": "Téléchargements repris." }
+  "authResumed": { "message": "Téléchargements repris." },
+  "takeoverSwitch": { "message": "Intercepter les téléchargements" },
+  "takeoverMore": { "message": "Options" },
+  "takeoverMinSize": { "message": "Ignorer les fichiers de moins de (Mo)" },
+  "takeoverSkipTypes": { "message": "Ne pas intercepter ces types" },
+  "takeoverHint": { "message": "Maintenez Alt en cliquant pour laisser le navigateur télécharger." }
 }

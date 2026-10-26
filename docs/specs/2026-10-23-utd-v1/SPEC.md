@@ -120,7 +120,7 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 
 #### Đăng nhập (cookie của trình duyệt)
 
-Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25). Cookie chỉ đọc trong cú bấm trên trình duyệt, chỉ nằm trong RAM của app. Quyền xin một lần lúc cài tiện ích (mọi trang + cookies, Q11 chủ dự án quyết 2026-10-26); tắt riêng từng trang trong popup. Mã S-70–S-75 (ngoài khoảng S-40–S-59 đang chừa).
+Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25). Cookie chỉ đọc trong cú bấm trên trình duyệt, chỉ nằm trong RAM của app. Quyền xin một lần lúc cài tiện ích (mọi trang + cookies, Q11 chủ dự án quyết 2026-10-26); tắt riêng từng trang trong popup. Mã S-70–S-77 (ngoài khoảng S-40–S-59 đang chừa).
 
 | mã | khi | thấy gì | làm được gì |
 |---|---|---|---|
@@ -130,12 +130,14 @@ Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25).
 | S-73 | Có dữ liệu (Cài đặt › Tích hợp) | Công tắc "Dùng đăng nhập của trình duyệt" (mặc định bật), số trang đang giữ cookie, cảnh báo khoá tài khoản | Quên cookie |
 | S-74 | Có dữ liệu (trang web, tiện ích) | Rê chuột vào video (hoặc video vừa phát): nút nhỏ "⬇ Tải video này" ngay trên mép trên-phải video, không đè điều khiển của trình phát | Bấm ⇒ S-75 |
 | S-75 | Đang tải / Có dữ liệu / Lỗi (trang web, tiện ích) | Bảng định dạng ngay trên trang: "Đang đọc định dạng…"; Tốt nhất · 2160p … 144p · Chỉ âm thanh (M4A) · MP3, mỗi dòng kèm dung lượng ước tính; lỗi ngắn (cần đăng nhập, không đọc được, UTD chưa chạy); "Đã thêm vào UTD". Chuột phải › UTD mở cùng bảng ở chỗ bấm | Chọn một dòng ⇒ UTD tải luôn (không mở hộp Tải media); Esc / bấm ra ngoài để đóng |
+| S-76 | Có dữ liệu (popup extension) | Công tắc "Tự bắt link tải" (mặc định bật); "Tuỳ chọn" gập lại: bỏ qua file nhỏ hơn N MB (mặc định 1), đuôi không bắt; một dòng "Giữ Alt khi bấm: để trình duyệt tự tải" | Bật/tắt, sửa ngưỡng, sửa đuôi |
+| S-77 | Có dữ liệu (cửa sổ UTD) | UTD vừa nhận download của trình duyệt: thông báo nhỏ 4 s "Nhận từ trình duyệt · tên file", không mở hộp nào; dòng tải mới hiện trong danh sách | — |
 
 ### Làm được gì
 
 - Tải file lớn bằng nhiều kết nối, pause/resume, sống qua mất mạng, sleep, kill app và rút điện (S-01, S-15, S-19).
 - Thêm download bằng URL, clipboard, kéo thả danh sách URL; tự đọc tên/kích thước/MIME và phát hiện trùng (S-05–S-09).
-- Chuột phải link/trang/video trong Chrome, Edge, Firefox để tải; takeover download của browser là tuỳ chọn (S-34–S-39).
+- Chuột phải link/trang/video trong Chrome, Edge, Firefox để tải; tự bắt link tải (takeover) download của browser, mặc định bật, tắt được trong popup (S-34–S-39, S-76, S-77).
 - Tải video YouTube/TikTok/Facebook qua extractor; chọn chất lượng; tải HLS/DASH trực tiếp; ghép audio/video bằng ffmpeg (S-10–S-14).
 - Download Guard: cảnh báo file nguy hiểm, tên giả, MIME giả; quarantine; kiểm tra chữ ký; giữ MOTW; verify hash (S-22–S-26).
 - Doctor giải thích vì sao chậm/lỗi và đưa cách sửa; tự sửa khi an toàn (S-21).
@@ -193,7 +195,7 @@ Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25).
 
 - **App Tauri 2**: Rust core + React/TS UI. Engine là crate `utd-core` chạy trong process app ở v1; boundary IPC đã tách để sau này thành daemon.
 - **`utd-native-host`**: binary nhỏ do Chrome/Edge/Firefox khởi chạy; nói chuyện với app qua named pipe (Windows) với ACL theo user + token; chỉ chấp nhận extension ID trong allowlist.
-- **Extension**: MV3 cho Chromium, WebExtensions cho Firefox; quyền tối thiểu, host permission optional theo site; right-click, toolbar popup, overlay; takeover opt-in.
+- **Extension**: MV3 cho Chromium, WebExtensions cho Firefox; quyền tối thiểu, host permission optional theo site; right-click, toolbar popup, overlay; takeover mặc định bật (chủ dự án chọn như IDM, 2026-10-26), tắt trong popup.
 - **Engine**: tokio + reqwest/hyper + rustls; HTTP/1.1 + HTTP/2; phân đoạn thích ứng; preallocate + positional writes; SQLite WAL cho journal; verify; speed limit; retry/backoff; Doctor.
 - **Media**: yt-dlp (external) cho site extractor; ffmpeg (external) cho mux/remux; HLS/DASH VOD native cho URL trực tiếp. Không bundle binary GPL; quản lý phiên bản, checksum, license notice, rollback.
 - **Lưu trữ**: SQLite `%LOCALAPPDATA%\UTD-Data\utd.db`; settings `%APPDATA%\UTD\settings.json`; log `%LOCALAPPDATA%\UTD-Data\logs`; download mặc định `%USERPROFILE%\Downloads\UTD`; quarantine `%LOCALAPPDATA%\UTD-Data\quarantine`. Không lưu cookie/token (journal chỉ ghi task nào cần đăng nhập ở trang nào, không ghi giá trị).
@@ -255,7 +257,7 @@ Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25).
 - AC-12: KHI gặp lỗi phổ biến THÌ HỆ THỐNG PHẢI hiện Doctor với nguyên nhân và hành động sửa cụ thể.
 - AC-13: KHI cấu hình proxy THÌ HỆ THỐNG PHẢI áp dụng cho mọi request và báo lỗi rõ nếu proxy sai; NTLM/Kerberos ngoài phạm vi v1.
 - AC-14: KHI người dùng chuột phải link/trang trong Chrome/Edge/Firefox THÌ HỆ THỐNG PHẢI nhận URL + headers/cookies theo opt-in và mở đúng luồng.
-- AC-15: KHI bật takeover THÌ HỆ THỐNG PHẢI hủy download của browser và chuyển sang UTD với headers/cookies; tắt thì browser tải như thường.
+- AC-15: KHI bật takeover THÌ HỆ THỐNG PHẢI hủy download của browser và chuyển sang UTD với headers/cookies; tắt thì browser tải như thường. (2026-10-26: tạm dừng bản của trình duyệt trước, chỉ huỷ khi UTD đã dò được file; UTD chưa chạy/không nhận/quá 20 s thì trình duyệt tải tiếp — không mất download nào. Mặc định bật, S-76/S-77, `notes/auth-plan.md` §9.1 "GĐ3 — Tự bắt link tải".)
 - AC-16: KHI người dùng tải video từ trang được hỗ trợ THÌ HỆ THỐNG PHẢI hiện danh sách chất lượng và tải format đã chọn; extractor lỗi THÌ có nút cập nhật/thử lại.
 - AC-17: KHI URL là HLS/DASH không DRM THÌ HỆ THỐNG PHẢI tải và ghép bằng ffmpeg; KHI phát hiện DRM THÌ phải từ chối rõ, không thử bypass.
 - AC-18: KHI người dùng chưa opt-in cookie THÌ HỆ THỐNG PHẢI không đọc/gửi cookie; khi opt-in THÌ cookie chỉ dùng cho request đó và không ghi disk/log. Opt-in là cho phép theo từng trang trong popup; extension chỉ đọc cookie bên trong cú bấm của người dùng trên trình duyệt (menu chuột phải, nút popup), app không bao giờ tự xin cookie (2026-10-25).

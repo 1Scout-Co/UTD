@@ -42,6 +42,7 @@ import { DoctorDialog } from "./doctor-dialog"
 import { MediaPickerDialog } from "./media-picker-dialog"
 import { RefreshLinkDialog } from "./refresh-link-dialog"
 import { SettingsDialog } from "./settings-dialog"
+import { TakenOverNotice } from "./taken-over-notice"
 import { ToolsAutoCard } from "./tools-auto"
 import { useBatchFlow } from "./use-batch-flow"
 import { useAppEvent } from "./use-app-event"
@@ -431,6 +432,7 @@ export function HomeScreen() {
         onChannel={openChannelWith}
       />
       <ChannelFlow desktop={desktop} flow={channel} />
+      <TakenOverNotice desktop={desktop} />
       <DetailFlow
         taskId={detailId}
         onClose={() => setDetailId(null)}

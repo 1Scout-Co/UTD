@@ -343,6 +343,7 @@
   "dir.desktopOnly": "Mengganti folder hanya tersedia di aplikasi UTD.",
   "dir.saved": "Tersimpan. Unduhan baru akan masuk ke folder ini.",
 
+  "takeover.taken": "Diambil dari browser",
   "browser.title": "Integrasi browser",
   "browser.description": "Klik kanan tautan atau video untuk mengunduhnya dengan UTD.",
   "browser.install": "Instal ekstensi",

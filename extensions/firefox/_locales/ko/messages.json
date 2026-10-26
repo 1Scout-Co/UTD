@@ -38,5 +38,10 @@
   "authSensitive": { "message": "민감한 사이트: 다운로드할 때마다 허용해야 합니다." },
   "authDenied": { "message": "브라우저가 허용하지 않았습니다." },
   "authDisabled": { "message": "UTD 설정에서 꺼져 있습니다." },
-  "authResumed": { "message": "다운로드를 계속합니다." }
+  "authResumed": { "message": "다운로드를 계속합니다." },
+  "takeoverSwitch": { "message": "다운로드 자동 가져오기" },
+  "takeoverMore": { "message": "옵션" },
+  "takeoverMinSize": { "message": "이보다 작은 파일 건너뛰기 (MB)" },
+  "takeoverSkipTypes": { "message": "가져오지 않을 형식" },
+  "takeoverHint": { "message": "Alt 키를 누른 채 클릭하면 브라우저가 다운로드합니다." }
 }

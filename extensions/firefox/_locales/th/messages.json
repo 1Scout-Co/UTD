@@ -38,5 +38,10 @@
   "authSensitive": { "message": "เว็บที่ละเอียดอ่อน: ต้องกดอนุญาตทุกครั้งที่ดาวน์โหลด" },
   "authDenied": { "message": "เบราว์เซอร์ไม่อนุญาต" },
   "authDisabled": { "message": "ปิดอยู่ในการตั้งค่า UTD" },
-  "authResumed": { "message": "ดาวน์โหลดต่อแล้ว" }
+  "authResumed": { "message": "ดาวน์โหลดต่อแล้ว" },
+  "takeoverSwitch": { "message": "รับช่วงการดาวน์โหลดอัตโนมัติ" },
+  "takeoverMore": { "message": "ตัวเลือก" },
+  "takeoverMinSize": { "message": "ข้ามไฟล์ที่เล็กกว่า (MB)" },
+  "takeoverSkipTypes": { "message": "ไม่รับช่วงนามสกุลเหล่านี้" },
+  "takeoverHint": { "message": "กด Alt ค้างไว้ขณะคลิกเพื่อให้เบราว์เซอร์ดาวน์โหลดเอง" }
 }

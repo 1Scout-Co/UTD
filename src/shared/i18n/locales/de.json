@@ -346,6 +346,7 @@
   "dir.desktopOnly": "Ordner ändern ist nur in der UTD-App möglich.",
   "dir.saved": "Gespeichert. Neue Downloads landen in diesem Ordner.",
 
+  "takeover.taken": "Vom Browser übernommen",
   "browser.title": "Browserintegration",
   "browser.description": "Rechtsklick auf einen Link oder ein Video, um mit UTD herunterzuladen.",
   "browser.install": "Erweiterung installieren",

@@ -207,6 +207,16 @@ export async function subscribeAuthGranted(
   return listen<AuthGranted>("utd://auth-granted", (event) => onGranted(event.payload))
 }
 
+/** UTD vừa nhận một download của trình duyệt (tự bắt link tải, S-77). */
+export interface TakenOver {
+  taskId: string
+  fileName: string
+}
+
+export async function subscribeTakenOver(onTaken: (taken: TakenOver) => void): Promise<UnlistenFn> {
+  return listen<TakenOver>("utd://taken-over", (event) => onTaken(event.payload))
+}
+
 /** "Mở trang" (S-14, S-72): mở trang bằng trình duyệt mặc định để người dùng bấm biểu tượng UTD ở đó. */
 export async function openWebPage(url: string): Promise<void> {
   await invoke("open_web_page", { url })

@@ -343,6 +343,7 @@
   "dir.desktopOnly": "フォルダーの変更はUTDアプリでのみ利用できます。",
   "dir.saved": "保存しました。新しいダウンロードはこのフォルダーに保存されます。",
 
+  "takeover.taken": "ブラウザーから引き継ぎました",
   "browser.title": "ブラウザー連携",
   "browser.description": "リンクや動画を右クリックして、UTDでダウンロードします。",
   "browser.install": "拡張機能をインストール",

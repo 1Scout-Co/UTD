@@ -74,6 +74,29 @@ videoSwitch.addEventListener("change", () => {
   void api.storage.local.set({ videoButton: videoSwitch.checked })
 })
 
+// --- Tự bắt link tải (S-76, takeover.js): bật/tắt (mặc định bật), ngưỡng MB, đuôi không bắt. ---
+const takeoverSwitch = document.getElementById("takeover-switch")
+const takeoverMin = document.getElementById("takeover-min")
+const takeoverSkip = document.getElementById("takeover-skip")
+api.storage.local.get(["takeover", "takeoverMinMb", "takeoverSkip"]).then(
+  (stored) => {
+    takeoverSwitch.checked = stored.takeover !== false
+    takeoverMin.value = String(stored.takeoverMinMb ?? 1)
+    takeoverSkip.value = stored.takeoverSkip ?? ""
+  },
+  () => undefined,
+)
+takeoverSwitch.addEventListener("change", () => {
+  void api.storage.local.set({ takeover: takeoverSwitch.checked })
+})
+takeoverMin.addEventListener("change", () => {
+  const megabytes = Number(takeoverMin.value)
+  if (Number.isFinite(megabytes) && megabytes >= 0) void api.storage.local.set({ takeoverMinMb: megabytes })
+})
+takeoverSkip.addEventListener("change", () => {
+  void api.storage.local.set({ takeoverSkip: takeoverSkip.value.slice(0, 500) })
+})
+
 // --- Đăng nhập (S-70, S-71; notes/auth-plan.md §8, Q11) ---
 // Quyền đã xin một lần lúc cài; popup chỉ hỏi UTD trang này có việc chờ không. Cookie chỉ đọc khi người dùng bấm.
 // Công tắc "Đăng nhập trên trang này" (mặc định bật) tắt riêng một trang: `signin-off:<trang>`.

@@ -38,5 +38,10 @@
   "authSensitive": { "message": "Sensitive site: allow each download yourself." },
   "authDenied": { "message": "The browser didn't allow it." },
   "authDisabled": { "message": "Turned off in UTD Settings." },
-  "authResumed": { "message": "Downloads resumed." }
+  "authResumed": { "message": "Downloads resumed." },
+  "takeoverSwitch": { "message": "Catch browser downloads" },
+  "takeoverMore": { "message": "Options" },
+  "takeoverMinSize": { "message": "Skip files smaller than (MB)" },
+  "takeoverSkipTypes": { "message": "Don't catch these types" },
+  "takeoverHint": { "message": "Hold Alt while clicking to let the browser download." }
 }

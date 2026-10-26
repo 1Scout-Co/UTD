@@ -343,6 +343,7 @@
   "dir.desktopOnly": "Đổi thư mục chỉ có trong app UTD.",
   "dir.saved": "Đã lưu. Download mới sẽ vào thư mục này.",
 
+  "takeover.taken": "Nhận từ trình duyệt",
   "browser.title": "Tích hợp trình duyệt",
   "browser.description": "Chuột phải vào link hoặc video để tải bằng UTD.",
   "browser.install": "Cài extension",

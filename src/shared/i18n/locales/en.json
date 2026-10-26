@@ -346,6 +346,7 @@
   "dir.desktopOnly": "Changing the folder is only available in the UTD app.",
   "dir.saved": "Saved. New downloads will go to this folder.",
 
+  "takeover.taken": "Caught from the browser",
   "browser.title": "Browser integration",
   "browser.description": "Right-click a link or video to download it with UTD.",
   "browser.install": "Install extension",

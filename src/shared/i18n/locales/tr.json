@@ -346,6 +346,7 @@
   "dir.desktopOnly": "Klasör yalnızca UTD uygulamasında değiştirilebilir.",
   "dir.saved": "Kaydedildi. Yeni indirmeler bu klasöre kaydedilecek.",
 
+  "takeover.taken": "Tarayıcıdan alındı",
   "browser.title": "Tarayıcı tümleştirmesi",
   "browser.description": "UTD ile indirmek için bir bağlantıya veya videoya sağ tıklayın.",
   "browser.install": "Uzantıyı yükle",

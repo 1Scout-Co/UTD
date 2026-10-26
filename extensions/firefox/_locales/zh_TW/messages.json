@@ -38,5 +38,10 @@
   "authSensitive": { "message": "敏感網站：每次下載都需點擊允許。" },
   "authDenied": { "message": "瀏覽器未允許。" },
   "authDisabled": { "message": "已在 UTD 設定中關閉。" },
-  "authResumed": { "message": "已繼續下載。" }
+  "authResumed": { "message": "已繼續下載。" },
+  "takeoverSwitch": { "message": "自動接管下載" },
+  "takeoverMore": { "message": "選項" },
+  "takeoverMinSize": { "message": "略過小於此大小的檔案 (MB)" },
+  "takeoverSkipTypes": { "message": "不接管這些類型" },
+  "takeoverHint": { "message": "點擊時按住 Alt：交給瀏覽器下載。" }
 }

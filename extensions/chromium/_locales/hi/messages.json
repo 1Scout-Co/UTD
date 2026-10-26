@@ -38,5 +38,10 @@
   "authSensitive": { "message": "संवेदनशील साइट: हर डाउनलोड पर अनुमति दें।" },
   "authDenied": { "message": "ब्राउज़र ने अनुमति नहीं दी।" },
   "authDisabled": { "message": "UTD सेटिंग्स में बंद है।" },
-  "authResumed": { "message": "डाउनलोड फिर शुरू हुए।" }
+  "authResumed": { "message": "डाउनलोड फिर शुरू हुए।" },
+  "takeoverSwitch": { "message": "ब्राउज़र डाउनलोड अपने आप लें" },
+  "takeoverMore": { "message": "विकल्प" },
+  "takeoverMinSize": { "message": "इससे छोटी फ़ाइलें छोड़ें (MB)" },
+  "takeoverSkipTypes": { "message": "ये प्रकार न लें" },
+  "takeoverHint": { "message": "क्लिक करते समय Alt दबाए रखें, ताकि ब्राउज़र ही डाउनलोड करे।" }
 }

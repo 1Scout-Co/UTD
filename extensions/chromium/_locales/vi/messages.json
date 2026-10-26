@@ -38,5 +38,10 @@
   "authSensitive": { "message": "Trang nhạy cảm: mỗi lần tải phải bấm cho phép." },
   "authDenied": { "message": "Trình duyệt chưa cho phép." },
   "authDisabled": { "message": "Đang tắt trong Cài đặt UTD." },
-  "authResumed": { "message": "Đã tiếp tục tải." }
+  "authResumed": { "message": "Đã tiếp tục tải." },
+  "takeoverSwitch": { "message": "Tự bắt link tải" },
+  "takeoverMore": { "message": "Tuỳ chọn" },
+  "takeoverMinSize": { "message": "Bỏ qua file nhỏ hơn (MB)" },
+  "takeoverSkipTypes": { "message": "Không bắt các đuôi" },
+  "takeoverHint": { "message": "Giữ Alt khi bấm: để trình duyệt tự tải." }
 }

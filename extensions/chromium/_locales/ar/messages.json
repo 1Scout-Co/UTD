@@ -38,5 +38,10 @@
   "authSensitive": { "message": "موقع حساس: اسمح بكل تنزيل بنفسك." },
   "authDenied": { "message": "لم يسمح المتصفح بذلك." },
   "authDisabled": { "message": "متوقف في إعدادات UTD." },
-  "authResumed": { "message": "تم استئناف التنزيلات." }
+  "authResumed": { "message": "تم استئناف التنزيلات." },
+  "takeoverSwitch": { "message": "التقاط تنزيلات المتصفح" },
+  "takeoverMore": { "message": "خيارات" },
+  "takeoverMinSize": { "message": "تخطي الملفات الأصغر من (ميغابايت)" },
+  "takeoverSkipTypes": { "message": "لا تلتقط هذه الأنواع" },
+  "takeoverHint": { "message": "اضغط Alt مع النقر ليتولى المتصفح التنزيل." }
 }

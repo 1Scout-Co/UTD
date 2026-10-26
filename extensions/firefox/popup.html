@@ -94,6 +94,22 @@
         font-size: 12px;
         cursor: pointer;
       }
+      details {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      summary {
+        cursor: pointer;
+      }
+      details input {
+        width: 76px;
+        margin-inline-start: auto;
+        padding: 3px 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        font: inherit;
+      }
       [hidden] {
         display: none !important;
       }
@@ -112,6 +128,16 @@
       <button id="send" type="button" data-i18n="sendPage">Download this page with UTD</button>
       <p id="status" data-i18n="hint">Right-click a link or video to download it quickly.</p>
       <label><input id="video-switch" type="checkbox" checked /><span data-i18n="videoButtonSwitch">Show the "Download this video" button</span></label>
+    </div>
+    <!-- S-76: tự bắt link tải của trình duyệt (takeover.js), mặc định bật. -->
+    <div class="card" id="takeover" data-s="S-76">
+      <label><input id="takeover-switch" type="checkbox" checked /><span data-i18n="takeoverSwitch">Catch browser downloads</span></label>
+      <details>
+        <summary data-i18n="takeoverMore">Options</summary>
+        <label><span data-i18n="takeoverMinSize">Skip files smaller than (MB)</span><input id="takeover-min" type="number" min="0" step="0.5" /></label>
+        <label><span data-i18n="takeoverSkipTypes">Don't catch these types</span><input id="takeover-skip" type="text" placeholder="torrent, ics" /></label>
+      </details>
+      <p data-i18n="takeoverHint">Hold Alt while clicking to let the browser download it.</p>
     </div>
     <script src="popup.js"></script>
   </body>

@@ -38,5 +38,10 @@
   "authSensitive": { "message": "Situs sensitif: izinkan setiap kali mengunduh." },
   "authDenied": { "message": "Browser tidak mengizinkan." },
   "authDisabled": { "message": "Dimatikan di Pengaturan UTD." },
-  "authResumed": { "message": "Unduhan dilanjutkan." }
+  "authResumed": { "message": "Unduhan dilanjutkan." },
+  "takeoverSwitch": { "message": "Tangkap unduhan browser" },
+  "takeoverMore": { "message": "Opsi" },
+  "takeoverMinSize": { "message": "Lewati file lebih kecil dari (MB)" },
+  "takeoverSkipTypes": { "message": "Jangan tangkap jenis ini" },
+  "takeoverHint": { "message": "Tahan Alt saat mengeklik agar browser yang mengunduh." }
 }

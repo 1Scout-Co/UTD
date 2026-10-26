@@ -349,6 +349,7 @@
   "dir.desktopOnly": "Cambiar la carpeta solo está disponible en la aplicación UTD.",
   "dir.saved": "Guardado. Las nuevas descargas irán a esta carpeta.",
 
+  "takeover.taken": "Capturado del navegador",
   "browser.title": "Integración con el navegador",
   "browser.description": "Haz clic derecho en un enlace o vídeo para descargarlo con UTD.",
   "browser.install": "Instalar extensión",

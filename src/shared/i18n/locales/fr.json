@@ -349,6 +349,7 @@
   "dir.desktopOnly": "Le changement de dossier n’est disponible que dans l’application UTD.",
   "dir.saved": "Enregistré. Les nouveaux téléchargements iront dans ce dossier.",
 
+  "takeover.taken": "Intercepté depuis le navigateur",
   "browser.title": "Intégration au navigateur",
   "browser.description": "Clic droit sur un lien ou une vidéo pour le télécharger avec UTD.",
   "browser.install": "Installer l’extension",

@@ -38,5 +38,10 @@
   "authSensitive": { "message": "Важный сайт: разрешайте каждую загрузку вручную." },
   "authDenied": { "message": "Браузер не разрешил." },
   "authDisabled": { "message": "Выключено в настройках UTD." },
-  "authResumed": { "message": "Загрузки продолжены." }
+  "authResumed": { "message": "Загрузки продолжены." },
+  "takeoverSwitch": { "message": "Перехватывать загрузки браузера" },
+  "takeoverMore": { "message": "Настройки" },
+  "takeoverMinSize": { "message": "Пропускать файлы меньше (МБ)" },
+  "takeoverSkipTypes": { "message": "Не перехватывать эти типы" },
+  "takeoverHint": { "message": "Удерживайте Alt при щелчке, чтобы скачал браузер." }
 }

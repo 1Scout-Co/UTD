@@ -343,6 +343,7 @@
   "dir.desktopOnly": "仅 UTD 应用可更改文件夹。",
   "dir.saved": "已保存。新下载将保存到此文件夹。",
 
+  "takeover.taken": "已从浏览器接管",
   "browser.title": "浏览器集成",
   "browser.description": "右键单击链接或视频，用 UTD 下载。",
   "browser.install": "安装扩展",

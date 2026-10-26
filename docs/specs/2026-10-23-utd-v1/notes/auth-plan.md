@@ -169,7 +169,8 @@ handler `contextMenus.onClicked`, hoặc khi người dùng bấm nút trong pop
   - Aria2-Explorer (`5e97685`) dự phòng bằng `downloads.download({url})`: tải lại bằng GET, nên mất download
     POST và link dùng-một-lần.
 - **Quyền:** cần thêm `downloads`. Muốn kèm cookie cho mọi trang thì phải có quyền mọi trang (cảnh báo "all
-  websites"), nên chủ dự án cần quyết (Q5).
+  websites"), nên chủ dự án cần quyết (Q5). **Đã quyết 2026-10-26: mọi trang, xin một lần lúc cài** (Q5, Q11). Đã
+  làm: mục "GĐ3 — Tự bắt link tải" ở §9.1.
 
 ## 5. Đưa cookie cho yt-dlp và engine
 
@@ -613,6 +614,82 @@ chưa có nút. Firefox: content script và quyền mọi trang chạy được 
   Chromium có quyền ngay lúc cài và chèn nút vào trang thử; `sign-in.spec.ts` sửa theo Q11, thêm bài nền nút trên trang).
 - Chưa thử thật trên Chrome của chủ dự án; Firefox chưa thử.
 
+#### GĐ3 — Tự bắt link tải (takeover, AC-15), 2026-10-26, nhánh `claude/takeover-787f20`
+
+Chủ dự án: tải một file trên Chrome/Firefox thì UTD tự nhận, như IDM. Quyền: Q5 đã quyết (mọi trang, một lần lúc
+cài), thêm `downloads`. Làm trên nhánh riêng, đã ghép `claude/auth-plan-6b2e91` (c045304, có Q11 + nút video).
+
+**Luồng** (`extensions/*/takeover.js`, module riêng; Chromium nạp bằng `importScripts` ở `background.js`, Firefox
+nạp theo `background.scripts`):
+1. `downloads.onCreated` ⇒ bỏ qua nếu: công tắc tắt; link không phải http(s) (`blob:`, `data:`, `file:`…); không còn
+   `in_progress`; download do tiện ích tạo (`byExtensionId`, kể cả tiện ích khác); kích thước đã biết nhỏ hơn ngưỡng
+   (mặc định **1 MB**: file nhỏ trình duyệt tải trong tích tắc, UTD không lợi gì); đuôi nằm trong danh sách "không
+   bắt" (mặc định trống); vừa bấm kèm **Alt** (bỏ qua một lần, như IDM).
+2. `downloads.pause(id)` (lỗi ⇒ đã xong/hỏng, để nguyên) ⇒ đọc cookie theo đúng luật của cú chuột phải (`authFor`:
+   trang dùng đăng nhập, không nhạy cảm, không tắt riêng) ⇒ tin `takeover {url: finalUrl||url, pageUrl: referrer,
+   suggestedName: tên trình duyệt đặt, auth?}`.
+3. UTD trả `ok` ⇒ `downloads.cancel` + `erase`. Mọi trường hợp khác — không có native host, UTD chưa chạy, UTD từ
+   chối, lỗi, **quá 20 s** — ⇒ `downloads.resume`: trình duyệt tải tiếp đúng request cũ (giữ POST, link dùng một
+   lần). Không download nào bị mất.
+4. App (`src-tauri/src/takeover.rs`, route `Takeover` ở `ipc.rs`): lần cho phép từ cú bấm (`grant_from_click`, cùng
+   luật cũ) ⇒ dò link **kèm cookie** (`DownloadEngine::inspect_signed`, mới; trần 12 s) ⇒ chỉ nhận khi là file thật,
+   không phải trang web, và **không có cảnh báo S-22** (file chạy được, `http://`, tên giả đuôi, MIME lệch: những
+   file cần hỏi người dùng thì để trình duyệt tải — trình duyệt có Safe Browsing và hộp cảnh báo riêng; không mở hộp
+   nào trong UTD) ⇒ link khớp download đang chờ link mới thì gắn vào đó (`recover::capture_link`), không thì tạo
+   task (`enqueue_download`) với tên trình duyệt gợi ý (hợp lệ) hoặc tên máy chủ (Content-Disposition) ⇒ sự kiện
+   `utd://taken-over` ⇒ thông báo nhỏ S-77 "Nhận từ trình duyệt · tên file" 4 s, không mở hộp thoại, không giành
+   focus.
+5. Popup S-76: công tắc "Tự bắt link tải" (mặc định bật, `takeover`), "Tuỳ chọn" gập lại: "Bỏ qua file nhỏ hơn (MB)"
+   (`takeoverMinMb`), "Không bắt các đuôi" (`takeoverSkip`), một dòng gợi ý Alt. 5 câu × 16 ngôn ngữ; app 1 câu × 16.
+6. Alt: `takeover-keys.js` đăng ký lúc chạy bằng `scripting.registerContentScripts` (mọi khung, `document_start`),
+   chỉ báo "vừa bấm kèm Alt" ⇒ download bắt đầu trong 5 s tiếp theo để trình duyệt tải. Đăng ký lúc chạy để không sửa
+   `content_scripts` trong manifest (đụng nút video); Chrome cũng tự hiểu Alt+bấm link là "tải link này".
+
+**Vì sao takeover vẫn đúng luật cookie §4.3.**
+- Luật: tiện ích chỉ đọc cookie trong một hành động của người dùng trên trình duyệt; tin nhắn từ app không bao giờ
+  dẫn tới việc đọc cookie. Takeover đọc cookie bên trong `downloads.onCreated`: download do người dùng bấm tải trên
+  trang (hành động của người dùng). App chỉ *trả lời* nhận/không, không xin được cookie, không gọi được takeover.
+- Cookie đọc ra là cookie của đúng link trình duyệt **vừa tự gửi cookie tới** (và trang chứa nó khi cùng trang gốc,
+  như chuột phải). Trang tự khởi động download (không cú bấm) thì trình duyệt cũng đã gửi chính cookie đó tới chính
+  link đó: UTD gửi lại không cho trang thêm gì. Mã độc cùng máy muốn lợi dụng thì phải tự mở trình duyệt tải link
+  — khi đó trình duyệt cũng đã gửi cookie, nên không thành cửa sau của App-Bound Encryption (T1).
+- Download do tiện ích tạo (`byExtensionId`, kể cả tiện ích khác dùng `downloads.download`) không bị bắt: không phải
+  cú bấm trên trang.
+- Trang chưa dùng đăng nhập (công tắc chung tắt, nhạy cảm, tắt riêng trang) ⇒ không đọc cookie nào; UTD dò không
+  cookie, gặp trang đăng nhập thì trả lại trình duyệt.
+- Khoá bằng bài thử `takeover.spec.ts` "luật cookie": không đọc khi trang không dùng đăng nhập; chỉ đọc cho link của
+  download (bỏ trang chứa khác trang gốc); mọi lần đọc xảy ra trước tin `takeover`, trả lời của UTD (kể cả trường lạ)
+  không gây thêm lần đọc nào.
+
+**Khác/thêm so với §4.4.**
+- Link có cảnh báo S-22 để trình duyệt tải (xem bước 4). Hệ quả: link `http://` không bị bắt. Nếu chủ dự án muốn
+  UTD bắt cả những file này thì phương án là mở hộp xác nhận S-22 của UTD rồi mới huỷ bản trình duyệt (thêm một hộp).
+- Không phát hiện được download POST (API không cho biết phương thức): UTD dò bằng GET; máy chủ trả lỗi/trang web
+  ⇒ trả lại trình duyệt. Rủi ro còn lại: máy chủ trả *file khác* cho GET (hiếm).
+- Link nhận rồi mà sau đó hết hạn giữa chừng ⇒ đường tự cứu có sẵn (chờ link mới, bấm tải lại trên trình duyệt thì
+  gắn vào).
+- UTD quá 20 s mới trả lời (tiện ích đã cho trình duyệt tải tiếp) mà vẫn nhận ⇒ hai bản; UTD dò tối đa 12 s nên chỉ
+  xảy ra khi máy rất chậm.
+
+**Kiểm (Windows, 2026-10-26).**
+- `cargo test --workspace` xanh (app 255 + 2 bỏ qua có sẵn; mới: `takeover` 2 unit, route IPC, native host
+  `takeovers_are_version_two_links`, `both_extensions_ship_the_takeover_scripts`; engine
+  `inspecting_with_the_click_cookies_sees_the_file_behind_a_sign_in`). `cargo clippy --workspace --all-targets -D
+  warnings` sạch. `pnpm lint` (eslint + i18n 717 khoá). size-limit JS 200,37 / 220 kB.
+- e2e 126/126; mới `e2e/takeover.spec.ts` 9 bài: API downloads giả (nhận ⇒ pause/cancel/erase; không có native host,
+  UTD chưa chạy, UTD từ chối ⇒ resume; không trả lời ⇒ resume sau 20 s; bỏ qua blob:/data:/nhỏ/đuôi/tiện ích
+  khác/đã xong/công tắc tắt; Alt; luật cookie), popup S-76, thông báo S-77 (axe sạch), và **tiện ích thật trong
+  Chromium không có native host: download thật bị tạm dừng rồi tải tiếp xong, đủ byte**.
+- Thử thật `auth-thu/takeover-e2e.py` trên bản release, `UTD_DATA_DIR` riêng: không cookie ⇒ không nhận, không tạo
+  task; trang HTML ⇒ không nhận; kèm cookie + tên gợi ý ⇒ nhận, tải xong đủ byte, đúng tên, ghi dấu trang; app tắt
+  ⇒ native host báo "UTD chưa chạy"; 0 file chứa cookie mồi. **ĐẠT.**
+- Chưa thử: Chrome thật của chủ dự án (tiến trình mở từ phiên AI bị cô lập); Firefox.
+
+**Chỗ dễ trùng khi ghép** (nhánh đăng nhập đang sửa tiếp tiện ích): `manifest.json` (thêm `"downloads"`; Firefox
+thêm `takeover.js` vào `background.scripts`), `background.js` (một dòng `importScripts` trước `runtime.onMessage`),
+`popup.html`/`popup.js` (thẻ S-76 sau thẻ nút video; S-74/S-75 đã là của nút video), `_locales/*` (5 khoá cuối file), `ipc.rs` (route `Takeover`),
+`native_host.rs` (nhánh `download | takeover`), `browser_integration.rs` (2 file mới mỗi trình duyệt), `lib.rs`.
+
 ### 9.2 File sẽ sửa (GĐ0–1)
 
 - **Extension:** `extensions/{chromium,firefox}/`
@@ -715,7 +792,8 @@ Rủi ro:
 Câu cần chủ dự án quyết. **Đã quyết 2026-10-25: theo đề xuất ở cả 10 câu** (nhớ theo trang; công tắc chung mặc
 định Bật; giữ cookie tới khi tắt app; không làm cookies.txt và `--cookies-from-browser`; takeover xin quyền theo
 trang; chủ dự án tự đăng nhập lúc thử thật; xoá query của task cần đăng nhập khi xong; bản phát hành chỉ nhận ID
-store; sửa SPEC khi bắt đầu GĐ1; có danh sách miền nhạy cảm ở GĐ1).
+store; sửa SPEC khi bắt đầu GĐ1; có danh sách miền nhạy cảm ở GĐ1). **2026-10-26:** Q1 và Q5 đổi theo Q11 — xin
+quyền mọi trang một lần lúc cài.
 1. **Q1 — Nhớ theo trang hay hỏi mỗi lần?**
    - Đề xuất: **nhớ theo trang**, dùng quyền theo trang của trình duyệt, tắt được trong popup. Chỉ cookie không bao
      giờ được lưu.
@@ -731,6 +809,9 @@ store; sửa SPEC khi bắt đầu GĐ1; có danh sách miền nhạy cảm ở 
    - Đề xuất: theo trang, như §8: trang chưa cho phép thì takeover không kèm cookie, UTD dò không được thì trả lại
      trình duyệt.
    - Hay xin mọi trang một lần như IDM (cảnh báo "all websites")?
+   - **Đã quyết lại 2026-10-26: xin mọi trang một lần như IDM** (lời gốc: "chỉ xin quyền 1 lần giống IDM đi, xin
+     cho mọi trang luôn chứ"; cùng quyết định với Q11). Takeover thêm quyền `downloads`. Kết quả: mục "GĐ3 — Tự bắt
+     link tải" ở §9.1.
 6. **Q6 — Tài khoản để thử thật:**
    - YouTube giới hạn tuổi (tài khoản đã xác minh tuổi) và file Google Drive riêng: chủ dự án tự đăng nhập trên
      Chrome của máy này lúc thử, hay cấp tài khoản thử?

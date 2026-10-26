@@ -38,5 +38,10 @@
   "authSensitive": { "message": "Hassas site: her indirmeye siz izin verin." },
   "authDenied": { "message": "Tarayıcı izin vermedi." },
   "authDisabled": { "message": "UTD Ayarlarında kapalı." },
-  "authResumed": { "message": "İndirmeler devam ediyor." }
+  "authResumed": { "message": "İndirmeler devam ediyor." },
+  "takeoverSwitch": { "message": "Tarayıcı indirmelerini yakala" },
+  "takeoverMore": { "message": "Seçenekler" },
+  "takeoverMinSize": { "message": "Şundan küçük dosyaları atla (MB)" },
+  "takeoverSkipTypes": { "message": "Bu türleri yakalama" },
+  "takeoverHint": { "message": "Tarayıcının indirmesi için tıklarken Alt tuşunu basılı tutun." }
 }

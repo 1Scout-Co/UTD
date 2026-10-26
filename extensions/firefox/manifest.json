@@ -4,7 +4,7 @@
   "default_locale": "en",
   "version": "0.1.0",
   "description": "__MSG_extDescription__",
-  "permissions": ["contextMenus", "nativeMessaging", "storage", "activeTab", "scripting", "cookies"],
+  "permissions": ["contextMenus", "nativeMessaging", "storage", "activeTab", "scripting", "cookies", "downloads"],
   "host_permissions": ["*://*/*"],
   "content_scripts": [
     {
@@ -14,7 +14,7 @@
     }
   ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["background.js", "takeover.js"]
   },
   "action": {
     "default_title": "__MSG_actionTitle__",

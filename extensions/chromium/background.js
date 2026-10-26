@@ -444,6 +444,9 @@ const fromContent = (sender) =>
 const fromPopup = (sender) =>
   sender?.id === api.runtime.id && !sender.tab && sender.url === api.runtime.getURL("popup.html")
 
+// Tự bắt link tải (takeover.js). Chromium (service worker cổ điển) nạp thêm ở đây; Firefox nạp theo manifest.
+if (typeof importScripts === "function") importScripts("takeover.js")
+
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (fromContent(sender)) {
     const tab = sender.tab

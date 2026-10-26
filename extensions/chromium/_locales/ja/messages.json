@@ -38,5 +38,10 @@
   "authSensitive": { "message": "重要なサイト：ダウンロードのたびに許可が必要です。" },
   "authDenied": { "message": "ブラウザーで許可されませんでした。" },
   "authDisabled": { "message": "UTD の設定でオフになっています。" },
-  "authResumed": { "message": "ダウンロードを再開しました。" }
+  "authResumed": { "message": "ダウンロードを再開しました。" },
+  "takeoverSwitch": { "message": "ダウンロードを自動で引き継ぐ" },
+  "takeoverMore": { "message": "オプション" },
+  "takeoverMinSize": { "message": "これより小さいファイルは除外 (MB)" },
+  "takeoverSkipTypes": { "message": "引き継がない拡張子" },
+  "takeoverHint": { "message": "Alt を押しながらクリックするとブラウザーでダウンロードします。" }
 }
