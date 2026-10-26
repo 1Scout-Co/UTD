@@ -2,6 +2,7 @@ const HOST = "app.utd.desktop"
 const MENU_LINK = "utd-download"
 const MENU_MEDIA = "utd-download-media"
 const MENU_ALL = "utd-download-all"
+const MENU_SOCIAL = "utd-social-bulk"
 const api = globalThis.browser ?? globalThis.chrome
 
 // Chữ theo ngôn ngữ của trình duyệt (_locales/<mã>/messages.json, mặc định en).
@@ -229,6 +230,13 @@ async function installMenus() {
       title: t("menuAll"),
       contexts: ["page", "link", "image", "selection"],
     },
+    // Tải hàng loạt Facebook (social-bulk.js): chỉ hiện trên trang đó.
+    {
+      id: MENU_SOCIAL,
+      title: t("menuSocial"),
+      contexts: ["page", "link", "image", "video"],
+      documentUrlPatterns: ["*://*.facebook.com/*"],
+    },
   ]) {
     try {
       await api.contextMenus.create(item)
@@ -376,6 +384,7 @@ async function downloadOrPick(info, tab) {
 
 api.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === MENU_ALL) void downloadAll(info, tab)
+  else if (info.menuItemId === MENU_SOCIAL) void socialStart(tab)
   else void downloadOrPick(info, tab)
 })
 
@@ -507,6 +516,8 @@ const fromPopup = (sender) =>
 if (typeof importScripts === "function") importScripts("takeover.js")
 // Hàm đọc luồng trong trang (page-media.js): Chromium nạp ở đây; Firefox nạp theo manifest.
 if (typeof importScripts === "function") importScripts("page-media.js")
+// Tải hàng loạt Facebook / Instagram / Threads (social-bulk.js): Chromium nạp ở đây; Firefox nạp theo manifest.
+if (typeof importScripts === "function") importScripts("social-bulk.js")
 
 // Facebook: fb-media.js ghi nhớ link file video trong dữ liệu JSON của trang (thế giới MAIN, từ document_start) để
 // nút "Tải video này" tìm đúng video đang xem. Đăng ký lúc chạy như takeover-keys.js; Firefox < 128 không cho thế

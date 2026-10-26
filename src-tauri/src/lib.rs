@@ -18,6 +18,7 @@ pub mod native_host;
 mod preflight;
 mod queue;
 mod recover;
+mod social;
 mod state;
 mod takeover;
 mod titlebar;
@@ -282,6 +283,12 @@ pub fn run() {
             media_pages::take_media_request,
             batch::take_batch_request,
             batch::add_batch_downloads,
+            // Tải hàng loạt Facebook / Instagram / Threads (notes/social-bulk.md).
+            social::take_social_request,
+            social::social_watch,
+            social::social_control,
+            social::social_close,
+            social::download::add_social_downloads,
             queue::queue_settings,
             queue::set_queue_limit,
             commands::inspect_link,

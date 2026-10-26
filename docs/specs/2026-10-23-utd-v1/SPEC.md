@@ -118,6 +118,12 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 | S-62 | Trống | Kênh chưa có video công khai | Huỷ |
 | S-63 | Lỗi | Tài khoản riêng tư/cần đăng nhập (cùng luồng S-14), kênh không có, mạng lỗi, thiếu yt-dlp | Mở trang, thử lại, huỷ |
 
+**Tải hàng loạt Facebook / Instagram / Threads** (2026-10-26, `notes/social-bulk.md`): cùng hộp và mã S-60–S-63, mở khi
+tiện ích gửi danh sách (chuột phải › "Tải hàng loạt bằng UTD" trên trang cá nhân / fanpage / nhóm / Tin). Khác kênh: tiêu đề
+"Tải hàng loạt"; chip loại kèm số (Bài viết, Ảnh, Video, Reels, Tin, Tin nổi bật; Ảnh/Video cho Instagram, Threads) — bỏ chip
+thì tiện ích thôi lấy loại đó; không chọn chất lượng (tải file gốc); không "Thử lại" (bấm lại trên trang); nút "Tải N mục".
+Trên trang: nhãn nhỏ "UTD · Đang thu N ảnh/video · Dừng".
+
 #### Đăng nhập (cookie của trình duyệt)
 
 Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25). Cookie chỉ đọc trong cú bấm trên trình duyệt, chỉ nằm trong RAM của app. Quyền xin một lần lúc cài tiện ích (mọi trang + cookies, Q11 chủ dự án quyết 2026-10-26); tắt riêng từng trang trong popup. Mã S-70–S-77 (ngoài khoảng S-40–S-59 đang chừa).

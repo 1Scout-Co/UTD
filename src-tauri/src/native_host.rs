@@ -36,6 +36,9 @@ struct HostRequest {
     /// Bản 2, `media-streams`: luồng tiện ích đọc thẳng từ trang (Tin Facebook…), app kiểm (media/page_streams.rs).
     #[serde(default)]
     streams: Vec<serde_json::Value>,
+    /// Bản 2, `social-list`: một đợt ảnh/video tải hàng loạt (Facebook / Instagram / Threads), app kiểm (src/social).
+    #[serde(default)]
+    social: Option<serde_json::Value>,
 }
 
 /// Selector / tiêu đề dài hơn thì từ chối (app kiểm kỹ lại).
@@ -152,6 +155,19 @@ fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
                 "title": title,
                 "streams": request.streams,
             }))
+        }
+        // Tải hàng loạt: `url` là trang hồ sơ / nhóm đang mở; danh sách không mang cookie.
+        "social-list" if request.version >= 2 => {
+            let url = request.url.trim();
+            let social = request.social.as_ref().filter(|social| social.is_object());
+            match social {
+                Some(social) if is_web_url(url) => Ok(serde_json::json!({
+                    "url": url,
+                    "kind": request.kind,
+                    "social": social,
+                })),
+                _ => Err("Yêu cầu từ trình duyệt không hợp lệ.".into()),
+            }
         }
         _ => Err("Yêu cầu từ trình duyệt không hợp lệ.".into()),
     }
@@ -504,6 +520,24 @@ mod tests {
         assert!(streams(2, serde_json::json!([{ "url": "blob:https://www.facebook.com/1", "kind": "both" }])).is_err());
         let many = serde_json::json!([{ "url": "https://a.b/1" }, { "url": "https://a.b/2" }, { "url": "https://a.b/3" }]);
         assert!(streams(2, many).is_err());
+    }
+
+    /// Tải hàng loạt: bản 2, trang http(s), phần `social` là object; không chuyển cookie.
+    #[test]
+    fn social_lists_are_version_two_objects_without_cookies() {
+        let list = |version: u32, url: &str, social: serde_json::Value| {
+            pipe_payload(&message(serde_json::json!({
+                "version": version, "type": "social-list", "url": url, "social": social, "auth": { "site": "instagram.com" },
+            })))
+        };
+        let social = serde_json::json!({ "listingId": "sb-abc12345", "part": 0, "entries": [] });
+        let payload = list(2, "https://www.instagram.com/nasa/", social.clone()).unwrap();
+        assert_eq!(payload["kind"], "social-list");
+        assert_eq!(payload["social"], social);
+        assert_eq!(payload.get("auth"), None, "không chuyển cookie");
+        assert!(list(1, "https://www.instagram.com/nasa/", social.clone()).is_err());
+        assert!(list(2, "chrome://settings", social).is_err());
+        assert!(list(2, "https://www.instagram.com/nasa/", serde_json::json!([1])).is_err());
     }
 
     #[test]

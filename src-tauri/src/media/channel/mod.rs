@@ -27,6 +27,7 @@ use utd_engine::Journal;
 use entries::{ChannelEntry, ChannelHead};
 use profile::ChannelProfile;
 pub use seen::{ChannelPick, forget, remember};
+pub(crate) use seen::Downloaded;
 #[cfg(test)]
 pub(crate) use seen::is_downloaded;
 

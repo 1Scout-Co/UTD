@@ -366,7 +366,7 @@ pub(crate) fn create_media(
 }
 
 /// Thư mục tải, cộng thư mục con (tên kênh) khi tải cả kênh; tên con được làm sạch thành một tầng.
-fn with_subfolder(
+pub(crate) fn with_subfolder(
     folder: std::path::PathBuf,
     subfolder: Option<&str>,
 ) -> Result<std::path::PathBuf, String> {
@@ -642,7 +642,7 @@ fn js_runtime_args(tools: &tools::MediaTools) -> Vec<OsString> {
     }
 }
 
-fn safe_base(title: &str) -> String {
+pub(crate) fn safe_base(title: &str) -> String {
     let cleaned: String = title
         .chars()
         .map(|character| {

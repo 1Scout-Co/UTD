@@ -44,5 +44,12 @@
   "takeoverMore": { "message": "خيارات" },
   "takeoverMinSize": { "message": "تخطي الملفات الأصغر من (ميغابايت)" },
   "takeoverSkipTypes": { "message": "لا تلتقط هذه الأنواع" },
-  "takeoverHint": { "message": "اضغط Alt مع النقر ليتولى المتصفح التنزيل." }
+  "takeoverHint": { "message": "اضغط Alt مع النقر ليتولى المتصفح التنزيل." },
+  "menuSocial": { "message": "تنزيل جماعي باستخدام UTD" },
+  "socialCollecting": { "message": "جارٍ جمع الصور/الفيديوهات: $COUNT$", "placeholders": { "count": { "content": "$1" } } },
+  "socialStop": { "message": "إيقاف" },
+  "socialHint": { "message": "أبقِ هذا التبويب مفتوحًا؛ قد ينتقل بين الصفحات تلقائيًا." },
+  "socialDone": { "message": "أُرسلت الصور/الفيديوهات إلى UTD: $COUNT$", "placeholders": { "count": { "content": "$1" } } },
+  "socialUnsupported": { "message": "افتح ملفًا شخصيًا أو صفحة أو مجموعة أو قصة ثم أعد المحاولة." },
+  "socialFailed": { "message": "تعذّر جمع الصور/الفيديوهات من هذه الصفحة." }
 }

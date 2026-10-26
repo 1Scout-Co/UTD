@@ -44,5 +44,12 @@
   "takeoverMore": { "message": "ตัวเลือก" },
   "takeoverMinSize": { "message": "ข้ามไฟล์ที่เล็กกว่า (MB)" },
   "takeoverSkipTypes": { "message": "ไม่รับช่วงนามสกุลเหล่านี้" },
-  "takeoverHint": { "message": "กด Alt ค้างไว้ขณะคลิกเพื่อให้เบราว์เซอร์ดาวน์โหลดเอง" }
+  "takeoverHint": { "message": "กด Alt ค้างไว้ขณะคลิกเพื่อให้เบราว์เซอร์ดาวน์โหลดเอง" },
+  "menuSocial": { "message": "ดาวน์โหลดจำนวนมากด้วย UTD" },
+  "socialCollecting": { "message": "กำลังรวบรวมรูป/วิดีโอ $COUNT$ รายการ", "placeholders": { "count": { "content": "$1" } } },
+  "socialStop": { "message": "หยุด" },
+  "socialHint": { "message": "เปิดแท็บนี้ไว้ แท็บอาจเปลี่ยนหน้าเอง" },
+  "socialDone": { "message": "ส่งรูป/วิดีโอ $COUNT$ รายการไปยัง UTD แล้ว", "placeholders": { "count": { "content": "$1" } } },
+  "socialUnsupported": { "message": "เปิดโปรไฟล์ เพจ กลุ่ม หรือสตอรี่ แล้วลองอีกครั้ง" },
+  "socialFailed": { "message": "รวบรวมรูป/วิดีโอในหน้านี้ไม่ได้" }
 }

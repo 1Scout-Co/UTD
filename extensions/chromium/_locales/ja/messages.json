@@ -44,5 +44,12 @@
   "takeoverMore": { "message": "オプション" },
   "takeoverMinSize": { "message": "これより小さいファイルは除外 (MB)" },
   "takeoverSkipTypes": { "message": "引き継がない拡張子" },
-  "takeoverHint": { "message": "Alt を押しながらクリックするとブラウザーでダウンロードします。" }
+  "takeoverHint": { "message": "Alt を押しながらクリックするとブラウザーでダウンロードします。" },
+  "menuSocial": { "message": "UTDで一括ダウンロード" },
+  "socialCollecting": { "message": "写真/動画を収集中: $COUNT$", "placeholders": { "count": { "content": "$1" } } },
+  "socialStop": { "message": "停止" },
+  "socialHint": { "message": "このタブは開いたままにしてください。ページが自動で切り替わることがあります。" },
+  "socialDone": { "message": "$COUNT$ 件の写真/動画をUTDに送信しました", "placeholders": { "count": { "content": "$1" } } },
+  "socialUnsupported": { "message": "プロフィール、ページ、グループ、またはストーリーを開いてからもう一度お試しください。" },
+  "socialFailed": { "message": "このページでは写真/動画を収集できませんでした。" }
 }

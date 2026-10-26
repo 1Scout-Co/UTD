@@ -6,8 +6,11 @@ import { Button } from "@/components/ui/button"
 import { t } from "@/shared/i18n/i18n"
 
 import { addMediaDownload } from "../api/downloads"
+import { addSocialDownloads, closeSocial, subscribeSocialRequest, takeSocialRequest } from "../api/social"
+import type { SocialRequest } from "../model/social"
 import type { AddMediaPayload, EngineTask } from "../model/types"
 import { ChannelDialog } from "./channel-dialog"
+import { useAppEvent } from "./use-app-event"
 
 /**
  * Gửi video của kênh vào hàng đợi chung của app: lần lượt từng video với `later` (cuối hàng, đúng thứ tự
@@ -60,14 +63,44 @@ function useChannelSender(onAdded: (task: EngineTask) => void) {
  */
 export function useChannelFlow(onAdded: (task: EngineTask) => void) {
   // `key` đổi ⇒ hộp dựng lại và liệt kê từ đầu.
-  const [request, setRequest] = useState<{ url: string; key: number; authGrant?: string } | null>(null)
-  const [open, setOpen] = useState(false)
+  const [request, setRequest] = useState<{
+    url: string
+    key: number
+    authGrant?: string
+    social?: SocialRequest
+  } | null>(null)
+  const [open, setOpenState] = useState(false)
   const queue = useChannelSender(onAdded)
   const { send } = queue
+  const socialId = request?.social?.listingId ?? null
+
+  // Hộp tải hàng loạt đóng (kể cả sau khi bấm Tải): app bỏ danh sách, tiện ích dừng ở đợt sau.
+  const setOpen = useCallback(
+    (next: boolean) => {
+      setOpenState(next)
+      if (!next && socialId) void closeSocial(socialId).catch(() => undefined)
+    },
+    [socialId],
+  )
 
   const openChannel = useCallback((url: string, authGrant?: string) => {
-    setRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1, authGrant }))
-    setOpen(true)
+    setRequest((previous) => {
+      if (previous?.social) void closeSocial(previous.social.listingId).catch(() => undefined)
+      return { url, key: (previous?.key ?? 0) + 1, authGrant }
+    })
+    setOpenState(true)
+  }, [])
+
+  /** Danh sách tải hàng loạt từ trình duyệt (Facebook / Instagram / Threads). */
+  const openSocial = useCallback((social: SocialRequest) => {
+    setRequest((previous) => {
+      // Hộp hàng loạt khác đang mở bị thay: bỏ danh sách cũ.
+      if (previous?.social && previous.social.listingId !== social.listingId) {
+        void closeSocial(previous.social.listingId).catch(() => undefined)
+      }
+      return { url: social.url, key: (previous?.key ?? 0) + 1, social }
+    })
+    setOpenState(true)
   }, [])
 
   const start = useCallback(
@@ -75,10 +108,22 @@ export function useChannelFlow(onAdded: (task: EngineTask) => void) {
       send(payloads)
       setOpen(false)
     },
-    [send],
+    [send, setOpen],
   )
 
-  return { request, open, setOpen, queue, start, openChannel }
+  /** Cả lô vào hàng đợi một lần (cuối hàng), app đặt tên `<ngày> <chú thích> <id>`. */
+  const startSocial = useCallback(
+    (ids: string[], subfolder: string | null) => {
+      if (!socialId) return
+      addSocialDownloads({ listingId: socialId, ids, subfolder: subfolder ?? undefined, later: true })
+        .then((result) => result.tasks.forEach(onAdded))
+        .catch((reason: unknown) => console.error("UTD social:", reason))
+        .finally(() => setOpen(false))
+    },
+    [socialId, onAdded, setOpen],
+  )
+
+  return { request, open, setOpen, queue, start, startSocial, openChannel, openSocial }
 }
 
 export function ChannelFlow({
@@ -89,6 +134,7 @@ export function ChannelFlow({
   flow: ReturnType<typeof useChannelFlow>
 }) {
   const { request, queue } = flow
+  useAppEvent(desktop, subscribeSocialRequest, flow.openSocial, takeSocialRequest)
   return (
     <>
       {request ? (
@@ -96,10 +142,12 @@ export function ChannelFlow({
           key={request.key}
           url={request.url}
           authGrant={request.authGrant}
+          social={request.social}
           open={flow.open}
           onOpenChange={flow.setOpen}
           desktop={desktop}
           onStart={flow.start}
+          onStartSocial={flow.startSocial}
         />
       ) : null}
       {queue.waiting > 0 ? (
