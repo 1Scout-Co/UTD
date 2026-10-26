@@ -15,9 +15,12 @@ const SOCIAL_PART_ENTRIES = 150
 const SOCIAL_PART_CHARS = 600_000
 const SOCIAL_FLUSH_MS = 3000
 const SOCIAL_MAX_ENTRIES = 20_000
-// Nhịp gọi: nghỉ 2–4 s giữa hai yêu cầu, tối đa 70 yêu cầu trong 10 phút (instaloader: 75 / 11 phút).
+// Nhịp gọi: nghỉ 2–4 s giữa hai yêu cầu (Instagram 1–2 s), tối đa 70 yêu cầu trong 10 phút (instaloader: 75 / 11 phút).
 const SOCIAL_GAP_MS = 2000
-const SOCIAL_JITTER_MS = 2000
+const SOCIAL_IG_GAP_MS = 1000
+// Instagram: bài viết hỏi bấy nhiêu một lượt (bị từ chối thì về 12 như web), tin nổi bật bấy nhiêu cái một lượt.
+const SOCIAL_IG_POSTS = 50
+const SOCIAL_IG_HIGHLIGHTS = 5
 const SOCIAL_WINDOW_MS = 10 * 60_000
 const SOCIAL_WINDOW_CALLS = 70
 // Cuộn: hết mục mới sau chừng này lượt liên tiếp thì coi như hết danh sách.
@@ -157,7 +160,7 @@ class SocialJob {
     return false
   }
 
-  /** Nghỉ trước một yêu cầu tới mạng xã hội: 2–4 s, và không quá 70 yêu cầu / 10 phút. */
+  /** Nghỉ trước một yêu cầu tới mạng xã hội: 2–4 s (Instagram 1–2 s), và không quá 70 yêu cầu / 10 phút. */
   async pace() {
     const now = Date.now()
     this.calls = this.calls.filter((at) => now - at < SOCIAL_WINDOW_MS)
@@ -165,7 +168,9 @@ class SocialJob {
       const wait = SOCIAL_WINDOW_MS - (now - this.calls[0])
       await this.wait(socialDelay(wait))
     }
-    if (this.calls.length > 0) await this.wait(socialDelay(SOCIAL_GAP_MS + Math.random() * SOCIAL_JITTER_MS))
+    // Instagram: câu trả lời JSON nhỏ (như trang tự gọi khi cuộn) ⇒ nghỉ ngắn hơn trang Facebook / Threads.
+    const gap = this.plan.platform === "instagram" ? SOCIAL_IG_GAP_MS : SOCIAL_GAP_MS
+    if (this.calls.length > 0) await this.wait(socialDelay(gap + Math.random() * gap))
     this.calls.push(Date.now())
   }
 
@@ -412,19 +417,27 @@ async function socialInstagram(job) {
     const tray = await job.instagram("highlights", { user_id: id })
     const edges = tray.meta.data.highlights?.edges
     if (!Array.isArray(edges)) throw new Error("social.changed")
-    const highlights = edges.map((edge) => edge?.node).filter((node) => /^highlight:\d+$/.test(node?.id ?? ""))
-    for (const highlight of highlights) {
-      if (!job.wants("highlights")) break
+    const waiting = edges.map((edge) => edge?.node).filter((node) => /^highlight:\d+$/.test(node?.id ?? ""))
+    // Hỏi tối đa SOCIAL_IG_HIGHLIGHTS tin nổi bật một lượt; tin nổi bật nào câu trả lời không có thì hỏi lại ở lượt sau
+    // (Instagram trả ít hơn thì cũng không chậm hơn hỏi từng cái).
+    while (waiting.length > 0 && job.wants("highlights")) {
+      const batch = waiting.slice(0, SOCIAL_IG_HIGHLIGHTS)
       const reply = await job.instagram("highlight", {
-        first: 1,
-        initial_reel_id: highlight.id,
-        reel_ids: [highlight.id],
+        first: batch.length,
+        initial_reel_id: batch[0].id,
+        reel_ids: batch.map((highlight) => highlight.id),
         __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true,
       })
-      // Mỗi tin nổi bật một tên (album): chỉ giữ các tin của đúng tin nổi bật này.
-      const ids = new Set((reply.reels?.[highlight.id] ?? []).map(String))
-      const title = typeof highlight.title === "string" ? highlight.title.slice(0, 100) : null
-      await job.push(reply.items.filter((media) => ids.has(String(media.id))).map(story), "highlights", title)
+      const got = batch.filter((highlight) => Array.isArray(reply.reels?.[highlight.id]))
+      // Câu trả lời không có cả tin nổi bật đầu tiên đã hỏi: thôi, khỏi hỏi mãi.
+      if (!got.includes(batch[0])) throw new Error("social.changed")
+      for (const highlight of got) {
+        waiting.splice(waiting.indexOf(highlight), 1)
+        // Mỗi tin nổi bật một tên (album): chỉ giữ các tin của đúng tin nổi bật này.
+        const ids = new Set(reply.reels[highlight.id].map(String))
+        const title = typeof highlight.title === "string" ? highlight.title.slice(0, 100) : null
+        await job.push(reply.items.filter((media) => ids.has(String(media.id))).map(story), "highlights", title)
+      }
     }
   })
   await part("reels", async () => {
@@ -432,8 +445,9 @@ async function socialInstagram(job) {
     do {
       const reply = await job.instagram("reels", {
         after: cursor,
+        // Thử thật: Instagram trả tối đa 12 reel một lượt (web dùng 4).
         data: { include_feed_video: true, page_size: 12, target_user_id: id },
-        first: 4,
+        first: 12,
         id,
         __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
       })
@@ -447,24 +461,35 @@ async function socialInstagram(job) {
   })
   await part("posts", async () => {
     let cursor = null
-    do {
-      const reply = await job.instagram("posts", {
+    // Web hỏi 12 bài một lượt; hỏi nhiều hơn cho ít lượt, Instagram từ chối thì quay về 12.
+    let size = SOCIAL_IG_POSTS
+    for (;;) {
+      const variables = {
         username: user,
         after: cursor,
         before: null,
-        data: { count: 12, include_reel_media_seen_timestamp: true, include_relationship_info: true, latest_besties_reel_media: true, latest_reel_media: true },
-        first: 12,
+        data: { count: size, include_reel_media_seen_timestamp: true, include_relationship_info: true, latest_besties_reel_media: true, latest_reel_media: true },
+        first: size,
         include_multi_captions: true,
         last: null,
         __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider: true,
         __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
         __relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider: false,
-      })
+      }
+      let reply
+      try {
+        reply = await job.instagram("posts", variables)
+      } catch (reason) {
+        if (size === 12 || reason?.message !== "social.changed") throw reason
+        size = 12
+        continue
+      }
       const connection = reply.meta.data.xdt_api__v1__feed__user_timeline_graphql_connection
       if (!connection) throw new Error("social.changed")
       await job.push(reply.items.filter(own), "posts")
       cursor = next(connection)
-    } while (cursor && job.wants("posts") && !job.past("posts"))
+      if (!cursor || !job.wants("posts") || job.past("posts")) break
+    }
   })
 }
 

@@ -134,7 +134,18 @@ const IG_TOKENS = '{"define":[["DTSGInitialData",[],{"token":"dtsg-abc"},258],["
 type IgRequest = { path: string; name: string; doc: string; variables: Record<string, unknown>; body: URLSearchParams; headers: Record<string, string> }
 
 // `guard`: câu trả lời mở đầu bằng `for (;;);` (CSRFGuard của web Instagram). `postsStatus` / `storiesStatus`: phần đó lỗi.
-function igRoutes(page: Page, options: { postsStatus?: number; storiesStatus?: number; profile?: 'pair' | 'route'; guard?: boolean } = {}) {
+// `highlights`: số tin nổi bật (mặc định 1, "Sao Hoả"), `highlightCap`: mỗi lượt Instagram chỉ trả bấy nhiêu cái.
+// `postsMax`: hỏi nhiều bài hơn số này một lượt ⇒ lỗi GraphQL.
+type IgOptions = {
+  postsStatus?: number
+  storiesStatus?: number
+  profile?: 'pair' | 'route'
+  guard?: boolean
+  highlights?: number
+  highlightCap?: number
+  postsMax?: number
+}
+function igRoutes(page: Page, options: IgOptions = {}) {
   const requests: IgRequest[] = []
   page.route('https://www.instagram.com/**', (route) => {
     const request = route.request()
@@ -171,7 +182,17 @@ function igRoutes(page: Page, options: { postsStatus?: number; storiesStatus?: n
       })
     }
     if (name === 'PolarisProfileStoryHighlightsTrayContentQuery') {
+      if (options.highlights) {
+        const edges = Array.from({ length: options.highlights }, (_, index) => ({ node: { id: `highlight:${100 + index}`, title: `HL${index}`, cover_media: {} } }))
+        return json({ data: { highlights: { edges } } })
+      }
       return json({ data: { highlights: { edges: [{ node: { id: 'highlight:17', title: 'Sao Hoả', cover_media: {} } }, { node: { id: 'oops', title: 'x' } }] } } })
+    }
+    if (name === 'PolarisStoriesV3HighlightsPageQuery' && options.highlights) {
+      // Trả các tin nổi bật được hỏi, tối đa `highlightCap` cái, mỗi cái một tin.
+      const asked = (variables.reel_ids as string[]).slice(0, options.highlightCap ?? Infinity)
+      const edges = asked.map((id) => ({ node: { id, items: [{ pk: `9${id.split(':')[1]}`, taken_at: 1700000000, image_versions2: igImage(id.replace(':', '')), user: NASA }] } }))
+      return json({ data: { xdt_api__v1__feed__reels_media__connection: { edges } } })
     }
     if (name === 'PolarisStoriesV3HighlightsPageQuery') {
       // Kèm một tin nổi bật khác trong câu trả lời: không lẫn vào tin nổi bật đang hỏi.
@@ -208,6 +229,7 @@ function igRoutes(page: Page, options: { postsStatus?: number; storiesStatus?: n
       // 401 thật của Instagram khi chưa đăng nhập: cùng câu "wait a few minutes", kèm `require_login`.
       const login = options.postsStatus === 401 ? { require_login: true } : {}
       if (options.postsStatus) return json({ message: 'Please wait a few minutes before you try again.', status: 'fail', ...login }, options.postsStatus)
+      if (options.postsMax && Number(variables.first) > options.postsMax) return json({ errors: [{ message: 'Invalid count' }], data: null })
       const connection = (edges: unknown[], next: string | null) => ({
         data: { xdt_api__v1__feed__user_timeline_graphql_connection: { edges, page_info: { has_next_page: Boolean(next), end_cursor: next } } },
       })
@@ -271,8 +293,8 @@ test('Instagram: Tin, tin nổi bật, reels, bài viết (carousel tách từng
   expect(requests[1].variables).toMatchObject({ reel_ids_arr: ['528817151'] })
   expect(requests[2].variables).toEqual({ user_id: '528817151' })
   expect(requests[3].variables).toMatchObject({ initial_reel_id: 'highlight:17', reel_ids: ['highlight:17'] })
-  expect(requests[4].variables).toMatchObject({ id: '528817151', after: null, data: { target_user_id: '528817151', include_feed_video: true } })
-  expect(requests[5].variables).toMatchObject({ username: 'nasa', after: null, first: 12 })
+  expect(requests[4].variables).toMatchObject({ id: '528817151', after: null, first: 12, data: { target_user_id: '528817151', include_feed_video: true } })
+  expect(requests[5].variables).toMatchObject({ username: 'nasa', after: null, first: 50, data: { count: 50 } })
   expect(requests[6].variables).toMatchObject({ username: 'nasa', after: 'cursor-2' })
   expect(requests[0].headers).toMatchObject({ 'x-ig-app-id': '936619743392459', 'x-csrftoken': 'tok123', 'x-fb-lsd': 'lsd-xyz' })
   expect([requests[0].body.get('fb_dtsg'), requests[0].body.get('lsd')]).toEqual(['dtsg-abc', 'lsd-xyz'])
@@ -309,6 +331,25 @@ for (const profile of ['pair', 'route'] as const) {
     expect(entriesOf(messages).map((entry) => entry.id)).toEqual(IG_ALL)
   })
 }
+
+test('Instagram: tin nổi bật hỏi 5 cái một lượt, Instagram trả thiếu thì hỏi lại phần thiếu; bài viết 50/lượt bị từ chối ⇒ về 12', async ({ page }) => {
+  const requests = igRoutes(page, { profile: 'pair', highlights: 7, highlightCap: 2, postsMax: 12 })
+  await loadExtension(page, 'https://www.instagram.com/nasa/')
+  const messages = await runBulk(page)
+  const asked = requests.filter((request) => request.name === 'PolarisStoriesV3HighlightsPageQuery').map((request) => request.variables.reel_ids)
+  expect(asked).toEqual([
+    ['highlight:100', 'highlight:101', 'highlight:102', 'highlight:103', 'highlight:104'],
+    ['highlight:102', 'highlight:103', 'highlight:104', 'highlight:105', 'highlight:106'],
+    ['highlight:104', 'highlight:105', 'highlight:106'],
+    ['highlight:106'],
+  ])
+  const highlights = entriesOf(messages).filter((entry) => entry.source === 'highlights')
+  expect(highlights.map((entry) => [entry.id, entry.album])).toEqual(Array.from({ length: 7 }, (_, index) => [`9${100 + index}`, `HL${index}`]))
+  const posts = requests.filter((request) => request.name === 'PolarisProfilePostsTabContentQuery_connection').map((request) => request.variables.first)
+  expect(posts).toEqual([50, 12, 12])
+  expect(entriesOf(messages).filter((entry) => entry.source === 'posts').map((entry) => entry.id)).toEqual(['7001001', '7001002', '7002'])
+  expect(messages.at(-1)?.social.done).toEqual({ complete: true, error: null })
+})
 
 test('Instagram: bài viết đòi đăng nhập (401 + require_login) ⇒ báo cần đăng nhập, không phải bị chặn', async ({ page }) => {
   igRoutes(page, { profile: 'pair', postsStatus: 401 })

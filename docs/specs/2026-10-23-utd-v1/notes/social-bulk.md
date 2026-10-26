@@ -73,6 +73,11 @@ Thử thật với chủ dự án (2026-10-26, đã đăng nhập): `GET /api/v1
 nhập (hồ sơ công khai): `ProfileRootContentQuery`, tin nổi bật, reels trả 200 JSON đúng khoá; bài viết trả 401
 `require_login` (cần đăng nhập). Câu trả lời có thể mở đầu bằng `for (;;);` (CSRFGuard của web Instagram) ⇒ bóc trước khi đọc.
 
+Tốc độ (hồ sơ thật 414 mục mất ~2 phút với reels 4/lượt, nghỉ 2–4 s): đo thật, reels trả tối đa **12/lượt** dù hỏi 30/50
+(~0,5 s mỗi lượt) ⇒ hỏi 12. Bài viết hỏi 50/lượt (chưa đo được vì cần đăng nhập; bị lỗi thì quay về 12 như web). Tin nổi
+bật hỏi 5 cái/lượt, cái nào câu trả lời thiếu thì hỏi lại (trả ít hơn cũng không chậm hơn hỏi từng cái). Instagram nghỉ
+1–2 s giữa hai yêu cầu (JSON nhỏ như trang tự gọi khi cuộn); Facebook / Threads giữ 2–4 s; trần 70 yêu cầu / 10 phút giữ.
+
 ## Thiết kế
 
 ### Tiện ích (`extensions/chromium` = `extensions/firefox`)
