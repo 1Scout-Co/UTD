@@ -171,12 +171,10 @@ export function ChannelDialog({
                 <SourceChips
                   counts={counts}
                   sources={sources}
-                  onToggle={(source) =>
-                    setSources((current) => toggleIn(current, SOCIAL_SOURCES, source, counts.map(([shown]) => shown)))
-                  }
+                  onToggle={(source) => setSources((current) => toggleIn(current, source))}
                   kinds={kinds}
                   kindCounts={social.platform === "facebook" ? null : kindCounts(socialEntries)}
-                  onToggleKind={(kind) => setKinds((current) => toggleIn(current, ["photo", "video"], kind))}
+                  onToggleKind={(kind) => setKinds((current) => toggleIn(current, kind))}
                 />
               ) : null}
               <FilterBar filter={filter} downloaded={downloaded} onChange={setFilter} social={Boolean(social)} />

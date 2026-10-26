@@ -120,8 +120,8 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 
 **Tải hàng loạt Facebook / Instagram / Threads** (2026-10-26, `notes/social-bulk.md`): cùng hộp và mã S-60–S-63, mở khi
 tiện ích gửi danh sách (chuột phải › "Tải hàng loạt bằng UTD" trên trang cá nhân / fanpage / nhóm / Tin). Khác kênh: tiêu đề
-"Tải hàng loạt"; chip loại kèm số (Bài viết, Ảnh, Video, Reels, Tin, Tin nổi bật; Ảnh/Video cho Instagram, Threads) — bỏ chip
-thì tiện ích thôi lấy loại đó; không chọn chất lượng (tải file gốc); không "Thử lại" (bấm lại trên trang); nút "Tải N mục".
+"Tải hàng loạt"; chip loại kèm số (Bài viết, Ảnh, Video, Reels, Tin, Tin nổi bật; Ảnh/Video cho Instagram, Threads) — không chip
+nào bật = tất cả, bật chip thì chỉ lọc theo chip đó và tiện ích thôi lấy các nhóm khác; không chọn chất lượng (tải file gốc); không "Thử lại" (bấm lại trên trang); nút "Tải N mục".
 Trên trang: nhãn nhỏ "UTD · Đang thu N ảnh/video · Dừng".
 
 #### Đăng nhập (cookie của trình duyệt)

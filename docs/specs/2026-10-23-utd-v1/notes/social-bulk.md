@@ -14,7 +14,8 @@ Nhánh `claude/social-bulk-e821de` (cắt từ main `93ed9a3`). Chủ dự án y
 - UTD mở hộp **Tải cả kênh** ở chế độ hàng loạt (không dựng màn mới): chip loại kèm số (Bài viết, Ảnh, Video, Reels, Tin,
   Tin nổi bật; Ảnh/Video cho Instagram, Threads), lọc Mới nhất N / Theo ngày / Chỉ mục mới, chọn từng ô, thư mục riêng theo
   tên trang, nút "Tải N mục". Mục đã tải lần trước hiện "Đã tải".
-- Bỏ một chip hoặc đặt "từ ngày" lúc tiện ích còn thu ⇒ tiện ích bỏ phần đó (đỡ gọi trang thừa). Nút **Dừng** ở hộp hoặc
+- Chip: không chip nào bật = tất cả; bật chip ⇒ chỉ lọc theo chip đó (nhóm và Ảnh/Video lọc chồng nhau). Bật chip nhóm
+  hoặc đặt "từ ngày" lúc tiện ích còn thu ⇒ tiện ích bỏ các phần còn lại (đỡ gọi trang thừa). Nút **Dừng** ở hộp hoặc
   trên trang ⇒ thôi thu, giữ phần đã có.
 - Mỗi ảnh/video có link file trên CDN (đã có chữ ký của Facebook/Instagram) ⇒ task HTTP thường trong hàng đợi chung, tên
   `<YYYY-MM-DD> <chú thích ngắn> <id>.<đuôi>`. Video Facebook không có link file ⇒ task media (yt-dlp) từ trang video.

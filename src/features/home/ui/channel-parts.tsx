@@ -287,7 +287,7 @@ export function QualityPicker({
   )
 }
 
-/** Tải hàng loạt: chip nhóm (Ảnh, Video, Reels, Tin…) kèm số mục; bấm để bỏ/chọn lại nhóm. */
+/** Tải hàng loạt: chip nhóm (Ảnh, Video, Reels, Tin…) kèm số mục; bấm để chỉ lọc theo chip đó, không chip nào bật = tất cả. */
 export function SourceChips({
   counts,
   sources,
@@ -312,7 +312,7 @@ export function SourceChips({
   return (
     <div role="group" aria-label={t("social.sources")} className="flex flex-wrap items-center gap-1.5">
       {counts.map(([source, count]) => (
-        <button key={source} type="button" aria-pressed={!sources || sources.has(source)} onClick={() => onToggle(source)} className={chip(!sources || sources.has(source))}>
+        <button key={source} type="button" aria-pressed={Boolean(sources?.has(source))} onClick={() => onToggle(source)} className={chip(Boolean(sources?.has(source)))}>
           {t(SOURCE_LABELS[source])}
           <span className="tabular-nums opacity-70">{formatNumber(count, 0)}</span>
         </button>
@@ -322,9 +322,9 @@ export function SourceChips({
             <button
               key={kind}
               type="button"
-              aria-pressed={!kinds || kinds.has(kind)}
+              aria-pressed={Boolean(kinds?.has(kind))}
               onClick={() => onToggleKind(kind)}
-              className={cn(chip(!kinds || kinds.has(kind)), kind === "photo" && "ms-2")}
+              className={cn(chip(Boolean(kinds?.has(kind))), kind === "photo" && "ms-2")}
             >
               {t(kind === "photo" ? "social.kind.photo" : "social.kind.video")}
               <span className="tabular-nums opacity-70">{formatNumber(kindCounts[kind], 0)}</span>

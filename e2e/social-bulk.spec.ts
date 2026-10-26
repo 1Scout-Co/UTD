@@ -729,7 +729,7 @@ const app = (page: Page) => ({
   },
 })
 
-test('S-61 hàng loạt: danh sách từ trình duyệt mở hộp; chip loại kèm số, Ảnh/Video; bỏ chip ⇒ báo tiện ích; Tải N mục gửi đúng id rồi đóng', async ({ page }) => {
+test('S-61 hàng loạt: danh sách từ trình duyệt mở hộp; chip loại kèm số, Ảnh/Video; bật chip ⇒ chỉ lọc theo đó, báo tiện ích; Tải N mục gửi đúng id rồi đóng', async ({ page }) => {
   await page.addInitScript(mockSocialDesktop, false)
   await page.goto('/')
   const desktop = app(page)
@@ -740,18 +740,20 @@ test('S-61 hàng loạt: danh sách từ trình duyệt mở hộp; chip loại 
   await expect(dialog.getByText('NASA', { exact: true })).toBeVisible()
   const chips = dialog.getByRole('group', { name: 'Loại' })
   await expect(chips.getByRole('button')).toHaveText(['Bài viết3', 'Reels1', 'Tin1', 'Tin nổi bật1', 'Ảnh3', 'Video3'])
-  // Mặc định: chọn mọi mục chưa tải (p3 đã tải bị ẩn vì "Chỉ mục mới").
+  // Mặc định: không chip nào bật = mọi mục chưa tải (p3 đã tải bị ẩn vì "Chỉ mục mới").
+  await expect(chips.getByRole('button', { pressed: true })).toHaveCount(0)
   await expect(dialog.getByRole('button', { name: 'Tải 5 mục' })).toBeVisible()
   await expect(dialog.getByRole('checkbox', { name: 'Tin nổi bật · Sao Hoả' })).toBeChecked()
 
-  // Bỏ "Bài viết": danh sách và nút đổi ngay; tiện ích được báo chỉ lấy các nhóm còn lại.
-  await chips.getByRole('button', { name: /^Bài viết/ }).click()
-  await expect(dialog.getByRole('button', { name: 'Tải 3 mục' })).toBeVisible()
+  // Bật "Reels" + "Tin nổi bật": danh sách và nút đổi ngay; tiện ích được báo chỉ lấy hai nhóm đó.
+  await chips.getByRole('button', { name: /^Reels/ }).click()
+  await chips.getByRole('button', { name: /^Tin nổi bật/ }).click()
+  await expect(dialog.getByRole('button', { name: 'Tải 2 mục' })).toBeVisible()
   await expect
     .poll(async () => (await desktop.calls('social_control')).at(-1))
-    .toEqual({ listingId: 'sb-abcdef123456', go: true, sources: ['photos', 'videos', 'reels', 'stories', 'highlights'], since: null })
-  // Chỉ Video.
-  await chips.getByRole('button', { name: /^Ảnh/ }).click()
+    .toEqual({ listingId: 'sb-abcdef123456', go: true, sources: ['reels', 'highlights'], since: null })
+  // Thêm "Video": cả hai mục đều là video.
+  await chips.getByRole('button', { name: /^Video/ }).click()
   await expect(dialog.getByRole('button', { name: 'Tải 2 mục' })).toBeVisible()
 
   // Dừng: tiện ích thôi lấy; danh sách giữ nguyên.
@@ -770,21 +772,25 @@ test('S-61 hàng loạt: danh sách từ trình duyệt mở hộp; chip loại 
   expect(await desktop.calls('social_close')).toEqual([{ listingId: 'sb-abcdef123456' }])
 })
 
-test('S-61 hàng loạt: bỏ hết các nhóm đang hiện ⇒ quay về mọi nhóm (không thành danh sách trống); bỏ Video ⇒ chỉ Ảnh', async ({ page }) => {
+test('S-61 hàng loạt: bật riêng "Ảnh" ⇒ chỉ ảnh của mọi nhóm; bật rồi tắt hết các nhóm ⇒ quay về tất cả', async ({ page }) => {
   await page.addInitScript(mockSocialDesktop, false)
   await page.goto('/')
   await app(page).open()
   const dialog = page.getByRole('dialog')
   const chips = dialog.getByRole('group', { name: 'Loại' })
   await expect(dialog.getByRole('button', { name: 'Tải 5 mục' })).toBeVisible()
-  // Hồ sơ chỉ có 4 nhóm (không có nhóm Ảnh / Video kiểu Facebook): bỏ cả 4.
-  for (const name of [/^Bài viết/, /^Reels/, /^Tin\s*\d/, /^Tin nổi bật/]) await chips.getByRole('button', { name }).click()
-  await expect(dialog.getByRole('button', { name: 'Tải 5 mục' })).toBeVisible()
-  await expect(chips.getByRole('button', { name: /^Bài viết/ })).toHaveAttribute('aria-pressed', 'true')
-  // Chỉ Ảnh: p1, s1 (p3 đã tải bị ẩn).
-  await chips.getByRole('button', { name: /^Video/ }).click()
+  // Chỉ Ảnh: p1, s1 (p3 đã tải bị ẩn); các nhóm không cần đụng tới.
+  await chips.getByRole('button', { name: /^Ảnh/ }).click()
   await expect(dialog.getByRole('button', { name: 'Tải 2 mục' })).toBeVisible()
   await expect(dialog.getByText('Không có mục khớp bộ lọc.')).toHaveCount(0)
+  await chips.getByRole('button', { name: /^Ảnh/ }).click()
+  // Bật cả 4 nhóm rồi tắt cả 4: không chip nào bật = tất cả.
+  const groups = [/^Bài viết/, /^Reels/, /^Tin\s*\d/, /^Tin nổi bật/]
+  for (const name of groups) await chips.getByRole('button', { name }).click()
+  await expect(chips.getByRole('button', { pressed: true })).toHaveCount(4)
+  for (const name of groups) await chips.getByRole('button', { name }).click()
+  await expect(chips.getByRole('button', { pressed: true })).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: 'Tải 5 mục' })).toBeVisible()
 })
 
 test('S-63 hàng loạt: bị chặn tạm ⇒ câu rõ, không có nút thử lại; a11y không lỗi', async ({ page }) => {
