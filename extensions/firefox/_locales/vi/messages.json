@@ -51,5 +51,6 @@
   "socialHint": { "message": "Giữ tab này mở; tab có thể tự chuyển trang." },
   "socialDone": { "message": "Đã gửi $COUNT$ ảnh/video sang UTD", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "Mở trang cá nhân, fanpage, nhóm hoặc Tin rồi bấm lại." },
-  "socialFailed": { "message": "Không thu được ảnh/video trên trang này." }
+  "socialFailed": { "message": "Không thu được ảnh/video trên trang này." },
+  "socialUseBulk": { "message": "Trang này: chuột phải › UTD › Tải hàng loạt bằng UTD" }
 }

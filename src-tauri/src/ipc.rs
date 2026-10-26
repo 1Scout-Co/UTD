@@ -119,6 +119,9 @@ fn route(request: &PipeRequest, token: &str) -> Route {
     } else if crate::media_pages::is_drive_folder(&request.url) {
         // Không gắn vào download chờ link mới, không tạo dòng tải hỏng: báo cách làm.
         Route::Reject(crate::media_pages::DRIVE_FOLDER)
+    } else if crate::media_pages::is_social_profile(&request.url) {
+        // Trang cá nhân / fanpage / nhóm: không tạo dòng tải trang HTML; báo cách tải hàng loạt.
+        Route::Reject(crate::media_pages::SOCIAL_PROFILE)
     } else if let Some(links) = needs_confirm(request) {
         Route::Confirm(links)
     } else {
@@ -747,6 +750,11 @@ mod tests {
             Route::SocialList
         );
         assert!(matches!(ask(serde_json::json!({ "token": TOKEN, "url": page, "kind": "social-list" })), Route::Reject(_)));
+        // "Tải bằng UTD" lên trang hồ sơ: không tải trang HTML, báo cách tải hàng loạt.
+        assert_eq!(
+            route(&request(TOKEN, "https://www.instagram.com/mytay95/"), TOKEN),
+            Route::Reject(crate::media_pages::SOCIAL_PROFILE)
+        );
         assert!(matches!(
             ask(serde_json::json!({ "token": "0".repeat(TOKEN.len()), "url": page, "kind": "social-list", "social": {} })),
             Route::Reject(_)

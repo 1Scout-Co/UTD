@@ -146,6 +146,8 @@
   "add.start": "Mulai",
   "add.channelLink": "Ini tautan channel",
   "add.channelLinkHint": "{host} · pilih video di langkah berikutnya",
+  "add.socialLink": "Ini profil, halaman, atau grup",
+  "add.socialLinkHint": "Buka di browser › klik kanan › UTD › Unduh massal dengan UTD",
   "add.downloadChannel": "Unduh channel",
 
   "warn.title": "Peringatan sebelum mengunduh",
@@ -765,6 +767,7 @@
   "err.social.gone": "Daftar sudah kedaluwarsa. Klik lagi di halaman.",
   "err.social.empty": "Belum ada foto/video yang dipilih.",
   "err.social.no_link": "Item ini tidak punya link unduhan.",
+  "err.social.use_bulk": "Ini profil, halaman, atau grup, bukan satu video. Buka di browser, lalu klik kanan › UTD › Unduh massal dengan UTD.",
   "err.batch.invalid": "Daftar tautan tidak valid.",
   "err.batch.channel_link": "Ini tautan channel: tempel di Tambah URL untuk memilih video channel tersebut.",
   "err.link.drive_folder": "Ini folder Google Drive, bukan file. Buka file di halamannya sendiri, lalu coba lagi.",

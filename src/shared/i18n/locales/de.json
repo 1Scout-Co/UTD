@@ -149,6 +149,8 @@
   "add.start": "Starten",
   "add.channelLink": "Das ist ein Kanallink",
   "add.channelLinkHint": "{host} · Videos im nächsten Schritt wählen",
+  "add.socialLink": "Das ist ein Profil, eine Seite oder Gruppe",
+  "add.socialLinkHint": "Im Browser öffnen › Rechtsklick › UTD › Massendownload mit UTD",
   "add.downloadChannel": "Kanal herunterladen",
 
   "warn.title": "Download-Warnung",
@@ -781,6 +783,7 @@
   "err.social.gone": "Die Liste ist abgelaufen. Klicke erneut auf der Seite.",
   "err.social.empty": "Keine Fotos/Videos ausgewählt.",
   "err.social.no_link": "Dieser Eintrag hat keinen Download-Link.",
+  "err.social.use_bulk": "Das ist ein Profil, eine Seite oder Gruppe, kein einzelnes Video. Im Browser öffnen, dann Rechtsklick › UTD › Massendownload mit UTD.",
   "err.batch.invalid": "Die Linkliste ist ungültig.",
   "err.batch.channel_link": "Das ist ein Kanallink: in „URL hinzufügen“ einfügen, um die Videos des Kanals auszuwählen.",
   "err.link.drive_folder": "Das ist ein Google-Drive-Ordner, keine Datei. Öffne die Datei auf einer eigenen Seite und versuche es erneut.",

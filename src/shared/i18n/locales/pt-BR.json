@@ -152,6 +152,8 @@
   "add.start": "Iniciar",
   "add.channelLink": "Este é um link de canal",
   "add.channelLinkHint": "{host} · escolha os vídeos na próxima etapa",
+  "add.socialLink": "Isto é um perfil, página ou grupo",
+  "add.socialLinkHint": "Abra no navegador › clique direito › UTD › Download em massa com o UTD",
   "add.downloadChannel": "Baixar canal",
 
   "warn.title": "Aviso antes de baixar",
@@ -797,6 +799,7 @@
   "err.social.gone": "A lista expirou. Clique de novo na página.",
   "err.social.empty": "Nenhuma foto/vídeo selecionado.",
   "err.social.no_link": "Este item não tem link de download.",
+  "err.social.use_bulk": "Isto é um perfil, página ou grupo, não um vídeo. Abra no navegador e clique direito › UTD › Download em massa com o UTD.",
   "err.batch.invalid": "A lista de links é inválida.",
   "err.batch.channel_link": "Este é um link de canal: cole-o em Adicionar URL para escolher os vídeos do canal.",
   "err.link.drive_folder": "Esta é uma pasta do Google Drive, não um arquivo. Abra o arquivo em uma página própria e tente novamente.",

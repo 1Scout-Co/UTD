@@ -1,6 +1,8 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 
+import { isSocialProfile } from '../src/features/home/model/media-pages'
+
 // Tải hàng loạt Facebook / Instagram / Threads (notes/social-bulk.md).
 // Phần 1 — tiện ích: background.js + social-bulk.js thật với API trình duyệt giả; "tab" là chính trang thử (trang
 // Instagram / Threads / Facebook giả qua page.route, dữ liệu giả theo hình dạng thật trong notes). Không mạng thật,
@@ -276,6 +278,76 @@ test('trang không hỗ trợ (bài viết lẻ, trang chủ) ⇒ báo trên tra
     { platform: 'threads', kind: null, photos: null, reels: null, base: 'https://www.threads.net/@zuck' },
     null,
   ])
+})
+
+// --- Link trang cá nhân / fanpage / nhóm dán vào UTD hoặc bấm "Tải bằng UTD": nhắc dùng Tải hàng loạt ---
+
+// Cùng bộ ca với `social_profiles_point_to_the_bulk_download` trong src-tauri/src/media_pages.rs.
+const SOCIAL_PROFILES = [
+  'https://www.instagram.com/mytay95/',
+  'https://instagram.com/nasa',
+  'https://www.instagram.com/nasa/reels/',
+  'https://www.instagram.com/stories/nasa/',
+  'https://www.facebook.com/trangthu',
+  'https://web.facebook.com/trang.thu-2/photos_by',
+  'https://www.facebook.com/profile.php?id=1000123',
+  'https://www.facebook.com/people/Tr%E1%BA%A7n-A/1000123/',
+  'https://www.facebook.com/groups/12345/',
+  'https://www.facebook.com/groups/hoi.anh/media',
+  'https://www.facebook.com/stories/555/UzpfSVNDOjE=/?source=profile_highlight',
+  'https://www.threads.net/@zuck',
+  'https://www.threads.com/@zuck/media',
+]
+const NOT_SOCIAL_PROFILES = [
+  'https://www.instagram.com/',
+  'https://www.instagram.com/p/Cabc123/',
+  'https://www.instagram.com/explore/',
+  'https://www.instagram.com/stories/highlights/1789/',
+  'https://www.facebook.com/',
+  'https://www.facebook.com/watch/',
+  'https://www.facebook.com/somepage/videos/1234567890/',
+  'https://www.facebook.com/profile.php',
+  'https://www.facebook.com/marketplace',
+  'https://www.facebook.com/groups/12345/posts/678',
+  'https://www.threads.com/',
+  'https://www.threads.com/@zuck/post/C1',
+  'https://notinstagram.com/nasa',
+  'https://example.com/nasa',
+]
+
+test('media-pages: nhận ra trang cá nhân / fanpage / nhóm / Tin của Facebook, Instagram, Threads', () => {
+  for (const url of SOCIAL_PROFILES) expect(isSocialProfile(url), url).toBe(true)
+  for (const url of NOT_SOCIAL_PROFILES) expect(isSocialProfile(url), url).toBe(false)
+})
+
+test('S-05: dán link trang cá nhân vào Thêm URL ⇒ thẻ nhắc Tải hàng loạt trên trình duyệt, không tải trang HTML', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Thêm URL' }).first().click()
+  const add = page.getByRole('dialog')
+  await add.getByLabel('URL cần tải').fill('https://www.instagram.com/mytay95/')
+  await expect(add.getByText('Đây là trang cá nhân / fanpage / nhóm')).toBeVisible()
+  await expect(add.getByText('Mở trang trên trình duyệt › chuột phải › UTD › Tải hàng loạt bằng UTD')).toBeVisible()
+  await expect(add.getByLabel('Tên file')).toHaveCount(0)
+  await expect(add.locator('[data-primary]')).toBeDisabled()
+  await add.getByLabel('URL cần tải').press('Enter')
+  await expect(add.getByRole('heading', { name: 'Thêm download' })).toBeVisible()
+  // Link thường vẫn như cũ.
+  await add.getByLabel('URL cần tải').fill('https://example.com/a.zip')
+  await expect(add.getByText('Đây là trang cá nhân / fanpage / nhóm')).toHaveCount(0)
+  await expect(add.locator('[data-primary]')).toBeEnabled()
+})
+
+test('tiện ích: "Tải bằng UTD" lên chính trang hồ sơ ⇒ nhắc Tải hàng loạt ngay trên trang, không gửi UTD', async ({ page }) => {
+  await page.route('https://www.instagram.com/**', (route) => route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><p>mytay95</p>' }))
+  await loadExtension(page, 'https://www.instagram.com/mytay95/')
+  await page.evaluate(() => {
+    const bg = (window as unknown as { __bg: { clicks: ((info: unknown, tab: unknown) => void)[] } }).__bg
+    bg.clicks[0]({ menuItemId: 'utd-download', pageUrl: location.href }, { id: 7, url: location.href })
+  })
+  await expect(page.locator('#utd-social-pill')).toBeAttached()
+  const text = await page.evaluate(() => document.getElementById('utd-social-pill')?.shadowRoot?.querySelector('.text')?.textContent)
+  expect(text).toBe('UTD · socialUseBulk')
+  expect(await sent(page)).toEqual([])
 })
 
 // --- Threads: dữ liệu nhúng trong trang + tự cuộn (trang tự nạp thêm bằng GraphQL) ---

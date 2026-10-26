@@ -51,5 +51,6 @@
   "socialHint": { "message": "أبقِ هذا التبويب مفتوحًا؛ قد ينتقل بين الصفحات تلقائيًا." },
   "socialDone": { "message": "أُرسلت الصور/الفيديوهات إلى UTD: $COUNT$", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "افتح ملفًا شخصيًا أو صفحة أو مجموعة أو قصة ثم أعد المحاولة." },
-  "socialFailed": { "message": "تعذّر جمع الصور/الفيديوهات من هذه الصفحة." }
+  "socialFailed": { "message": "تعذّر جمع الصور/الفيديوهات من هذه الصفحة." },
+  "socialUseBulk": { "message": "لهذه الصفحة: انقر بزر الفأرة الأيمن › UTD › تنزيل جماعي باستخدام UTD" }
 }

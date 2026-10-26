@@ -51,5 +51,6 @@
   "socialHint": { "message": "请保持此标签页打开；它可能会自动切换页面。" },
   "socialDone": { "message": "已将 $COUNT$ 个图片/视频发送到 UTD", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "请打开个人主页、公共主页、小组或快拍后重试。" },
-  "socialFailed": { "message": "无法在此页面收集图片/视频。" }
+  "socialFailed": { "message": "无法在此页面收集图片/视频。" },
+  "socialUseBulk": { "message": "此页面：右键 › UTD › 用 UTD 批量下载" }
 }

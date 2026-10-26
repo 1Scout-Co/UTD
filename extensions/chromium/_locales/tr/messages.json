@@ -51,5 +51,6 @@
   "socialHint": { "message": "Bu sekmeyi açık tutun; sekme kendi kendine sayfa değiştirebilir." },
   "socialDone": { "message": "$COUNT$ fotoğraf/video UTD'ye gönderildi", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "Bir profil, sayfa, grup veya hikâye açıp tekrar deneyin." },
-  "socialFailed": { "message": "Bu sayfada fotoğraf/video toplanamadı." }
+  "socialFailed": { "message": "Bu sayfada fotoğraf/video toplanamadı." },
+  "socialUseBulk": { "message": "Bu sayfa için: sağ tık › UTD › UTD ile toplu indir" }
 }

@@ -146,6 +146,8 @@
   "add.start": "開始",
   "add.channelLink": "這是頻道連結",
   "add.channelLinkHint": "{host} · 下一步選擇影片",
+  "add.socialLink": "這是個人檔案、粉絲專頁或社團",
+  "add.socialLinkHint": "在瀏覽器中開啟 › 右鍵 › UTD › 用 UTD 批次下載",
   "add.downloadChannel": "下載頻道",
 
   "warn.title": "下載前警告",
@@ -765,6 +767,7 @@
   "err.social.gone": "清單已過期。請在頁面上再點一次。",
   "err.social.empty": "未選擇任何圖片/影片。",
   "err.social.no_link": "此項目沒有下載連結。",
+  "err.social.use_bulk": "這是個人檔案、粉絲專頁或社團，不是單一影片。請在瀏覽器中開啟，然後右鍵 › UTD › 用 UTD 批次下載。",
   "err.batch.invalid": "連結清單無效。",
   "err.batch.channel_link": "這是頻道連結：請貼到「新增 URL」以選擇頻道的影片。",
   "err.link.drive_folder": "這是 Google 雲端硬碟資料夾，不是檔案。請在獨立頁面開啟檔案，然後再試一次。",

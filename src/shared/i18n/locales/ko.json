@@ -146,6 +146,8 @@
   "add.start": "시작",
   "add.channelLink": "채널 링크입니다",
   "add.channelLinkHint": "{host} · 다음 단계에서 동영상 선택",
+  "add.socialLink": "프로필, 페이지 또는 그룹입니다",
+  "add.socialLinkHint": "브라우저에서 열기 › 오른쪽 클릭 › UTD › UTD로 일괄 다운로드",
   "add.downloadChannel": "채널 다운로드",
 
   "warn.title": "다운로드 전 경고",
@@ -765,6 +767,7 @@
   "err.social.gone": "목록이 만료되었습니다. 페이지에서 다시 클릭하세요.",
   "err.social.empty": "선택한 사진/동영상이 없습니다.",
   "err.social.no_link": "이 항목에는 다운로드 링크가 없습니다.",
+  "err.social.use_bulk": "동영상이 아니라 프로필, 페이지 또는 그룹입니다. 브라우저에서 연 다음 오른쪽 클릭 › UTD › UTD로 일괄 다운로드를 선택하세요.",
   "err.batch.invalid": "링크 목록이 올바르지 않습니다.",
   "err.batch.channel_link": "채널 링크입니다. ‘URL 추가’에 붙여넣어 채널의 동영상을 선택하세요.",
   "err.link.drive_folder": "Google 드라이브 폴더이며 파일이 아닙니다. 파일을 별도 페이지에서 연 다음 다시 시도하세요.",

@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from "react"
 
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
-import { Download, Film, FolderOpen, Link2, ListVideo } from "lucide-react"
+import { Download, Film, FolderOpen, Link2, ListVideo, Users } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -17,7 +17,7 @@ import { t } from "@/shared/i18n/i18n"
 import { preflightLink } from "../api/detail"
 import { parseLinks } from "../model/batch-links"
 import { fileNameFromUrl } from "../model/download-mapper"
-import { isChannelPage, isMediaPage } from "../model/media-pages"
+import { isChannelPage, isMediaPage, isSocialProfile } from "../model/media-pages"
 import type { AddDownloadPayload } from "../model/types"
 import type { WarnedLink } from "../model/warnings"
 import { SingleWarning } from "./warning-panel"
@@ -40,13 +40,29 @@ function UrlPreview({
   name,
   mediaPage,
   channelPage,
+  socialPage,
 }: {
   url: string
   host: string
   name: string
   mediaPage: boolean
   channelPage: boolean
+  /** Trang cá nhân / fanpage / nhóm: chỉ tải cả trang bằng Tải hàng loạt trên trình duyệt. */
+  socialPage: boolean
 }) {
+  if (socialPage) {
+    return (
+      <div role="status" className="flex items-center gap-3 rounded-xl bg-accent p-3 text-accent-foreground">
+        <div className="grid size-10 place-items-center rounded-lg bg-card text-primary shadow-soft">
+          <Users className="size-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold">{t("add.socialLink")}</div>
+          <div className="mt-0.5 text-xs">{t("add.socialLinkHint")}</div>
+        </div>
+      </div>
+    )
+  }
   if (mediaPage || channelPage) {
     const Icon = channelPage ? ListVideo : Film
     return (
@@ -168,6 +184,7 @@ export function AddDownloadDialog({
   const channelPage = isChannelPage(url)
   // Link kênh cũng rời hộp này (sang Tải cả kênh): như link video, không có tên file/thư mục.
   const mediaPage = isMediaPage(url) || channelPage
+  const socialPage = isSocialProfile(url)
   const suggestedName = fileNameFromUrl(url)
   const effectiveName = fileName.trim() || suggestedName
   const effectiveDir = destDir ?? defaultDir
@@ -201,6 +218,7 @@ export function AddDownloadDialog({
       setLocalError(t("add.needUrl"))
       return
     }
+    if (socialPage) return
     if (mediaPage) {
       onMedia(url.trim())
       setUrl("")
@@ -252,6 +270,7 @@ export function AddDownloadDialog({
             name={effectiveName}
             mediaPage={mediaPage}
             channelPage={channelPage}
+            socialPage={socialPage}
           />
 
           <div className="space-y-2">
@@ -287,7 +306,7 @@ export function AddDownloadDialog({
             </div>
           </div>
 
-          {mediaPage ? null : (
+          {mediaPage || socialPage ? null : (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
@@ -376,7 +395,7 @@ export function AddDownloadDialog({
             <Button
               data-primary
               type="submit"
-              disabled={busy || preflight.checking || !url.trim()}
+              disabled={busy || preflight.checking || !url.trim() || socialPage}
             >
               {channelPage ? <ListVideo /> : mediaPage ? <Film /> : <Download />}
               {channelPage

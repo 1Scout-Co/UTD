@@ -149,6 +149,8 @@
   "add.start": "Start",
   "add.channelLink": "This is a channel link",
   "add.channelLinkHint": "{host} · pick the videos in the next step",
+  "add.socialLink": "This is a profile, page or group",
+  "add.socialLinkHint": "Open it in the browser › right-click › UTD › Bulk download with UTD",
   "add.downloadChannel": "Download channel",
 
   "warn.title": "Download warning",
@@ -781,6 +783,7 @@
   "err.social.gone": "The list has expired. Click again on the page.",
   "err.social.empty": "No photos/videos selected.",
   "err.social.no_link": "This item has no download link.",
+  "err.social.use_bulk": "This is a profile, page or group, not a single video. Open it in the browser, then right-click › UTD › Bulk download with UTD.",
   "err.batch.invalid": "The link list is invalid.",
   "err.batch.channel_link": "This is a channel link: paste it into Add URL to pick the channel's videos.",
   "err.link.drive_folder": "This is a Google Drive folder, not a file. Open the file in its own page, then try again.",

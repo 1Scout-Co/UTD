@@ -51,5 +51,6 @@
   "socialHint": { "message": "このタブは開いたままにしてください。ページが自動で切り替わることがあります。" },
   "socialDone": { "message": "$COUNT$ 件の写真/動画をUTDに送信しました", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "プロフィール、ページ、グループ、またはストーリーを開いてからもう一度お試しください。" },
-  "socialFailed": { "message": "このページでは写真/動画を収集できませんでした。" }
+  "socialFailed": { "message": "このページでは写真/動画を収集できませんでした。" },
+  "socialUseBulk": { "message": "このページは右クリック › UTD › UTDで一括ダウンロード" }
 }

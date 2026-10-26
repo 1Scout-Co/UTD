@@ -51,5 +51,6 @@
   "socialHint": { "message": "Keep this tab open; it may switch pages by itself." },
   "socialDone": { "message": "Sent $COUNT$ photos/videos to UTD", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "Open a profile, page, group or story, then try again." },
-  "socialFailed": { "message": "Couldn't collect photos/videos on this page." }
+  "socialFailed": { "message": "Couldn't collect photos/videos on this page." },
+  "socialUseBulk": { "message": "For this page: right-click › UTD › Bulk download with UTD" }
 }

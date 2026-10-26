@@ -25,6 +25,7 @@ const HOST_TEXT = {
 // Câu có mã (`[mã] câu`, src-tauri/src/coded.rs): mã đã biết ⇒ chữ của tiện ích; mã khác ⇒ bỏ mã, giữ câu.
 const HOST_CODES = {
   "link.drive_folder": "driveFolder",
+  "social.use_bulk": "socialUseBulk",
 }
 const fromHost = (text) => {
   if (HOST_TEXT[text]) return t(HOST_TEXT[text])
@@ -257,6 +258,11 @@ function pickUrl(info, tab) {
 async function download(info, tab) {
   const url = pickUrl(info, tab)
   if (!url) return
+  // Chuột phải lên chính trang cá nhân / fanpage / nhóm (social-bulk.js): nhắc dùng Tải hàng loạt ngay trên trang.
+  if (url === tab?.url && typeof socialPlan === "function" && socialPlan(url)) {
+    await socialHint(tab)
+    return
+  }
   const auth = await authFor(url, tab?.url, tab).catch(() => null)
   await sendToUtd(
     withAuth({ version: 1, type: "download", url, pageUrl: tab?.url ?? null, suggestedName: null }, auth),

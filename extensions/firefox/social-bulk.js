@@ -440,6 +440,12 @@ async function socialFacebook(job) {
   if (job.pageUrl !== (await api.tabs.get(job.tabId)).url) await api.tabs.update(job.tabId, { url: job.pageUrl }).catch(() => undefined)
 }
 
+/** Bấm "Tải bằng UTD" lên chính trang hồ sơ: trang không phải một file/video, nhắc mục Tải hàng loạt. */
+async function socialHint(tab) {
+  if (!tab?.id || socialJobs.has(tab.id)) return
+  await new SocialJob(tab, { platform: "none" }).pill(t("socialUseBulk"))
+}
+
 /** Bấm "Tải hàng loạt bằng UTD". Bấm lần nữa khi đang chạy = Dừng. */
 async function socialStart(tab) {
   if (!tab?.id) return

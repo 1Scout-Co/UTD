@@ -146,6 +146,8 @@
   "add.start": "开始",
   "add.channelLink": "这是频道链接",
   "add.channelLinkHint": "{host} · 下一步选择视频",
+  "add.socialLink": "这是个人主页、公共主页或小组",
+  "add.socialLinkHint": "在浏览器中打开 › 右键 › UTD › 用 UTD 批量下载",
   "add.downloadChannel": "下载频道",
 
   "warn.title": "下载前警告",
@@ -765,6 +767,7 @@
   "err.social.gone": "列表已过期。请在页面上再点一次。",
   "err.social.empty": "未选择任何图片/视频。",
   "err.social.no_link": "此项目没有下载链接。",
+  "err.social.use_bulk": "这是个人主页、公共主页或小组，不是单个视频。请在浏览器中打开，然后右键 › UTD › 用 UTD 批量下载。",
   "err.batch.invalid": "链接列表无效。",
   "err.batch.channel_link": "这是频道链接：请粘贴到“添加 URL”中以选择频道的视频。",
   "err.link.drive_folder": "这是 Google 云端硬盘文件夹，不是文件。请在单独的页面中打开文件，然后重试。",

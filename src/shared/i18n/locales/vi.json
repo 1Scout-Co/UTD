@@ -146,6 +146,8 @@
   "add.start": "Bắt đầu",
   "add.channelLink": "Đây là link kênh",
   "add.channelLinkHint": "{host} · chọn video ở bước sau",
+  "add.socialLink": "Đây là trang cá nhân / fanpage / nhóm",
+  "add.socialLinkHint": "Mở trang trên trình duyệt › chuột phải › UTD › Tải hàng loạt bằng UTD",
   "add.downloadChannel": "Tải kênh",
 
   "warn.title": "Cảnh báo trước khi tải",
@@ -765,6 +767,7 @@
   "err.social.gone": "Danh sách đã hết hạn. Bấm lại trên trang.",
   "err.social.empty": "Chưa chọn ảnh/video nào.",
   "err.social.no_link": "Mục này không có link tải.",
+  "err.social.use_bulk": "Đây là trang cá nhân / fanpage / nhóm, không phải một video. Mở trang đó trên trình duyệt, chuột phải › UTD › Tải hàng loạt bằng UTD.",
   "err.batch.invalid": "Danh sách link không hợp lệ.",
   "err.batch.channel_link": "Đây là link kênh: dán vào ô Thêm URL để chọn video của kênh.",
   "err.link.drive_folder": "Đây là thư mục Google Drive, không phải file. Mở file ở trang riêng rồi thử lại.",

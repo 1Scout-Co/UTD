@@ -146,6 +146,8 @@
   "add.start": "開始",
   "add.channelLink": "チャンネルのリンクです",
   "add.channelLinkHint": "{host} · 次の手順で動画を選択",
+  "add.socialLink": "プロフィール、ページ、またはグループです",
+  "add.socialLinkHint": "ブラウザーで開く › 右クリック › UTD › UTDで一括ダウンロード",
   "add.downloadChannel": "チャンネルをダウンロード",
 
   "warn.title": "ダウンロード前の警告",
@@ -765,6 +767,7 @@
   "err.social.gone": "一覧の有効期限が切れました。ページでもう一度クリックしてください。",
   "err.social.empty": "写真/動画が選択されていません。",
   "err.social.no_link": "この項目にはダウンロードリンクがありません。",
+  "err.social.use_bulk": "これは動画ではなく、プロフィール、ページ、またはグループです。ブラウザーで開き、右クリック › UTD › UTDで一括ダウンロード を選んでください。",
   "err.batch.invalid": "リンクの一覧が無効です。",
   "err.batch.channel_link": "これはチャンネルのリンクです。「URLを追加」に貼り付けて、チャンネルの動画を選択してください。",
   "err.link.drive_folder": "これは Google ドライブのフォルダで、ファイルではありません。ファイルを単独のページで開いてから、もう一度お試しください。",

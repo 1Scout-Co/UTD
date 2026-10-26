@@ -85,6 +85,8 @@ fn add_batch(app: &AppHandle, input: BatchInput) -> Result<BatchResult, String> 
             Err(crate::media_pages::CHANNEL_IN_BATCH.to_string())
         } else if crate::media_pages::is_drive_folder(&url) {
             Err(crate::media_pages::DRIVE_FOLDER.to_string())
+        } else if crate::media_pages::is_social_profile(&url) {
+            Err(crate::media_pages::SOCIAL_PROFILE.to_string())
         } else {
             add_file(&state, &folder, &mut names, url.clone(), grant.as_deref())
         };

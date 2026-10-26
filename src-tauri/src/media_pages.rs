@@ -83,6 +83,8 @@ struct Page<'a> {
     video_param: bool,
     /// Có `?list=<id>` (playlist YouTube).
     list_param: bool,
+    /// Có `?id=<id>` (`facebook.com/profile.php?id=`).
+    id_param: bool,
 }
 
 impl Page<'_> {
@@ -147,6 +149,74 @@ pub fn is_drive_folder(raw: &str) -> bool {
 
 pub const DRIVE_FOLDER: &str =
     "[link.drive_folder] Đây là thư mục Google Drive, không phải file. Mở file ở trang riêng rồi thử lại.";
+
+/// Trang cá nhân / fanpage / nhóm / Tin của Facebook, Instagram, Threads: không phải một video, yt-dlp không liệt kê
+/// được. Cả trang chỉ tải được bằng "Tải hàng loạt bằng UTD" của tiện ích, chạy trong trang đã đăng nhập
+/// (notes/social-bulk.md). Luật giống `socialPlan` trong extensions/*/social-bulk.js.
+pub fn is_social_profile(raw: &str) -> bool {
+    !is_media_page(raw) && matches_site(raw, SOCIAL_SITES)
+}
+
+pub const SOCIAL_PROFILE: &str = "[social.use_bulk] Đây là trang cá nhân / fanpage / nhóm, không phải một video. Mở trang đó trên trình duyệt, chuột phải › UTD › Tải hàng loạt bằng UTD.";
+
+const SOCIAL_SITES: &[(&str, Rule)] = &[
+    ("facebook.com", facebook_profile),
+    ("instagram.com", instagram_profile),
+    ("threads.net", threads_profile),
+    ("threads.com", threads_profile),
+];
+
+/// Đoạn đầu đường dẫn Facebook không phải tên trang (`/watch`, `/marketplace`…).
+const FACEBOOK_RESERVED: &[&str] = &[
+    "watch", "reel", "reels", "photo", "photo.php", "photos", "videos", "video.php", "marketplace", "gaming", "events",
+    "search", "notifications", "messages", "friends", "saved", "settings", "help", "login", "login.php",
+    "permalink.php", "story.php", "share", "hashtag", "bookmarks", "ads", "business", "pages", "groups", "stories",
+    "home.php", "memories", "privacy", "policies", "dialog",
+];
+/// Thẻ của trang Facebook (`/<trang>/photos_by`…).
+const FACEBOOK_TABS: &[&str] = &["photos", "photos_by", "photos_of", "photos_albums", "videos", "reels"];
+const INSTAGRAM_RESERVED: &[&str] = &[
+    "p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about", "legal", "developer", "web", "api",
+    "challenge", "emails", "session",
+];
+const INSTAGRAM_TABS: &[&str] = &["reels", "tagged"];
+const THREADS_TABS: &[&str] = &["replies", "media", "reposts"];
+
+/// Tên người dùng Instagram/Threads, tên trang Facebook: chữ, số, `.`, `_` (`-` chỉ có ở Facebook).
+fn is_name(part: &str, extra: &str) -> bool {
+    !part.is_empty()
+        && part.len() <= 100
+        && part.chars().all(|character| character.is_ascii_alphanumeric() || "._".contains(character) || extra.contains(character))
+}
+
+fn facebook_profile(page: &Page<'_>) -> bool {
+    match page.at(0) {
+        "groups" => is_name(page.at(1), "-") && (!page.has(2) || page.at(2) == "media"),
+        "profile.php" => page.id_param,
+        "people" => is_digits(page.at(2)),
+        "stories" => is_digits(page.at(1)),
+        name => {
+            is_name(name, "-")
+                && !FACEBOOK_RESERVED.contains(&name.to_ascii_lowercase().as_str())
+                && (!page.has(1) || (page.path.len() == 2 && FACEBOOK_TABS.contains(&page.at(1))))
+        }
+    }
+}
+
+fn instagram_profile(page: &Page<'_>) -> bool {
+    if page.at(0) == "stories" {
+        return is_name(page.at(1), "") && page.at(1) != "highlights";
+    }
+    is_name(page.at(0), "")
+        && !INSTAGRAM_RESERVED.contains(&page.at(0))
+        && (!page.has(1) || (page.path.len() == 2 && INSTAGRAM_TABS.contains(&page.at(1))))
+}
+
+fn threads_profile(page: &Page<'_>) -> bool {
+    is_handle(page.at(0))
+        && is_name(&page.at(0)[1..], "")
+        && (!page.has(1) || (page.path.len() == 2 && THREADS_TABS.contains(&page.at(1))))
+}
 
 /// Máy chủ tải thật của Google Drive (nút Tải xuống trên Drive đi tới đây).
 const DRIVE_DOWNLOAD: &str = "https://drive.usercontent.google.com/download";
@@ -222,6 +292,7 @@ fn matches_site(raw: &str, sites: &[(&str, Rule)]) -> bool {
         path,
         video_param: param("v"),
         list_param: param("list"),
+        id_param: param("id"),
     };
     sites
         .iter()
@@ -644,6 +715,55 @@ mod tests {
         for url in MEDIA_PAGES {
             assert!(!is_channel_page(url), "{url}");
         }
+    }
+
+    /// Cùng bộ ca với `e2e/media-routing.spec.ts` (bản TS).
+    const SOCIAL_PROFILES: &[&str] = &[
+        "https://www.instagram.com/mytay95/",
+        "https://instagram.com/nasa",
+        "https://www.instagram.com/nasa/reels/",
+        "https://www.instagram.com/stories/nasa/",
+        "https://www.facebook.com/trangthu",
+        "https://web.facebook.com/trang.thu-2/photos_by",
+        "https://www.facebook.com/profile.php?id=1000123",
+        "https://www.facebook.com/people/Tr%E1%BA%A7n-A/1000123/",
+        "https://www.facebook.com/groups/12345/",
+        "https://www.facebook.com/groups/hoi.anh/media",
+        "https://www.facebook.com/stories/555/UzpfSVNDOjE=/?source=profile_highlight",
+        "https://www.threads.net/@zuck",
+        "https://www.threads.com/@zuck/media",
+    ];
+
+    const NOT_SOCIAL_PROFILES: &[&str] = &[
+        "https://www.instagram.com/",
+        "https://www.instagram.com/p/Cabc123/",
+        "https://www.instagram.com/explore/",
+        "https://www.instagram.com/stories/highlights/1789/",
+        "https://www.facebook.com/",
+        "https://www.facebook.com/watch/",
+        "https://www.facebook.com/somepage/videos/1234567890/",
+        "https://www.facebook.com/profile.php",
+        "https://www.facebook.com/marketplace",
+        "https://www.facebook.com/groups/12345/posts/678",
+        "https://www.threads.com/",
+        "https://www.threads.com/@zuck/post/C1",
+        "https://notinstagram.com/nasa",
+        "https://example.com/nasa",
+    ];
+
+    #[test]
+    fn social_profiles_point_to_the_bulk_download() {
+        for url in SOCIAL_PROFILES {
+            assert!(is_social_profile(url), "{url}");
+            assert!(!is_media_page(url) && !is_channel_page(url), "{url}");
+        }
+        for url in NOT_SOCIAL_PROFILES {
+            assert!(!is_social_profile(url), "{url}");
+        }
+        for url in MEDIA_PAGES {
+            assert!(!is_social_profile(url), "{url}");
+        }
+        assert!(SOCIAL_PROFILE.starts_with("[social.use_bulk] "));
     }
 
     #[test]

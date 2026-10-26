@@ -51,5 +51,6 @@
   "socialHint": { "message": "Mantén esta pestaña abierta; puede cambiar de página sola." },
   "socialDone": { "message": "$COUNT$ fotos/vídeos enviados a UTD", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "Abre un perfil, página, grupo o historia y vuelve a intentarlo." },
-  "socialFailed": { "message": "No se pudieron recopilar fotos/vídeos en esta página." }
+  "socialFailed": { "message": "No se pudieron recopilar fotos/vídeos en esta página." },
+  "socialUseBulk": { "message": "Para esta página: clic derecho › UTD › Descarga masiva con UTD" }
 }
