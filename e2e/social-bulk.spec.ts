@@ -129,7 +129,8 @@ const IG_HTML = {
   route: `{${IG_DECOY},"page_logging":{"name":"profilePage","params":{"page_id":"profilePage_528817151","profile_id":"528817151","sub_path":"posts"}},"url":"\\/nasa\\/","params":{"username":"nasa"}}`,
 }
 
-function igRoutes(page: Page, options: { feedStatus?: number; storiesStatus?: number; profile?: 'pair' | 'route' } = {}) {
+// `guard`: câu trả lời API mở đầu bằng `for (;;);` (CSRFGuard của web Instagram).
+function igRoutes(page: Page, options: { feedStatus?: number; storiesStatus?: number; profile?: 'pair' | 'route'; guard?: boolean } = {}) {
   const requests: { url: string; method: string; headers: Record<string, string>; body: string | null }[] = []
   page.route('https://www.instagram.com/**', (route) => {
     const request = route.request()
@@ -140,7 +141,8 @@ function igRoutes(page: Page, options: { feedStatus?: number; storiesStatus?: nu
       return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><html><head><title>NASA (@nasa) • Instagram</title>${og}</head><body><p>NASA</p>${script}</body></html>` })
     }
     requests.push({ url: url.pathname + url.search, method: request.method(), headers: request.headers(), body: request.postData() })
-    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+    const json = (body: unknown, status = 200) =>
+      route.fulfill({ status, contentType: 'application/json', body: `${options.guard ? 'for (;;);' : ''}${JSON.stringify(body)}` })
     if (url.pathname === '/api/v1/feed/reels_media/' && options.storiesStatus) {
       return json({ message: "We're sorry, but something went wrong. Please try again.", status: 'fail' }, options.storiesStatus)
     }
@@ -260,8 +262,8 @@ test('Instagram: UTD bỏ chọn nhóm ⇒ tiện ích không gọi phần đó;
 })
 
 for (const profile of ['pair', 'route'] as const) {
-  test(`Instagram: mã hồ sơ đọc từ HTML trang (${profile === 'pair' ? 'đối tượng hồ sơ' : 'thông số đường dẫn + thẻ OG'}), không nhặt mã mồi ⇒ không gọi web_profile_info (bị 429)`, async ({ page }) => {
-    const requests = igRoutes(page, { profile })
+  test(`Instagram: mã hồ sơ đọc từ HTML trang (${profile === 'pair' ? 'đối tượng hồ sơ' : 'thông số đường dẫn + thẻ OG; API trả kèm for (;;);'}), không nhặt mã mồi ⇒ không gọi web_profile_info (bị 429)`, async ({ page }) => {
+    const requests = igRoutes(page, { profile, guard: profile === 'route' })
     await loadExtension(page, 'https://www.instagram.com/nasa/')
     const messages = await runBulk(page)
     expect(messages[0].social.head).toEqual({

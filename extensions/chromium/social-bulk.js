@@ -326,7 +326,7 @@ class SocialJob {
     const code = socialInstagramError(reply)
     if (code) {
       // Để chẩn đoán (trang service worker của tiện ích): mã HTTP và câu báo của Instagram, không có dữ liệu hồ sơ.
-      console.warn("UTD social", code, path.split("?")[0], reply.status, reply.meta?.message ?? "")
+      console.warn("UTD social", code, path.split("?")[0], reply.status, reply.meta?.message ?? "", reply.type ?? "", reply.head ?? "")
       throw new Error(code)
     }
     return reply
@@ -626,12 +626,14 @@ async function socialInstagramCall(path, form, appId) {
   const request = typeof browser === "object" && typeof content === "object" && content?.fetch ? content.fetch.bind(content) : fetch
   try {
     const response = await request(new URL(path, location.origin).href, init)
-    const text = await response.text()
+    // Như CSRFGuard của chính web Instagram: câu trả lời có thể mở đầu bằng `for (;;);`.
+    const text = (await response.text()).trim().replace(/^for ?\(;;\);/, "")
     let data = null
     try {
       data = JSON.parse(text)
     } catch {
-      // Không phải JSON (trang đăng nhập, lỗi).
+      // Không phải JSON (trang đăng nhập, lỗi): trả loại nội dung + vài chữ đầu để chẩn đoán.
+      return { status: response.status, url: response.url, meta: null, items: [], type: response.headers.get("content-type") ?? "", head: text.slice(0, 80) }
     }
     // Ảnh/video: social-harvest.js đọc trực tiếp; `meta` bỏ phần nặng.
     harvest?.take()
