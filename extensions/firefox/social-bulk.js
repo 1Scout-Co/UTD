@@ -351,18 +351,25 @@ function socialInstagramError(reply) {
 
 async function socialInstagram(job) {
   const { user } = job.plan
-  const info = await job.instagram(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(user)}`)
-  const profile = info.meta?.data?.user
-  if (!profile?.id) throw new Error("social.not_found")
-  const id = String(profile.id)
-  job.head = {
-    id,
-    name: profile.full_name || user,
-    handle: user,
-    avatar: profile.profile_pic_url_hd || profile.profile_pic_url || null,
-    followers: Number(profile.edge_followed_by?.count) || null,
-    private: Boolean(profile.is_private && !profile.followed_by_viewer),
+  // web_profile_info bị Instagram giới hạn rất gắt (429 ngay lần đầu): đọc mã hồ sơ có sẵn trong trang trước.
+  await job.pace()
+  const found = await job.run(socialInstagramUser, [user]).catch(() => null)
+  if (found?.id) {
+    job.head = { id: found.id, name: found.name || user, handle: user, avatar: found.avatar ?? null, followers: found.followers ?? null, private: false }
+  } else {
+    const info = await job.instagram(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(user)}`)
+    const profile = info.meta?.data?.user
+    if (!profile?.id) throw new Error("social.not_found")
+    job.head = {
+      id: String(profile.id),
+      name: profile.full_name || user,
+      handle: user,
+      avatar: profile.profile_pic_url_hd || profile.profile_pic_url || null,
+      followers: Number(profile.edge_followed_by?.count) || null,
+      private: Boolean(profile.is_private && !profile.followed_by_viewer),
+    }
   }
+  const { id } = job.head
   await job.flush()
   const own = (item) => !item.owner || item.owner.toLowerCase() === user.toLowerCase()
   // Tin hết hạn sau 24 giờ: lấy trước.
@@ -524,6 +531,59 @@ function socialPageInfo() {
     .trim()
   const image = meta("og:image")
   return { name: title.slice(0, 200) || null, image: image && /^https:\/\//.test(image) ? image : null }
+}
+
+/**
+ * Instagram: mã số, tên, ảnh đại diện của hồ sơ `user` từ dữ liệu có sẵn trong trang (thẻ meta, JSON nhúng); không có thì
+ * từ HTML của chính trang hồ sơ (một lần tải trang thường, không qua API bị giới hạn). Không thấy ⇒ null.
+ */
+async function socialInstagramUser(user) {
+  const owner = document.querySelector('meta[property="instapp:owner_user_id"]')?.getAttribute("content") ?? ""
+  const named = new RegExp(`"username":"${user.replace(/\./g, "\\.")}"`, "gi")
+  const string = (raw) => {
+    try {
+      return raw === null ? null : JSON.parse(`"${raw}"`)
+    } catch {
+      return null
+    }
+  }
+  // Mỗi chỗ có `"username":"<user>"`: lấy trường gần nhất của cùng đối tượng.
+  const read = (text) => {
+    for (const hit of text.matchAll(named)) {
+      const start = Math.max(0, hit.index - 4000)
+      const window = text.slice(start, hit.index + 4000)
+      const near = (pattern) => {
+        let best = null
+        for (const match of window.matchAll(pattern)) {
+          const distance = Math.abs(start + match.index - hit.index)
+          if (!best || distance < best.distance) best = { value: match[1], distance }
+        }
+        return best?.value ?? null
+      }
+      const id = /^\d+$/.test(owner) ? owner : (near(/"(?:pk|pk_id)":"(\d{1,25})"/g) ?? near(/"id":"(\d{1,25})"/g))
+      if (!id) continue
+      const avatar = string(near(/"profile_pic_url(?:_hd)?":"((?:[^"\\]|\\.){10,2000})"/g))
+      return {
+        id,
+        name: string(near(/"full_name":"((?:[^"\\]|\\.){0,300})"/g)),
+        avatar: avatar && /^https:\/\//.test(avatar) ? avatar : null,
+        followers: Number(near(/"follower_count":(\d{1,12})/g)) || null,
+      }
+    }
+    const id = /^\d+$/.test(owner) ? owner : text.match(/"profilePage_(\d{1,25})"/)?.[1]
+    return id ? { id, name: null, avatar: null, followers: null } : null
+  }
+  // JSON lồng trong chuỗi có dấu `\"`.
+  const search = (text) => read(text) ?? read(text.replaceAll('\\"', '"'))
+  const found = search(Array.from(document.scripts, (script) => script.textContent ?? "").join("\n"))
+  if (found) return found
+  const request = typeof browser === "object" && typeof content === "object" && content?.fetch ? content.fetch.bind(content) : fetch
+  try {
+    const response = await request(`${location.origin}/${encodeURIComponent(user)}/`, { credentials: "include" })
+    return response.ok ? search(await response.text()) : null
+  } catch {
+    return null
+  }
 }
 
 /**

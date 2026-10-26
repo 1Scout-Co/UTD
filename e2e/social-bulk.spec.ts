@@ -120,17 +120,29 @@ const igVideo = (name: string) => [
 ]
 const NASA = { username: 'nasa', pk: '528817151' }
 
-function igRoutes(page: Page, options: { feedStatus?: number } = {}) {
+// Dữ liệu hồ sơ nhúng trong HTML trang (như Instagram thật): người xem (viewer) đứng trước, hồ sơ cần tải đứng sau.
+const IG_EMBEDDED = JSON.stringify({
+  viewer: { pk: '111', username: 'toi', full_name: 'Tôi' },
+  user: { pk: '528817151', id: '528817151', username: 'nasa', full_name: 'NASA', follower_count: 97000000, profile_pic_url: `${IG_CDN}/v/avatar.jpg` },
+})
+
+function igRoutes(page: Page, options: { feedStatus?: number; embedded?: 'page' | 'fetch' } = {}) {
   const requests: { url: string; method: string; headers: Record<string, string>; body: string | null }[] = []
+  let pageLoads = 0
   page.route('https://www.instagram.com/**', (route) => {
     const request = route.request()
     const url = new URL(request.url())
     if (!url.pathname.startsWith('/api/')) {
-      return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>NASA (@nasa) • Instagram</title><p>NASA</p>' })
+      pageLoads += 1
+      // `fetch`: lần mở trang đầu không có dữ liệu (chuyển trang trong app), tải lại HTML thì có.
+      const data = options.embedded === 'page' || (options.embedded === 'fetch' && pageLoads > 1)
+      const script = data ? `<script type="application/json">${IG_EMBEDDED}</script>` : ''
+      return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><title>NASA (@nasa) • Instagram</title><p>NASA</p>${script}` })
     }
     requests.push({ url: url.pathname + url.search, method: request.method(), headers: request.headers(), body: request.postData() })
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
     if (url.pathname === '/api/v1/users/web_profile_info/') {
+      if (options.embedded) return json({ message: '', status: 'fail' }, 429)
       // Chữ "spam", "wait a few minutes" trong tiểu sử / chú thích không phải lỗi bị chặn.
       return json({
         data: {
@@ -243,6 +255,18 @@ test('Instagram: UTD bỏ chọn nhóm ⇒ tiện ích không gọi phần đó;
   expect(entriesOf(messages).map((entry) => entry.id)).toEqual(['9001'])
   expect(messages.at(-1)?.social.done).toEqual({ complete: false, error: 'social.rate_limited' })
 })
+
+for (const embedded of ['page', 'fetch'] as const) {
+  test(`Instagram: mã hồ sơ đọc từ trang (${embedded === 'page' ? 'dữ liệu nhúng sẵn' : 'tải lại HTML trang'}) ⇒ không gọi web_profile_info (bị 429)`, async ({ page }) => {
+    const requests = igRoutes(page, { embedded })
+    await loadExtension(page, 'https://www.instagram.com/nasa/')
+    const messages = await runBulk(page)
+    expect(messages[0].social.head).toEqual({ id: '528817151', name: 'NASA', handle: 'nasa', avatar: `${IG_CDN}/v/avatar.jpg`, followers: 97000000, private: false })
+    expect(messages.at(-1)?.social.done).toEqual({ complete: true, error: null })
+    expect(requests.map((request) => request.url)).not.toContain('/api/v1/users/web_profile_info/?username=nasa')
+    expect(entriesOf(messages).map((entry) => entry.id)).toEqual(['9001', '9101', '8001', '7001001', '7001002', '7002'])
+  })
+}
 
 test('Instagram: UTD báo Dừng ⇒ tiện ích thôi gọi ở đợt sau', async ({ page }) => {
   const requests = igRoutes(page)
