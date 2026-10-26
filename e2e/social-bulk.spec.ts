@@ -6,6 +6,7 @@ import { expect, test, type Page } from '@playwright/test'
 // Instagram / Threads / Facebook giả qua page.route, dữ liệu giả theo hình dạng thật trong notes). Không mạng thật,
 // không đăng nhập. Phần 2 — app: hộp Tải cả kênh ở chế độ hàng loạt với Tauri giả.
 
+const IG_CDN = 'https://scontent-hkg1-1.cdninstagram.com'
 const FB_CDN = 'https://scontent.xx.fbcdn.net'
 
 type Native = { version: number; type: string; url: string; social: Record<string, unknown> }
@@ -102,6 +103,180 @@ async function runBulk(page: Page) {
 
 const sent = (page: Page) => page.evaluate(() => (window as unknown as { __bg: { native: Native[] } }).__bg.native)
 const entriesOf = (messages: Native[]) => messages.flatMap((message) => (message.social.entries as Entry[]) ?? [])
+
+// --- Instagram: API nội bộ của trang (/api/v1/…) ---
+
+const igImage = (name: string) => ({
+  candidates: [
+    { url: `${IG_CDN}/v/t51/${name}_1080.jpg?stp=dst-jpg&oh=1`, width: 1080, height: 1350 },
+    { url: `${IG_CDN}/v/t51/${name}_320.jpg?oh=1`, width: 320, height: 400 },
+  ],
+})
+const igVideo = (name: string) => [
+  { url: `${IG_CDN}/o1/v/t16/${name}_720.mp4?oh=1`, width: 720, height: 1280, type: 101 },
+  { url: `${IG_CDN}/o1/v/t16/${name}_480.mp4?oh=1`, width: 480, height: 854, type: 102 },
+]
+const NASA = { username: 'nasa', pk: '528817151' }
+
+function igRoutes(page: Page, options: { feedStatus?: number } = {}) {
+  const requests: { url: string; method: string; headers: Record<string, string>; body: string | null }[] = []
+  page.route('https://www.instagram.com/**', (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (!url.pathname.startsWith('/api/')) {
+      return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>NASA (@nasa) • Instagram</title><p>NASA</p>' })
+    }
+    requests.push({ url: url.pathname + url.search, method: request.method(), headers: request.headers(), body: request.postData() })
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+    if (url.pathname === '/api/v1/users/web_profile_info/') {
+      return json({ data: { user: { id: '528817151', full_name: 'NASA', profile_pic_url_hd: `${IG_CDN}/v/avatar.jpg`, edge_followed_by: { count: 97000000 }, is_private: false } } })
+    }
+    if (url.pathname === '/api/v1/feed/reels_media/' && url.search === '?reel_ids=528817151') {
+      return json({ reels: { 528817151: { id: '528817151', items: [{ pk: '9001', taken_at: 1790000000, code: 'S1', image_versions2: igImage('story'), user: NASA }] } } })
+    }
+    if (url.pathname === '/api/v1/highlights/528817151/highlights_tray/') {
+      return json({ tray: [{ id: 'highlight:17', title: 'Sao Hoả', cover_media: {} }, { id: 'oops', title: 'x' }] })
+    }
+    if (url.pathname === '/api/v1/feed/reels_media/') {
+      return json({ reels: { 'highlight:17': { id: 'highlight:17', title: 'Sao Hoả', items: [{ pk: '9101', taken_at: 1700000000, video_versions: igVideo('mars'), image_versions2: igImage('mars'), user: NASA }] } } })
+    }
+    if (url.pathname === '/api/v1/clips/user/') {
+      return json({
+        items: [
+          { media: { pk: '8001', code: 'R1', taken_at: 1780000000, product_type: 'clips', video_versions: igVideo('reel'), image_versions2: igImage('reel'), user: NASA, caption: { text: 'Phóng tàu' } } },
+          // Reel của người khác (hợp tác) không lẫn vào.
+          { media: { pk: '8002', code: 'R2', taken_at: 1780000001, product_type: 'clips', video_versions: igVideo('other'), user: { username: 'spacex' } } },
+        ],
+        paging_info: { more_available: false, max_id: null },
+      })
+    }
+    if (url.pathname === '/api/v1/feed/user/528817151/') {
+      if (options.feedStatus) return json({ message: 'Please wait a few minutes before you try again.', status: 'fail' }, options.feedStatus)
+      if (!url.searchParams.get('max_id')) {
+        return json({
+          items: [
+            {
+              pk: '7001', code: 'P1', taken_at: 1770000000, user: NASA, caption: { text: 'Thiên hà\nxoắn ốc' },
+              carousel_media: [
+                { pk: '7001001', image_versions2: igImage('c1') },
+                { pk: '7001002', video_versions: igVideo('c2'), image_versions2: igImage('c2') },
+              ],
+            },
+          ],
+          more_available: true,
+          next_max_id: 'cursor-2',
+        })
+      }
+      return json({ items: [{ pk: '7002', code: 'P2', taken_at: 1760000000, user: NASA, image_versions2: igImage('p2') }], more_available: false })
+    }
+    return json({ message: 'not found' }, 404)
+  })
+  return requests
+}
+
+test('Instagram: Tin, tin nổi bật, reels, bài viết (carousel tách từng ảnh/video) qua API của trang, đúng header, gửi UTD từng đợt', async ({ page, context }) => {
+  await context.addCookies([{ name: 'csrftoken', value: 'tok123', domain: '.instagram.com', path: '/', secure: true }])
+  const requests = igRoutes(page)
+  await loadExtension(page, 'https://www.instagram.com/nasa/')
+  const messages = await runBulk(page)
+
+  expect(messages.every((message) => message.version === 2 && message.type === 'social-list' && message.url === 'https://www.instagram.com/nasa/')).toBe(true)
+  expect(messages.map((message) => message.social.part)).toEqual(messages.map((_, index) => index))
+  expect(messages[0].social.head).toEqual({ id: '528817151', name: 'NASA', handle: 'nasa', avatar: `${IG_CDN}/v/avatar.jpg`, followers: 97000000, private: false })
+  expect(messages.at(-1)?.social.done).toEqual({ complete: true, error: null })
+  const entries = entriesOf(messages)
+  expect(entries.map((entry) => [entry.source, entry.id, entry.kind])).toEqual([
+    ['stories', '9001', 'photo'],
+    ['highlights', '9101', 'video'],
+    ['reels', '8001', 'video'],
+    ['posts', '7001001', 'photo'],
+    ['posts', '7001002', 'video'],
+    ['posts', '7002', 'photo'],
+  ])
+  const byId = Object.fromEntries(entries.map((entry) => [entry.id, entry]))
+  expect(byId['9001']).toMatchObject({ url: `${IG_CDN}/v/t51/story_1080.jpg?stp=dst-jpg&oh=1`, page: null, timestamp: 1790000000 })
+  expect(byId['9101']).toMatchObject({ url: `${IG_CDN}/o1/v/t16/mars_720.mp4?oh=1`, album: 'Sao Hoả' })
+  expect(byId['8001']).toMatchObject({ page: 'https://www.instagram.com/reel/R1/', title: 'Phóng tàu' })
+  expect(byId['7001002']).toMatchObject({ url: `${IG_CDN}/o1/v/t16/c2_720.mp4?oh=1`, page: 'https://www.instagram.com/p/P1/', title: 'Thiên hà xoắn ốc' })
+
+  // Gọi từ trong trang bằng phiên của trang: header của web Instagram, mã CSRF từ cookie trang, không cần cookie riêng.
+  expect(requests.map((request) => request.url)).toEqual([
+    '/api/v1/users/web_profile_info/?username=nasa',
+    '/api/v1/feed/reels_media/?reel_ids=528817151',
+    '/api/v1/highlights/528817151/highlights_tray/',
+    '/api/v1/feed/reels_media/?reel_ids=highlight%3A17',
+    '/api/v1/clips/user/',
+    '/api/v1/feed/user/528817151/?count=30',
+    '/api/v1/feed/user/528817151/?count=30&max_id=cursor-2',
+  ])
+  expect(requests[0].headers['x-ig-app-id']).toBe('936619743392459')
+  expect(requests[0].headers['x-csrftoken']).toBe('tok123')
+  expect(requests[4]).toMatchObject({ method: 'POST', body: 'target_user_id=528817151&page_size=50&include_feed_video=true' })
+  await expect(page.locator('#utd-social-pill')).toBeAttached()
+})
+
+test('Instagram: UTD bỏ chọn nhóm ⇒ tiện ích không gọi phần đó; bị chặn tạm (429) ⇒ dừng, báo mã, giữ phần đã có', async ({ page }) => {
+  const requests = igRoutes(page, { feedStatus: 429 })
+  await loadExtension(page, 'https://www.instagram.com/stories/nasa/')
+  // Người dùng chỉ để lại Tin và Bài viết trong hộp của UTD.
+  await page.evaluate(() => {
+    ;(window as unknown as { __reply: unknown }).__reply = { ok: true, media: { go: true, sources: ['stories', 'posts'], since: null } }
+  })
+  const messages = await runBulk(page)
+  expect(requests.map((request) => request.url.split('?')[0])).toEqual([
+    '/api/v1/users/web_profile_info/',
+    '/api/v1/feed/reels_media/',
+    '/api/v1/feed/user/528817151/',
+  ])
+  expect(entriesOf(messages).map((entry) => entry.id)).toEqual(['9001'])
+  expect(messages.at(-1)?.social.done).toEqual({ complete: false, error: 'social.rate_limited' })
+})
+
+test('Instagram: UTD báo Dừng ⇒ tiện ích thôi gọi ở đợt sau', async ({ page }) => {
+  const requests = igRoutes(page)
+  await loadExtension(page, 'https://www.instagram.com/nasa/')
+  await page.evaluate(() => {
+    ;(window as unknown as { __reply: unknown }).__reply = { ok: true, media: { go: false, sources: null, since: null } }
+  })
+  const messages = await runBulk(page)
+  expect(requests).toHaveLength(1)
+  expect(messages.at(-1)?.social.done).toEqual({ complete: false, error: null })
+})
+
+test('trang không hỗ trợ (bài viết lẻ, trang chủ) ⇒ báo trên trang, không gửi gì cho UTD', async ({ page }) => {
+  igRoutes(page)
+  await loadExtension(page, 'https://www.instagram.com/p/Cabc/')
+  await page.evaluate(() => {
+    const bg = (window as unknown as { __bg: { clicks: ((info: unknown, tab: unknown) => void)[] } }).__bg
+    bg.clicks[0]({ menuItemId: 'utd-social-bulk' }, { id: 7, url: location.href })
+  })
+  await expect(page.locator('#utd-social-pill')).toBeAttached()
+  expect(await sent(page)).toEqual([])
+  const plans = await page.evaluate(() => {
+    const plan = (window as unknown as { socialPlan: (url: string) => Record<string, unknown> | null }).socialPlan
+    return [
+      'https://www.facebook.com/trangthu',
+      'https://www.facebook.com/profile.php?id=1000123',
+      'https://www.facebook.com/groups/12345/',
+      'https://www.facebook.com/stories/555/UzpfSVNDOjE=/?source=profile_highlight',
+      'https://www.facebook.com/watch/?v=1',
+      'https://www.threads.net/@zuck',
+      'https://www.instagram.com/explore/',
+    ].map((url) => {
+      const found = plan(url)
+      return found ? { platform: found.platform, kind: found.kind ?? null, photos: found.photos ?? null, reels: found.reels ?? null, base: found.base ?? null } : null
+    })
+  })
+  expect(plans).toEqual([
+    { platform: 'facebook', kind: 'profile', photos: 'https://www.facebook.com/trangthu/photos_by', reels: 'https://www.facebook.com/trangthu/reels', base: 'https://www.facebook.com/trangthu' },
+    { platform: 'facebook', kind: 'profile', photos: 'https://www.facebook.com/profile.php?id=1000123&sk=photos_by', reels: 'https://www.facebook.com/profile.php?id=1000123&sk=reels_tab', base: 'https://www.facebook.com/profile.php?id=1000123' },
+    { platform: 'facebook', kind: 'group', photos: 'https://www.facebook.com/groups/12345/media/photos', reels: null, base: 'https://www.facebook.com/groups/12345' },
+    { platform: 'facebook', kind: 'story', photos: null, reels: null, base: null },
+    null,
+    null,
+    null,
+  ])
+})
 
 // --- Facebook: lần lượt thẻ Ảnh / Video / Reels / tin nổi bật, đọc JSON trang nạp ---
 

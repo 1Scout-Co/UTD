@@ -1,4 +1,4 @@
-// Tải hàng loạt Facebook (notes/social-bulk.md): gom ảnh/video có trong dữ liệu JSON của trang trong lúc
+// Tải hàng loạt Facebook / Threads (notes/social-bulk.md): gom ảnh/video có trong dữ liệu JSON của trang trong lúc
 // tiện ích tự cuộn. Nền chạy file này trong thế giới của trang (MAIN) khi người dùng bấm "Tải hàng loạt bằng UTD".
 // Dữ liệu tới bằng JSON: khối `<script type="application/json" data-sjs>` lúc mở trang và câu trả lời `/api/graphql/`
 // khi trang nạp thêm — cả hai đều qua `JSON.parse` (như fb-media.js). Không phụ thuộc mã truy vấn (doc_id) hay đổi:
@@ -7,7 +7,7 @@
   const KEY = Symbol.for("utd.social-harvest")
   if (window[KEY]) return
   // Lọc rẻ trước khi duyệt: chỉ chuỗi JSON có dữ liệu ảnh/video.
-  const MARKERS = /"Photo"|"Video"|progressive_url|playable_url|unified_stories/
+  const MARKERS = /image_versions2|video_versions|"Photo"|"Video"|progressive_url|playable_url|unified_stories/
   const MAX_ITEMS = 25000
   const MAX_URL = 4096
   const CDN = /^https:\/\/[^/]*(fbcdn\.net|cdninstagram\.com|fbsbx\.com)\//i
@@ -35,6 +35,61 @@
       items.set(item.id, item)
     }
     fresh.add(item.id)
+  }
+
+  // --- Instagram / Threads: bài viết dạng REST (`image_versions2`, `video_versions`, `carousel_media`) ---
+
+  /** Ảnh lớn nhất và ảnh nhỏ (~320px) trong `candidates`. */
+  function images(node) {
+    const list = (Array.isArray(node?.image_versions2?.candidates) ? node.image_versions2.candidates : []).filter((item) => cdn(item?.url))
+    if (list.length === 0) return { best: null, small: null }
+    const sized = list.map((item) => ({ url: item.url, width: Number(item.width) || 0, height: Number(item.height) || 0 }))
+    const best = sized.reduce((a, b) => (area(b) > area(a) ? b : a))
+    const small = sized.reduce((a, b) => (Math.abs(b.width - 320) < Math.abs(a.width - 320) ? b : a))
+    return { best, small }
+  }
+
+  function bestVideo(node) {
+    const list = (Array.isArray(node?.video_versions) ? node.video_versions : []).filter((item) => cdn(item?.url))
+    if (list.length === 0) return null
+    return list
+      .map((item) => ({ url: item.url, width: Number(item.width) || 0, height: Number(item.height) || 0 }))
+      .reduce((a, b) => (area(b) > area(a) ? b : a))
+  }
+
+  function igPost(node) {
+    const owner = node.user ?? node.owner ?? {}
+    const username = typeof owner.username === "string" ? owner.username : null
+    const code = typeof node.code === "string" && /^[\w-]{1,64}$/.test(node.code) ? node.code : null
+    const threads = /(^|\.)threads\.(net|com)$/.test(location.hostname)
+    const reel = node.product_type === "clips"
+    let page = null
+    if (code && threads && username) page = `https://www.threads.com/@${username}/post/${code}`
+    else if (code && !threads) page = `https://www.instagram.com/${reel ? "reel" : "p"}/${code}/`
+    const children = Array.isArray(node.carousel_media) && node.carousel_media.length > 0 ? node.carousel_media : [node]
+    const caption = text(node.caption?.text, 300)
+    const timestamp = seconds(node.taken_at ?? node.taken_at_timestamp)
+    const base = String(node.pk ?? node.id ?? code ?? "")
+    children.forEach((child, index) => {
+      const { best, small } = images(child)
+      const video = bestVideo(child)
+      const id = String(child.pk ?? child.id ?? `${base}_${index}`).replace(/[^\w:.-]/g, "_")
+      const file = video ?? best
+      put({
+        id,
+        kind: video ? "video" : "photo",
+        url: file?.url ?? null,
+        width: file?.width ?? 0,
+        height: file?.height ?? 0,
+        thumb: small?.url ?? null,
+        timestamp: seconds(child.taken_at) ?? timestamp,
+        title: caption,
+        page,
+        owner: username,
+        product: reel ? "reel" : "post",
+        durationSeconds: Number(child.video_duration) || null,
+      })
+    })
   }
 
   // --- Facebook: object GraphQL `Photo`, `Video`, Tin (bucket có `unified_stories*`) ---
@@ -140,6 +195,11 @@
         for (let at = node.length - 1; at >= 0; at -= 1) if (node[at] && typeof node[at] === "object") stack.push(node[at])
         continue
       }
+      if ((node.image_versions2 || node.video_versions || node.carousel_media) && (node.pk || node.id || node.code)) {
+        igPost(node)
+        // Mục con của carousel đã đọc cùng bài: không duyệt vào nữa (khỏi thành bài riêng).
+        continue
+      }
       if (node.unified_stories_with_notes || node.unified_stories) fbBucket(node)
       else fbMedia(node, false)
       const keys = Object.keys(node)
@@ -190,6 +250,10 @@
         const ids = [...fresh]
         fresh = new Set()
         return { items: ids.map((id) => ({ ...items.get(id) })), parsed, total: items.size }
+      },
+      /** Đọc ngay một kết quả JSON tiện ích tự lấy (API Instagram). */
+      read(value) {
+        index(value)
       },
       /** Link Tin / tin nổi bật trên trang hồ sơ (vòng tròn ảnh): `{url, title}`. */
       storyLinks() {

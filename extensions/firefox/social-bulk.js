@@ -1,4 +1,4 @@
-// Tải hàng loạt ảnh/video từ Facebook bằng UTD (notes/social-bulk.md). Chạy trong nền (Chromium
+// Tải hàng loạt ảnh/video từ Facebook, Instagram bằng UTD (notes/social-bulk.md). Chạy trong nền (Chromium
 // nạp bằng importScripts, Firefox nạp sau background.js theo manifest). Tên ở đây đều có tiền tố social/SOCIAL để không
 // đụng tên của background.js; dùng chung `api`, `t`, `sendNative` của nó.
 //
@@ -7,6 +7,7 @@
 // gửi cookie. Danh sách đi sang UTD từng đợt (`social-list`); mỗi đợt UTD trả lời đi tiếp hay dừng (nút Dừng, đóng hộp)
 // và loại nào còn cần lấy. Giữa hai yêu cầu luôn nghỉ ngẫu nhiên 2–4 s và không quá 70 yêu cầu / 10 phút để tránh bị
 // khoá tạm vì gọi nhiều.
+//   - Instagram: API nội bộ của chính trang web (`/api/v1/…`, như gallery-dl), đọc thẳng, không cần cuộn.
 //   - Facebook: tiện ích tự cuộn trang (Facebook: lần lượt thẻ Ảnh / Video / Reels / Tin nổi bật), đọc ảnh/video
 //     trong dữ liệu JSON trang tự nạp (social-harvest.js). Không phụ thuộc mã truy vấn GraphQL hay đổi.
 
@@ -23,6 +24,8 @@ const SOCIAL_WINDOW_CALLS = 70
 const SOCIAL_IDLE_ROUNDS = 5
 // Ảnh Facebook trong lưới nhỏ hơn chừng này (cạnh dài) ⇒ mở trang ảnh lấy bản gốc.
 const SOCIAL_FULL_SIZE = 900
+const SOCIAL_IG_APP_ID = "936619743392459"
+const SOCIAL_IG_RESERVED = new Set(["p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about", "legal", "developer", "web", "api", "challenge", "emails", "session"])
 const SOCIAL_FB_RESERVED = new Set([
   "watch", "reel", "reels", "photo", "photo.php", "photos", "videos", "video.php", "marketplace", "gaming", "events", "search",
   "notifications", "messages", "friends", "saved", "settings", "help", "login", "login.php", "permalink.php", "story.php", "share",
@@ -41,6 +44,12 @@ function socialPlan(url) {
   }
   const host = page.hostname.toLowerCase()
   const parts = page.pathname.split("/").filter(Boolean)
+  if (/(^|\.)instagram\.com$/.test(host)) {
+    const user = parts[0] === "stories" ? parts[1] : parts[0]
+    const name = /^[\w.]{1,30}$/.test(user ?? "") ? user : null
+    if (!name || name === "highlights" || (parts[0] !== "stories" && SOCIAL_IG_RESERVED.has(name))) return null
+    return { platform: "instagram", user: name, id: name }
+  }
   if (!/(^|\.)facebook\.com$/.test(host)) return null
   if (parts[0] === "stories" && /^\d+$/.test(parts[1] ?? "")) {
     const highlight = /highlight/i.test(page.search)
@@ -303,6 +312,83 @@ class SocialJob {
     }
     return kept
   }
+
+  /** Instagram: một lần gọi API của trang (đọc ảnh/video ngay trong trang). */
+  async instagram(path, form = null) {
+    await this.pace()
+    const reply = await this.run(socialInstagramCall, [path, form, SOCIAL_IG_APP_ID]).catch(() => null)
+    if (!reply) throw new Error("social.changed")
+    const code = socialInstagramError(reply)
+    if (code) throw new Error(code)
+    return reply
+  }
+}
+
+/** Lỗi của một câu trả lời Instagram (mã cố định, UTD đổi sang câu của app). */
+function socialInstagramError(reply) {
+  const message = JSON.stringify(reply.meta ?? {}).toLowerCase()
+  if (reply.status === 429 || /wait a few minutes|checkpoint_required|challenge_required|feedback_required|spam/.test(message)) return "social.rate_limited"
+  if (reply.status === 401 || reply.status === 403 || /\/accounts\/login|\/challenge/.test(reply.url ?? "") || /login_required|require_login/.test(message)) return "social.login"
+  if (reply.status === 404) return "social.not_found"
+  if (reply.status !== 200 || !reply.meta) return "social.changed"
+  return null
+}
+
+async function socialInstagram(job) {
+  const { user } = job.plan
+  const info = await job.instagram(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(user)}`)
+  const profile = info.meta?.data?.user
+  if (!profile?.id) throw new Error("social.not_found")
+  const id = String(profile.id)
+  job.head = {
+    id,
+    name: profile.full_name || user,
+    handle: user,
+    avatar: profile.profile_pic_url_hd || profile.profile_pic_url || null,
+    followers: Number(profile.edge_followed_by?.count) || null,
+    private: Boolean(profile.is_private && !profile.followed_by_viewer),
+  }
+  await job.flush()
+  const own = (item) => !item.owner || item.owner.toLowerCase() === user.toLowerCase()
+  // Tin hết hạn sau 24 giờ: lấy trước.
+  if (job.wants("stories")) {
+    const reply = await job.instagram(`/api/v1/feed/reels_media/?reel_ids=${id}`)
+    await job.push(reply.items.map((item) => ({ ...item, page: null })), "stories")
+  }
+  if (job.wants("highlights")) {
+    const tray = await job.instagram(`/api/v1/highlights/${id}/highlights_tray/`)
+    const highlights = (Array.isArray(tray.meta?.tray) ? tray.meta.tray : []).filter((item) => /^highlight:\d+$/.test(item?.id ?? ""))
+    for (let index = 0; index < highlights.length && job.wants("highlights"); index += 5) {
+      const chunk = highlights.slice(index, index + 5)
+      const query = chunk.map((item) => `reel_ids=${encodeURIComponent(item.id)}`).join("&")
+      const reply = await job.instagram(`/api/v1/feed/reels_media/?${query}`)
+      // Mỗi tin nổi bật một tên (album): đọc lại từng tin trong trả lời.
+      for (const item of chunk) {
+        const ids = new Set((reply.meta?.reels?.[item.id]?.itemIds ?? []).map(String))
+        const title = typeof item.title === "string" ? item.title.slice(0, 100) : null
+        await job.push(reply.items.filter((media) => ids.has(String(media.id))).map((media) => ({ ...media, page: null })), "highlights", title)
+      }
+    }
+  }
+  if (job.wants("reels")) {
+    let cursor = ""
+    do {
+      const form = { target_user_id: id, page_size: "50", include_feed_video: "true" }
+      if (cursor) form.max_id = cursor
+      const reply = await job.instagram("/api/v1/clips/user/", form)
+      await job.push(reply.items.filter(own), "reels")
+      const paging = reply.meta?.paging_info ?? {}
+      cursor = paging.more_available ? String(paging.max_id ?? "") : ""
+    } while (cursor && job.wants("reels") && !job.past("reels"))
+  }
+  if (job.wants("posts")) {
+    let cursor = ""
+    do {
+      const reply = await job.instagram(`/api/v1/feed/user/${id}/?count=30${cursor ? `&max_id=${encodeURIComponent(cursor)}` : ""}`)
+      await job.push(reply.items.filter(own), "posts")
+      cursor = reply.meta?.more_available ? String(reply.meta?.next_max_id ?? "") : ""
+    } while (cursor && job.wants("posts") && !job.past("posts"))
+  }
 }
 
 async function socialFacebook(job) {
@@ -357,7 +443,12 @@ async function socialStart(tab) {
   let error = null
   try {
     await job.pill()
-    await socialFacebook(job)
+    if (plan.platform === "instagram") {
+      if (!(await job.inject())) throw new Error("social.changed")
+      await socialInstagram(job)
+    } else {
+      await socialFacebook(job)
+    }
   } catch (reason) {
     error = /^social\.[a-z_]+$/.test(reason?.message ?? "") ? reason.message : "social.changed"
   } finally {
@@ -400,6 +491,60 @@ function socialPageInfo() {
     .trim()
   const image = meta("og:image")
   return { name: title.slice(0, 200) || null, image: image && /^https:\/\//.test(image) ? image : null }
+}
+
+/**
+ * Gọi API của trang Instagram bằng phiên đăng nhập của chính trang (cùng nguồn, không cần cookie riêng). Ảnh/video
+ * trong câu trả lời đọc bằng social-harvest.js; phần còn lại (con trỏ trang sau, thông tin hồ sơ) trả về gọn.
+ */
+async function socialInstagramCall(path, form, appId) {
+  const harvest = window[Symbol.for("utd.social-harvest")]
+  const cookie = (name) => document.cookie.split("; ").find((item) => item.startsWith(`${name}=`))?.slice(name.length + 1) ?? ""
+  let claim = "0"
+  try {
+    claim = sessionStorage.getItem("www-claim-v2") || "0"
+  } catch {
+    // Không đọc được: dùng "0" như trang lúc mới mở.
+  }
+  const headers = {
+    "X-IG-App-ID": appId,
+    "X-ASBD-ID": "129477",
+    "X-IG-WWW-Claim": claim,
+    "X-CSRFToken": cookie("csrftoken"),
+    "X-Requested-With": "XMLHttpRequest",
+  }
+  const init = { credentials: "include", headers }
+  if (form) {
+    init.method = "POST"
+    init.body = new URLSearchParams(form)
+  }
+  const request = typeof browser === "object" && typeof content === "object" && content?.fetch ? content.fetch.bind(content) : fetch
+  try {
+    const response = await request(new URL(path, location.origin).href, init)
+    const text = await response.text()
+    let data = null
+    try {
+      data = JSON.parse(text)
+    } catch {
+      // Không phải JSON (trang đăng nhập, lỗi).
+    }
+    // Ảnh/video: social-harvest.js đọc trực tiếp; `meta` bỏ phần nặng.
+    harvest?.take()
+    if (data && harvest) harvest.read(data)
+    const items = harvest && data ? harvest.take().items : []
+    let meta = null
+    if (data) {
+      const strip = new Set(["items", "carousel_media", "image_versions2", "video_versions", "media"])
+      meta = JSON.parse(text, (key, value) => (strip.has(key) ? undefined : value))
+      // Tin nổi bật: id từng tin của mỗi bucket (để gắn tên).
+      for (const [reelId, reel] of Object.entries(data.reels ?? {})) {
+        if (meta.reels?.[reelId]) meta.reels[reelId].itemIds = (reel.items ?? []).map((item) => String(item.pk ?? item.id))
+      }
+    }
+    return { status: response.status, url: response.url, meta, items }
+  } catch {
+    return { status: 0, url: "", meta: null, items: [] }
+  }
 }
 
 /** Facebook: bản gốc của một ảnh từ trang ảnh `/photo/?fbid=` (như gallery-dl), cùng nguồn với trang đang mở. */
