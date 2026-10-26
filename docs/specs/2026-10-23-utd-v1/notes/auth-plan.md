@@ -602,6 +602,17 @@ trong app vẫn tối đa 5 mức).
 video. Trang SPA đổi URL không tải lại ⇒ theo dõi `location.href`. `<video>` trong khung khác nguồn (nhúng YouTube)
 chưa có nút. Firefox: content script và quyền mọi trang chạy được từ Firefox 127; thử chính trên Chromium.
 
+**Kết quả GĐ3 (2026-10-26, commit b1a0e76).** Làm đúng kế hoạch trên, khác/thêm:
+- Không có nút "Mở trong UTD" khi bảng báo lỗi: chủ dự án không muốn mở hộp trong app; lỗi báo gọn trong bảng (cần
+  đăng nhập · UTD không đọc được video này · UTD chưa chạy).
+- YouTube: nút chỉ hiện ở trang xem video (`/watch`, `/shorts/`, `/live/`, `/embed/`), không ở video xem thử ở trang
+  chủ / danh sách.
+- Trang file Google Drive: bảng có một dòng "Tải file video" (file gốc, như mục Google Drive ở trên).
+- Kiểm: cargo test app 251 (+2 ignored), engine, mp4; clippy sạch; lint (716 khoá); build; size-limit JS 200,11 / 220 kB;
+  e2e 117/117 (mới: `video-button.spec.ts` 6 bài, `extension.spec.ts` viết lại theo Q11 — tiện ích thật trong
+  Chromium có quyền ngay lúc cài và chèn nút vào trang thử; `sign-in.spec.ts` sửa theo Q11, thêm bài nền nút trên trang).
+- Chưa thử thật trên Chrome của chủ dự án; Firefox chưa thử.
+
 ### 9.2 File sẽ sửa (GĐ0–1)
 
 - **Extension:** `extensions/{chromium,firefox}/`
