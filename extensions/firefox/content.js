@@ -72,6 +72,7 @@
   let hideTimer = 0
   let frame = 0
   let lastContext = null
+  const actions = new WeakMap() // nút trong bảng ⇒ việc khi bấm (chạy từ bộ nghe chung bên dưới)
   const formats = new Map() // url ⇒ Promise trả lời của nền (gộp yêu cầu trùng, nhớ trong trang)
   const prefetched = new Set() // link đã đọc sẵn (một lần, kể cả khi lỗi)
 
@@ -98,10 +99,7 @@
     const label = document.createElement("span")
     label.textContent = t("videoButton")
     pill.append(label)
-    pill.addEventListener("click", (event) => {
-      if (!event.isTrusted) return
-      event.preventDefault()
-      event.stopPropagation()
+    actions.set(pill, () => {
       if (panel && !panel.hidden) close()
       else void open(analysisUrl(), sourceOf(target))
     })
@@ -252,9 +250,7 @@
     button.type = "button"
     button.textContent = "×"
     button.setAttribute("aria-label", t("videoClose"))
-    button.addEventListener("click", (event) => {
-      if (event.isTrusted) close()
-    })
+    actions.set(button, close)
     head.append(title, button)
     return head
   }
@@ -326,10 +322,7 @@
     weight.className = "size"
     weight.textContent = size(format.sizeBytes)
     button.append(name, weight)
-    button.addEventListener("click", (event) => {
-      if (!event.isTrusted) return
-      void pick(format, media, url)
-    })
+    actions.set(button, () => void pick(format, media, url))
     return button
   }
 
@@ -403,14 +396,28 @@
     },
     true,
   )
-  // Bấm ra ngoài bảng thì đóng.
-  addEventListener(
-    "pointerdown",
-    (event) => {
-      if (panel && !panel.hidden && !event.composedPath().includes(host)) close()
-    },
-    true,
-  )
+  // Trang như Facebook Tin chặn mọi cú bấm ngay ở window (chạm là dừng / sang tin khác) nên cú bấm không tới được nút.
+  // Vì vậy nghe ở window, pha bắt, từ document_start (manifest) để chạy trước trang: bấm vào UTD thì chạy việc của
+  // nút và không cho trang thấy cú bấm; bấm ra ngoài bảng thì đóng bảng.
+  for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "touchstart", "touchend", "click", "dblclick"]) {
+    addEventListener(
+      type,
+      (event) => {
+        const path = event.composedPath()
+        if (!host || !path.includes(host)) {
+          if (type === "pointerdown" && panel && !panel.hidden) close()
+          return
+        }
+        event.stopImmediatePropagation()
+        if (type !== "click") return
+        event.preventDefault()
+        if (!event.isTrusted) return
+        const button = path.find((node) => actions.has(node))
+        if (button && !button.disabled) actions.get(button)()
+      },
+      true,
+    )
+  }
   // Chuột phải: nhớ chỗ bấm để bảng mở đúng đó khi chọn mục UTD trong menu.
   addEventListener(
     "contextmenu",
