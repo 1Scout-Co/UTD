@@ -9,8 +9,8 @@
   const t = (key) => api.i18n.getMessage(key) || key
   const MIN_WIDTH = 160
   const MIN_HEIGHT = 90
-  const PILL_HEIGHT = 28
-  const GAP = 6
+  const PILL_HEIGHT = 22
+  const GAP = 4
   const HIDE_AFTER = 1500
   const SHOW_ON_PLAY = 2500
   // Mã lỗi nghĩa là nguồn đòi đăng nhập (src-tauri/src/media/mod.rs `needs_sign_in`).
@@ -23,26 +23,34 @@
 
   const CSS = `
     :host { all: initial; }
-    * { box-sizing: border-box; font: 13px/1.4 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; font: 12px/1.35 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
     [hidden] { display: none !important; }
-    .pill { position: fixed; display: flex; align-items: center; gap: 6px; height: ${PILL_HEIGHT}px; padding: 0 11px 0 9px;
-      border: 0; border-radius: 8px; color: #fff; background: #006bd6; box-shadow: 0 2px 10px rgb(0 0 0 / 0.3);
+    .pill { position: fixed; display: flex; align-items: center; gap: 4px; height: ${PILL_HEIGHT}px; padding: 0 8px 0 6px;
+      border: 0; border-radius: 5px; color: #fff; background: #0a6fd6; box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
       font-weight: 600; cursor: pointer; white-space: nowrap; pointer-events: auto; }
     .pill:hover { background: #005bb8; }
-    .pill:focus-visible, .row:focus-visible, .close:focus-visible { outline: 2px solid #8ec5ff; outline-offset: 2px; }
-    .pill svg { width: 15px; height: 15px; flex: none; }
-    .panel { position: fixed; width: 272px; max-height: min(420px, 70vh); overflow: auto; padding: 6px; border-radius: 10px;
-      color: #0f1b2d; background: #fff; box-shadow: 0 8px 28px rgb(0 0 0 / 0.28); pointer-events: auto; }
-    .head { display: flex; align-items: center; gap: 6px; padding: 4px 4px 6px 8px; }
-    .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-    .close { flex: none; width: 24px; height: 24px; border: 0; border-radius: 6px; color: #52647a; background: none;
-      font-size: 16px; line-height: 1; cursor: pointer; }
-    .close:hover, .row:hover { background: #eef4fc; }
-    .row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 8px;
-      border: 0; border-radius: 7px; color: inherit; background: none; text-align: start; cursor: pointer; }
+    .pill:focus-visible, .row:focus-visible, .close:focus-visible { outline: 2px solid #8ec5ff; outline-offset: 1px; }
+    .pill svg { width: 13px; height: 13px; flex: none; }
+    .panel { position: fixed; width: 232px; max-height: min(460px, 80vh); overflow: auto; padding: 0 0 3px; border-radius: 6px;
+      color: #0f1b2d; background: #fff; border: 1px solid rgb(0 0 0 / 0.12); box-shadow: 0 4px 16px rgb(0 0 0 / 0.18);
+      pointer-events: auto; overscroll-behavior: contain; scroll-behavior: smooth;
+      scrollbar-width: thin; scrollbar-color: transparent transparent; }
+    /* Thanh cuộn mảnh, chỉ hiện khi bảng dài hơn chỗ và chuột đang ở trên bảng. */
+    .panel:hover, .panel:focus-within { scrollbar-color: #c3ccd8 transparent; }
+    @media (prefers-reduced-motion: reduce) { .panel { scroll-behavior: auto; } }
+    .head { position: sticky; top: 0; display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 10px;
+      margin-bottom: 3px; border-bottom: 1px solid #e8ecf1; background: #fff; }
+    .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #3b4a5c;
+      font-weight: 600; }
+    .close { flex: none; width: 20px; height: 20px; border: 0; border-radius: 4px; color: #52647a; background: none;
+      font-size: 14px; line-height: 1; cursor: pointer; }
+    .close:hover, .row:hover { background: #e8f1fc; }
+    .row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 10px;
+      border: 0; color: inherit; background: none; text-align: start; cursor: pointer; }
+    .row.audio { margin-top: 3px; padding-top: 6px; border-top: 1px solid #e8ecf1; }
     .row:disabled { opacity: 0.55; cursor: default; }
-    .size { color: #52647a; font-variant-numeric: tabular-nums; }
-    .status { padding: 10px 8px; color: #52647a; }
+    .size { color: #6b7a8c; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .status { padding: 8px 10px; color: #52647a; }
     .status.error { color: #b42318; }
     .status.ok { color: #0a7a4b; }
     .spin { display: inline-block; width: 12px; height: 12px; margin-inline-end: 8px; vertical-align: -1px;
@@ -309,7 +317,8 @@
 
   function row(format, media, url) {
     const button = document.createElement("button")
-    button.className = "row"
+    // Dòng âm thanh đầu tiên có vạch ngăn với các dòng video (như IDM).
+    button.className = format.id === "audio-m4a" ? "row audio" : "row"
     button.type = "button"
     const name = document.createElement("span")
     name.textContent = label(format)
