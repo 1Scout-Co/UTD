@@ -251,7 +251,7 @@ test('trang khác: manifest HLS và file media trang đã tải được đưa r
 
 // background.js thật với API giả: lệnh của content script ⇒ chạy page-media.js trong trang (MAIN), kiểm kết quả;
 // dòng đã chọn ⇒ tin `media-streams` cho UTD, không cookie.
-function stubBackground(found: unknown) {
+function stubBackground({ found, native = { ok: true, taskId: 't9' } }: { found: unknown; native?: Record<string, unknown> }) {
   const calls: { name: string; args: unknown[] }[] = []
   const listeners: ((message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean)[] = []
   const noop = { addListener: () => undefined }
@@ -265,7 +265,7 @@ function stubBackground(found: unknown) {
       onMessage: { addListener: (listener: (typeof listeners)[number]) => listeners.push(listener) },
       sendNativeMessage: async (_host: string, message: unknown) => {
         calls.push({ name: 'native', args: [message] })
-        return { ok: true, taskId: 't9' }
+        return native
       },
     },
     contextMenus: { removeAll: async () => undefined, create: async () => undefined, onClicked: noop },
@@ -298,7 +298,7 @@ test('nền: chạy page-media.js trong trang, bỏ phần không hợp lệ; d�
     files: [],
   }
   await page.route('http://ext.utd.test/**', (route) => route.fulfill({ contentType: 'text/html', body: '<p>x</p>' }))
-  await page.addInitScript(stubBackground, found)
+  await page.addInitScript(stubBackground, { found })
   await page.goto('http://ext.utd.test/')
   await page.addScriptTag({ path: 'extensions/chromium/page-media.js' })
   await page.addScriptTag({ path: 'extensions/chromium/background.js' })
@@ -340,4 +340,21 @@ test('nền: chạy page-media.js trong trang, bỏ phần không hợp lệ; d�
     },
   ])
   expect(calls.some((call) => call.name === 'cookies'), 'không đọc cookie').toBe(false)
+})
+
+test('nền: UTD trả câu lỗi không mã (vd channel_page: <link>) ⇒ mã chung, bảng không bao giờ thấy câu thô', async ({ page }) => {
+  await page.route('http://ext.utd.test/**', (route) => route.fulfill({ contentType: 'text/html', body: '<p>x</p>' }))
+  await page.addInitScript(stubBackground, { found: null, native: { ok: false, message: 'channel_page: https://www.tiktok.com/@_littledav_' } })
+  await page.goto('http://ext.utd.test/')
+  await page.addScriptTag({ path: 'extensions/chromium/background.js' })
+  const reply = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const bg = (window as unknown as { __bg: { listeners: ((m: unknown, s: unknown, r: (v: unknown) => void) => boolean)[] } }).__bg
+        const url = 'https://www.tiktok.com/@_littledav_'
+        bg.listeners[0]({ type: 'utd.video-formats', url, src: null, signIn: false }, { id: 'utd', tab: { id: 7, url }, frameId: 0, url }, resolve)
+      }),
+  )
+  expect(reply).toMatchObject({ ok: false, code: 'media.failed' })
+  expect(JSON.stringify(reply)).not.toContain('channel_page')
 })

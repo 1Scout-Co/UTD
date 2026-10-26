@@ -255,11 +255,13 @@ const STORY_MEDIA = {
   },
 }
 
-async function openAt(page: Page, url: string, replies: Reply[], pageMedia: Reply[]) {
-  await page.route(`${new URL(url).origin}/**`, (route) => route.fulfill({ contentType: 'text/html', body: PAGE }))
+async function openAt(page: Page, url: string, replies: Reply[], pageMedia: Reply[], body = PAGE, scripts = ['content.js']) {
+  await page.route(`${new URL(url).origin}/**`, (route) =>
+    route.fulfill({ contentType: 'text/html; charset=utf-8', body }),
+  )
   await page.addInitScript(stubContentApi, { messages: MESSAGES, replies, enabled: true, pageMedia })
   await page.goto(url)
-  await page.addScriptTag({ path: 'extensions/chromium/content.js' })
+  for (const script of scripts) await page.addScriptTag({ path: `extensions/chromium/${script}` })
   await page.waitForTimeout(50)
 }
 
@@ -301,4 +303,62 @@ test('trang khác yt-dlp không đọc được ⇒ bắt manifest HLS trang đ�
     ['utd.page-media', undefined],
     ['utd.video-formats', 'https://cdn.utd.test/hls/master.m3u8'],
   ])
+})
+
+// TikTok (extensions/*/tiktok.js): feed và lưới hồ sơ có địa chỉ trang không phải link video ⇒ gửi yt-dlp link riêng
+// `/@kênh/video/<mã>` của đúng video đang gắn nút. Trang giả theo DOM của TikTok web (khung `xgwrapper-<số>-<mã>`,
+// mục feed `recommend-list-item-container`, ô lưới `user-post-item` bọc trong link bài đăng).
+const TIKTOK_FEED = `<!doctype html><html><head><title>TikTok - Make Your Day</title></head><body style="margin:0">
+<article data-e2e="recommend-list-item-container" style="padding:30px 40px">
+  <div id="xgwrapper-0-7412345678901234567"><video id="main" width="360" height="640" style="display:block;background:#000"></video></div>
+  <a href="/@davidnguyenjr" data-e2e="video-author-avatar">David Nguyen Jr.</a>
+</article>
+<article data-e2e="recommend-list-item-container" style="padding:30px 40px">
+  <div id="xgwrapper-1-7499999999999999999"><video id="next" width="360" height="640" style="display:block;background:#000"></video></div>
+  <a href="/@khac">Khác</a>
+</article>
+</body></html>`
+
+const TIKTOK_GRID = `<!doctype html><html><head><title>Dav (@_littledav_) | TikTok</title></head><body style="margin:0">
+<div data-e2e="user-post-item-list" style="display:flex;gap:10px;padding:40px">
+  <div data-e2e="user-post-item"><a href="https://www.tiktok.com/@_littledav_/video/7400000000000000001"><video id="tile1" width="200" height="300" style="display:block;background:#000"></video></a></div>
+  <div data-e2e="user-post-item"><a href="https://www.tiktok.com/@_littledav_/video/7400000000000000002"><video id="tile2" width="200" height="300" style="display:block;background:#000"></video></a></div>
+  <div data-e2e="user-post-item"><a href="/@_littledav_/photo/7400000000000000003"><video id="tile3" width="200" height="300" style="display:block;background:#000"></video></a></div>
+</div>
+</body></html>`
+
+test('TikTok feed (For You): nút gửi yt-dlp link riêng của video đang xem, không phải trang feed', async ({ page }) => {
+  await openAt(page, 'https://www.tiktok.com/foryou', [media()], [], TIKTOK_FEED, ['tiktok.js', 'content.js'])
+  await hover(page, '#main')
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(FORMATS.length)
+  expect((await sent(page))[0]).toEqual({
+    type: 'utd.video-formats',
+    url: 'https://www.tiktok.com/@davidnguyenjr/video/7412345678901234567',
+    src: null,
+    signIn: false,
+  })
+  await page.keyboard.press('Escape')
+  await page.locator('#next').scrollIntoViewIfNeeded()
+  await hover(page, '#next')
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(0)
+  expect((await sent(page)).at(-1)?.url).toBe('https://www.tiktok.com/@khac/video/7499999999999999999')
+})
+
+test('TikTok lưới video trên hồ sơ: đúng ô đang rê (cả bài ảnh), không gửi link kênh, rê qua không chạy yt-dlp', async ({ page }) => {
+  await openAt(page, 'https://www.tiktok.com/@_littledav_', [media(), media()], [], TIKTOK_GRID, ['tiktok.js', 'content.js'])
+  await hover(page, '#tile1')
+  await hover(page, '#tile2')
+  await page.waitForTimeout(200)
+  expect(await sent(page), 'rê qua các ô không đọc sẵn').toEqual([])
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(FORMATS.length)
+  expect((await sent(page))[0].url).toBe('https://www.tiktok.com/@_littledav_/video/7400000000000000002')
+  await page.keyboard.press('Escape')
+  await hover(page, '#tile3')
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(FORMATS.length)
+  // Bài ảnh: yt-dlp không nhận /photo/, gửi dạng /video/ (yt-dlp ra nhạc của bài).
+  expect((await sent(page)).at(-1)?.url).toBe('https://www.tiktok.com/@_littledav_/video/7400000000000000003')
 })

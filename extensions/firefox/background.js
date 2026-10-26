@@ -409,7 +409,10 @@ function videoFormats({ url, src, signIn }, tab) {
     const response = await sendNative(withAuth(payload, auth))
     if (response === null) return { ok: false, message: t("notConnected") }
     if (response.ok !== true) {
-      return { ok: false, code: codeOf(response.message), message: response.message ? fromHost(response.message) : t("noResponse") }
+      // Câu không mã mà tiện ích không biết (vd `channel_page: <link>`) ⇒ mã chung: bảng hiện câu đã dịch, không câu thô.
+      const known = HOST_TEXT[response.message]
+      const code = codeOf(response.message) ?? (known ? null : "media.failed")
+      return { ok: false, code, message: known ? t(known) : t("noResponse") }
     }
     return { ok: true, media: response.media }
   })()

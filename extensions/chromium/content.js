@@ -105,7 +105,7 @@
     pill.append(label)
     actions.set(pill, () => {
       if (panel && !panel.hidden) close()
-      else void open(analysisUrl(), sourceOf(target))
+      else void open(analysisUrl(target), sourceOf(target))
     })
     panel = document.createElement("div")
     panel.className = "panel"
@@ -147,8 +147,14 @@
     return /^https?:\/\//i.test(src) ? src : null
   }
 
-  /** Trang đang xem: yt-dlp đọc được trang video quen và nhiều trang nhúng video. */
-  function analysisUrl() {
+  /**
+   * Link cho yt-dlp: link riêng của `video` nếu module của trang tìm được (tiktok.js: feed, lưới hồ sơ — địa chỉ trang
+   * không phải link video), không thì trang đang xem (yt-dlp đọc được trang video quen và nhiều trang nhúng video).
+   */
+  function analysisUrl(video) {
+    for (const site of globalThis.__utdVideoSites ?? []) {
+      if (site.hosts.test(location.hostname)) return (video && site.videoUrl(video)) || location.href
+    }
     return location.href
   }
 
@@ -163,8 +169,9 @@
     clearTimeout(hideTimer)
     if (duration) hideTimer = setTimeout(hide, duration)
     if (!frame) frame = requestAnimationFrame(follow)
-    const url = analysisUrl()
-    if (KNOWN.test(location.hostname) && !FACEBOOK.test(location.hostname) && !prefetched.has(url)) {
+    const url = analysisUrl(video)
+    // Chỉ đọc sẵn video của chính trang: rê qua lưới video (hồ sơ TikTok…) không chạy yt-dlp cho từng ô.
+    if (KNOWN.test(location.hostname) && !FACEBOOK.test(location.hostname) && url === location.href && !prefetched.has(url)) {
       prefetched.add(url)
       void formatsFor(url, sourceOf(video), false)
     }
@@ -508,7 +515,8 @@
     if (video) {
       target = video
       pill.hidden = false
-      void open(message.url, sourceOf(video))
+      // Chuột phải lên video: nền gửi trang đang mở; module của trang (tiktok.js) có thể biết link riêng của video.
+      void open(message.url === location.href ? analysisUrl(video) : message.url, sourceOf(video))
     } else {
       pill.hidden = true
       void open(message.url, null, { top: point.y + PILL_HEIGHT, right: point.x + 136, bottom: point.y, left: point.x }, point)

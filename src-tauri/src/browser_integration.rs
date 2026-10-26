@@ -39,6 +39,10 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../extensions/chromium/fb-media.js"),
     ),
     (
+        "chromium/tiktok.js",
+        include_bytes!("../../extensions/chromium/tiktok.js"),
+    ),
+    (
         "chromium/popup.html",
         include_bytes!("../../extensions/chromium/popup.html"),
     ),
@@ -81,6 +85,10 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
     (
         "firefox/fb-media.js",
         include_bytes!("../../extensions/firefox/fb-media.js"),
+    ),
+    (
+        "firefox/tiktok.js",
+        include_bytes!("../../extensions/firefox/tiktok.js"),
     ),
     (
         "firefox/popup.html",
@@ -406,7 +414,7 @@ mod tests {
                 .map(|(_, bytes)| serde_json::from_slice::<serde_json::Value>(bytes).unwrap())
                 .unwrap();
             assert!(manifest["permissions"].as_array().unwrap().contains(&"downloads".into()));
-            for script in ["background.js", "takeover.js", "takeover-keys.js", "page-media.js", "fb-media.js"] {
+            for script in ["background.js", "takeover.js", "takeover-keys.js", "page-media.js", "fb-media.js", "tiktok.js"] {
                 assert!(bundled(&format!("{browser}/{script}")), "{browser}/{script}");
             }
         }
