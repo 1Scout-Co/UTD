@@ -25,12 +25,20 @@ Nhánh `claude/fb-media-4c7a19` (đã ghép main @ `93ed9a3`). Chủ dự án b�
 - **Không bao giờ hiện câu lỗi thô:** `background.js` đổi câu lỗi không mã mà tiện ích không biết (vd
   `channel_page: <link>`) thành mã chung `media.failed` ⇒ bảng hiện "UTD không đọc được video này."
 - yt-dlp đọc TikTok công khai không cần cookie; bản trước 2026-08-18 hỏng TikTok, UTD đang dùng 2026.10.21.
+- **Bắt đầu tải chậm, "Đang tải 0 B/s" (sửa 2026-10-26):** CDN TikTok (`v19-webapp-prime.tiktok.com`, link có
+  `tk=tt_chain_token`) trả 403 nếu yêu cầu thiếu cookie `tt_chain_token` mà yt-dlp nhận lúc đọc trang (đo bằng curl:
+  thiếu ⇒ 403, có ⇒ 206; giá trị còn ngoặc kép như trong JSON ⇒ vẫn 403). yt-dlp ghi cookie này ở trường `cookies`
+  của format; đường tải nhanh trước đây bỏ qua nên bị 403, hỏi yt-dlp lại, lại 403, rồi mới để yt-dlp tự tải.
+  Nay `resolve::StreamCookies` đọc trường đó (bỏ ngoặc như yt-dlp gửi), `fast::cookies_for` gộp vào hũ cookie của
+  lượt tải: chỉ ở RAM, engine chỉ gửi tới đúng miền, không vào journal.
 
 ## Bài thử
 
 - `e2e/video-button.spec.ts`: feed giả (2 mục `recommend-list-item-container` có `xgwrapper`) ⇒ đúng link từng video;
   lưới hồ sơ giả ⇒ đúng ô đang rê, rê qua không gửi gì, ô bài ảnh ⇒ link `/video/`.
 - `e2e/fb-media.spec.ts`: nền đổi `channel_page: …` thành `media.failed`, không lộ câu thô.
+- Rust: `fast::tests::sends_the_cookies_yt_dlp_set_for_the_stream` (máy chủ giả trả 403 nếu thiếu `tt_chain_token=abc`;
+  tải xong ngay lượt đầu, không hỏi yt-dlp lại), `resolve::tests::splits_yt_dlp_stream_cookies_and_unquotes_values`.
 
 ## Phụ lục A — Các dự án khác làm thế nào (đọc mã, 2026-10-26)
 

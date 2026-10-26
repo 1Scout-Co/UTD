@@ -43,6 +43,53 @@ pub(super) struct Stream {
     pub chunk: Option<u64>,
     pub available_at: Option<i64>,
     pub drm: bool,
+    pub cookies: StreamCookies,
+}
+
+/// Cookie yt-dlp đặt cho luồng (`cookies` của format): CDN TikTok trả 403 nếu thiếu `tt_chain_token`.
+/// Mỗi cookie một dòng kiểu `Set-Cookie`, giá trị bỏ ngoặc kép như yt-dlp gửi (giữ ngoặc thì CDN cũng
+/// trả 403). Chỉ ở RAM (probe_cache, hũ cookie của lượt tải), không vào journal.
+#[derive(Clone, Default, PartialEq)]
+pub(super) struct StreamCookies(Vec<String>);
+
+impl std::fmt::Debug for StreamCookies {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "StreamCookies({})", self.0.len())
+    }
+}
+
+impl StreamCookies {
+    const MAX: usize = 32;
+
+    /// `a=1; Domain=.x.com; Path=/; Secure; Expires=…; b="2"; Domain=…` ⇒ `["a=1; Domain=.x.com; …", "b=2; …"]`.
+    pub fn parse(text: &str) -> Self {
+        let mut lines: Vec<String> = Vec::new();
+        for part in text.split(';').map(str::trim).filter(|part| !part.is_empty()) {
+            let (name, value) = part.split_once('=').unwrap_or((part, ""));
+            let attribute = matches!(
+                name.trim().to_ascii_lowercase().as_str(),
+                "domain" | "path" | "secure" | "expires" | "max-age" | "httponly" | "samesite" | "version" | "comment"
+            );
+            match lines.last_mut() {
+                Some(line) if attribute => {
+                    line.push_str("; ");
+                    line.push_str(part);
+                }
+                _ if attribute || !part.contains('=') => {}
+                _ => lines.push(format!("{}={}", name.trim(), value.trim().trim_matches('"'))),
+            }
+        }
+        lines.truncate(Self::MAX);
+        Self(lines)
+    }
+
+    pub fn lines(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(String::as_str)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl Stream {
@@ -218,6 +265,11 @@ pub(super) fn parse_stream(value: &Value) -> Option<Stream> {
             .and_then(|options| number(options.get("http_chunk_size"))),
         available_at: number(value.get("available_at")).and_then(|at| i64::try_from(at).ok()),
         drm: flagged(value.get("has_drm")),
+        cookies: value
+            .get("cookies")
+            .and_then(Value::as_str)
+            .map(StreamCookies::parse)
+            .unwrap_or_default(),
         url,
     })
 }
@@ -424,7 +476,29 @@ mod tests {
             chunk: None,
             available_at: None,
             drm: false,
+            cookies: Default::default(),
         }
+    }
+
+    #[test]
+    fn splits_yt_dlp_stream_cookies_and_unquotes_values() {
+        let cookies = StreamCookies::parse(
+            "ttwid=1%7Cx; Domain=.tiktok.com; Path=/; Secure; Expires=1824135169; tt_csrf_token=y; Domain=.tiktok.com; Path=/; Secure; tt_chain_token=\"z/+=\"; Domain=.tiktok.com; Path=/; Secure; Expires=1808583169",
+        );
+        assert_eq!(
+            cookies.lines().collect::<Vec<_>>(),
+            [
+                "ttwid=1%7Cx; Domain=.tiktok.com; Path=/; Secure; Expires=1824135169",
+                "tt_csrf_token=y; Domain=.tiktok.com; Path=/; Secure",
+                "tt_chain_token=z/+=; Domain=.tiktok.com; Path=/; Secure; Expires=1808583169",
+            ]
+        );
+        assert_eq!(format!("{cookies:?}"), "StreamCookies(3)", "không lộ giá trị trong log");
+        let format = serde_json::json!({
+            "format_id": "h264_540p", "url": "https://v16-webapp-prime.tiktok.com/video/x", "ext": "mp4",
+            "protocol": "https", "cookies": "tt_chain_token=\"z\"; Domain=.tiktok.com; Path=/"
+        });
+        assert!(!parse_stream(&format).unwrap().cookies.is_empty());
     }
 
     fn resolved(streams: Vec<Stream>) -> Resolved {

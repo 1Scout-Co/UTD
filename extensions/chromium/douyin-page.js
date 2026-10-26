@@ -25,20 +25,27 @@
 
   /** Gọi API bằng `fetch` của trang (được tự ký). `{ data }`, hoặc `{ error: "blocked" | "login" }`. */
   async function call(path, params) {
+    // Lý do bị chặn ghi ra Console của trang (lọc "[UTD]"): không có cookie hay nội dung trả về, chỉ mã + độ dài.
+    const blocked = (why) => {
+      console.warn("[UTD] Douyin", path, why)
+      return { error: "blocked" }
+    }
     let response
     try {
       response = await fetch(`${path}?${new URLSearchParams({ ...COMMON, ...params })}`, { credentials: "include" })
-    } catch {
-      return { error: "blocked" }
+    } catch (error) {
+      return blocked(`fetch: ${error?.name ?? error}`)
     }
     const text = await response.text().catch(() => "")
-    if (!response.ok || !text || /ArgusSecurityPlugin/.test(text)) return { error: "blocked" }
+    if (!response.ok || !text || /ArgusSecurityPlugin/.test(text)) {
+      return blocked(`HTTP ${response.status}, ${text.length} chars${/ArgusSecurityPlugin/.test(text) ? ", Argus" : ""}`)
+    }
     try {
       const data = JSON.parse(text)
       if (data?.status_code === 2483 || /请先登录|用户未登录/.test(String(data?.status_msg ?? ""))) return { error: "login" }
       return { data }
     } catch {
-      return { error: "blocked" }
+      return blocked(`not JSON, ${text.length} chars`)
     }
   }
 

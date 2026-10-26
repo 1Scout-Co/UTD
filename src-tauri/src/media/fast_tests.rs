@@ -29,10 +29,13 @@ struct Hit {
     user_agent: Option<String>,
     referer: Option<String>,
     cookie: bool,
+    cookie_text: Option<String>,
 }
 
 enum Route {
     File(Arc<Vec<u8>>, &'static str),
+    /// 403 khi header `Cookie` không có đúng chuỗi này (CDN TikTok đòi `tt_chain_token`).
+    Gated(Arc<Vec<u8>>, &'static str, &'static str),
     Forbidden,
 }
 
@@ -119,9 +122,17 @@ fn answer(
         user_agent: header("user-agent"),
         referer: header("referer"),
         cookie: header("cookie").is_some(),
+        cookie_text: header("cookie"),
     };
-    let reply = match routes.get(&path) {
-        Some(Route::File(body, kind)) => {
+    let opened = match routes.get(&path) {
+        Some(Route::Gated(body, kind, needed)) => header("cookie")
+            .is_some_and(|cookie| cookie.split("; ").any(|pair| pair == *needed))
+            .then_some((body, kind)),
+        Some(Route::File(body, kind)) => Some((body, kind)),
+        _ => None,
+    };
+    let reply = match (opened, routes.get(&path)) {
+        (Some((body, kind)), _) => {
             let total = body.len() as u64;
             if method == "HEAD" {
                 head(200, total, kind, None, &[])
@@ -140,8 +151,8 @@ fn answer(
                 head(200, total, kind, None, body)
             }
         }
-        Some(Route::Forbidden) => head(403, 0, "text/plain", None, &[]),
-        None => head(404, 0, "text/plain", None, &[]),
+        (None, Some(Route::Forbidden | Route::Gated(..))) => head(403, 0, "text/plain", None, &[]),
+        (None, _) => head(404, 0, "text/plain", None, &[]),
     };
     log.lock().unwrap().push(hit);
     let wait = delay.load(Ordering::Relaxed);
@@ -296,6 +307,14 @@ impl Lab {
             Route::File(self.audio.clone(), "audio/mp4"),
         );
         routes.insert("/gone".to_string(), Route::Forbidden);
+        routes.insert(
+            "/tt-v.mp4".to_string(),
+            Route::Gated(self.video.clone(), "video/mp4", "tt_chain_token=abc"),
+        );
+        routes.insert(
+            "/tt-a.m4a".to_string(),
+            Route::Gated(self.audio.clone(), "audio/mp4", "tt_chain_token=abc"),
+        );
         Server::start(routes)
     }
 
@@ -359,6 +378,7 @@ impl Lab {
             chunk: Some(CAP),
             available_at: None,
             drm: false,
+            cookies: Default::default(),
         };
         Resolved {
             streams: vec![
@@ -524,6 +544,37 @@ async fn downloads_both_streams_with_capped_requests_then_muxes() {
     assert!(
         tasks.iter().all(|event| event.id == task.id),
         "task con không lên giao diện"
+    );
+}
+
+/// TikTok: CDN trả 403 nếu thiếu cookie yt-dlp đặt cho luồng (`tt_chain_token`, giá trị có ngoặc kép).
+/// Engine gửi kèm cookie đó (bỏ ngoặc) ngay lượt đầu, không đứng 0 B/s rồi quay về yt-dlp.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sends_the_cookies_yt_dlp_set_for_the_stream() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    let (mut task, job) = lab.parent();
+    let mut resolved = lab.streams(&server, "/tt-v.mp4", "/tt-a.m4a");
+    for stream in &mut resolved.streams {
+        stream.cookies = resolve::StreamCookies::parse(
+            "ttwid=1%7Cx; Domain=127.0.0.1; Path=/; Expires=1824135169; tt_chain_token=\"abc\"; Domain=127.0.0.1; Path=/",
+        );
+    }
+    let resolver = Fixed {
+        resolved,
+        calls: AtomicUsize::new(0),
+    };
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_finished(&lab, &task);
+    assert_eq!(resolver.calls.load(Ordering::Relaxed), 1, "không hỏi yt-dlp lại");
+    let video = server.hits("/tt-v.mp4");
+    assert!(
+        video
+            .iter()
+            .all(|hit| hit.cookie_text.as_deref() == Some("ttwid=1%7Cx; tt_chain_token=abc")),
+        "{video:?}"
     );
 }
 

@@ -73,8 +73,12 @@ async function douyinChannel(url, tab) {
     let cursor = "0"
     let total = 0
     for (;;) {
-      const page = await douyinCall(tab, "posts", [secUid, cursor]).catch(() => null)
+      const page = await douyinCall(tab, "posts", [secUid, cursor]).catch((error) => {
+        console.warn("[UTD] Douyin posts", error?.message ?? error)
+        return null
+      })
       if (!page || page.error) {
+        console.warn("[UTD] Douyin posts", page ? page.error : "no result from the page")
         await push({ done: true, error: page?.error === "login" ? "login" : "blocked" })
         return true
       }

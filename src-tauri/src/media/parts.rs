@@ -345,6 +345,7 @@ mod tests {
             chunk: Some(10 * 1024 * 1024),
             available_at: None,
             drm: false,
+            cookies: Default::default(),
         }
     }
 
