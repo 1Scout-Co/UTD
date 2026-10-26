@@ -39,7 +39,7 @@ Ngày: 2026-10-23 · Trạng thái: chờ duyệt Cổng 1
 | S-11 | Có dữ liệu | Danh sách chất lượng (resolution, codec, bitrate, size); mặc định tốt nhất tương thích | Chọn chất lượng, chọn audio+video, bắt đầu tải |
 | S-12 | Trống | Không tìm thấy media tải được | Mở trang gốc, dán URL trực tiếp, cập nhật extractor |
 | S-13 | Lỗi | Extractor lỗi/hết hạn, mạng lỗi, trang đổi cấu trúc | Cập nhật extractor, thử lại, sao chép log |
-| S-14 | Lỗi (đăng nhập/DRM) | Cần đăng nhập hoặc nội dung DRM không hỗ trợ | Cho phép gửi cookie cho phiên này, mở trang đăng nhập, huỷ; DRM thì từ chối rõ |
+| S-14 | Lỗi (đăng nhập/DRM) | "Cần đăng nhập · <trang>" + gợi ý "Bấm biểu tượng UTD trên trình duyệt" (2026-10-25: cho phép xảy ra trong popup, xem S-70); hoặc nội dung DRM không hỗ trợ | Mở trang, huỷ; nhận được đăng nhập thì tự phân tích lại; DRM thì từ chối rõ |
 
 #### Chi tiết download
 
@@ -116,19 +116,36 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 | S-60 | Đang tải | Tên, ảnh đại diện kênh; video hiện dần, số video đếm dần | Dừng liệt kê (giữ phần đã có), huỷ |
 | S-61 | Có dữ liệu | Video: ảnh nhỏ, tiêu đề, ngày, thời lượng, lượt xem; video đã tải lần trước đánh dấu "Đã tải" | Lọc mới nhất N / khoảng ngày / chỉ video mới, chọn tất cả / bỏ chọn, một chất lượng chung, thư mục riêng theo tên kênh, tải |
 | S-62 | Trống | Kênh chưa có video công khai | Huỷ |
-| S-63 | Lỗi | Tài khoản riêng tư/cần đăng nhập (UTD không gửi cookie), kênh không có, mạng lỗi, thiếu yt-dlp | Thử lại, huỷ |
+| S-63 | Lỗi | Tài khoản riêng tư/cần đăng nhập (cùng luồng S-14), kênh không có, mạng lỗi, thiếu yt-dlp | Mở trang, thử lại, huỷ |
+
+#### Đăng nhập (cookie của trình duyệt)
+
+Kế hoạch và mô hình đe doạ: `notes/auth-plan.md` (duyệt 2026-10-25). Cookie chỉ đọc trong cú bấm trên trình duyệt, chỉ nằm trong RAM của app. Quyền xin một lần lúc cài tiện ích (mọi trang + cookies, Q11 chủ dự án quyết 2026-10-26); tắt riêng từng trang trong popup. Mã S-70–S-77 (ngoài khoảng S-40–S-59 đang chừa).
+
+| mã | khi | thấy gì | làm được gì |
+|---|---|---|---|
+| S-70 | Có dữ liệu (popup extension) | Trang đang mở có task chờ đăng nhập: "google.com · 2 tải chờ"; trang nhạy cảm (ngân hàng, gov…) ghi rõ; công tắc "Hiện nút Tải video này trên trang" | Dùng đăng nhập / Tiếp tục (n); bật/tắt "Đăng nhập trên trang này" (mặc định bật), bật/tắt nút trên trang |
+| S-71 | Lỗi (popup extension) | Trình duyệt chưa cho phép, hoặc tiện ích không được chạy ở cửa sổ riêng tư | Thử lại |
+| S-72 | Lỗi (danh sách, chi tiết) | Task "Cần đăng nhập": chưa có cookie, đăng nhập hết hạn, hoặc app vừa mở lại. Chờ như link hết hạn (tự cứu, chờ link mới) | Mở trang, Cập nhật link… (download thường), huỷ |
+| S-73 | Có dữ liệu (Cài đặt › Tích hợp) | Công tắc "Dùng đăng nhập của trình duyệt" (mặc định bật), số trang đang giữ cookie, cảnh báo khoá tài khoản | Quên cookie |
+| S-74 | Có dữ liệu (trang web, tiện ích) | Rê chuột vào video (hoặc video vừa phát): nút nhỏ "⬇ Tải video này" ngay trên mép trên-phải video, không đè điều khiển của trình phát | Bấm ⇒ S-75 |
+| S-75 | Đang tải / Có dữ liệu / Lỗi (trang web, tiện ích) | Bảng định dạng ngay trên trang: "Đang đọc định dạng…"; Tốt nhất · 2160p … 144p · Chỉ âm thanh (M4A) · MP3, mỗi dòng kèm dung lượng ước tính; lỗi ngắn (cần đăng nhập, không đọc được, UTD chưa chạy); "Đã thêm vào UTD". Chuột phải › UTD mở cùng bảng ở chỗ bấm | Chọn một dòng ⇒ UTD tải luôn (không mở hộp Tải media); Esc / bấm ra ngoài để đóng |
+| S-76 | Có dữ liệu (popup extension) | Công tắc "Tự bắt link tải" (mặc định bật); "Tuỳ chọn" gập lại: bỏ qua file nhỏ hơn N MB (mặc định 1), đuôi không bắt; một dòng "Giữ Alt khi bấm: để trình duyệt tự tải" | Bật/tắt, sửa ngưỡng, sửa đuôi |
+| S-77 | Có dữ liệu (cửa sổ UTD) | UTD vừa nhận download của trình duyệt: thông báo nhỏ 4 s "Nhận từ trình duyệt · tên file", không mở hộp nào; dòng tải mới hiện trong danh sách | — |
 
 ### Làm được gì
 
 - Tải file lớn bằng nhiều kết nối, pause/resume, sống qua mất mạng, sleep, kill app và rút điện (S-01, S-15, S-19).
 - Thêm download bằng URL, clipboard, kéo thả danh sách URL; tự đọc tên/kích thước/MIME và phát hiện trùng (S-05–S-09).
-- Chuột phải link/trang/video trong Chrome, Edge, Firefox để tải; takeover download của browser là tuỳ chọn (S-34–S-39).
+- Chuột phải link/trang/video trong Chrome, Edge, Firefox để tải; tự bắt link tải (takeover) download của browser, mặc định bật, tắt được trong popup (S-34–S-39, S-76, S-77).
 - Tải video YouTube/TikTok/Facebook qua extractor; chọn chất lượng; tải HLS/DASH trực tiếp; ghép audio/video bằng ffmpeg (S-10–S-14).
 - Download Guard: cảnh báo file nguy hiểm, tên giả, MIME giả; quarantine; kiểm tra chữ ký; giữ MOTW; verify hash (S-22–S-26).
 - Doctor giải thích vì sao chậm/lỗi và đưa cách sửa; tự sửa khi an toàn (S-21).
 - Quản lý hàng đợi, tìm/lọc, retry, giới hạn tốc độ toàn cục và theo tác vụ (S-01, S-27).
 - Cài đặt mạng/proxy cơ bản, số kết nối, giới hạn theo host, ngôn ngữ VI/EN, auto-update (S-27–S-31).
 - Onboarding cài native host/extension và tải thử (S-32–S-33).
+- Tải nội dung cần đăng nhập (video giới hạn tuổi/riêng tư, file Drive…) bằng đăng nhập của trình duyệt, quyền xin một lần lúc cài, tắt riêng từng trang (S-14, S-70–S-73).
+- Nút "Tải video này" trên mọi trang có video, chọn định dạng ngay trên trang rồi tải luôn, kiểu IDM (S-74, S-75).
 - Dữ liệu local, không tài khoản, không telemetry; cookie chỉ dùng khi opt-in (P-01–P-04).
 
 ### Để sau
@@ -178,10 +195,10 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 
 - **App Tauri 2**: Rust core + React/TS UI. Engine là crate `utd-core` chạy trong process app ở v1; boundary IPC đã tách để sau này thành daemon.
 - **`utd-native-host`**: binary nhỏ do Chrome/Edge/Firefox khởi chạy; nói chuyện với app qua named pipe (Windows) với ACL theo user + token; chỉ chấp nhận extension ID trong allowlist.
-- **Extension**: MV3 cho Chromium, WebExtensions cho Firefox; quyền tối thiểu, host permission optional theo site; right-click, toolbar popup, overlay; takeover opt-in.
+- **Extension**: MV3 cho Chromium, WebExtensions cho Firefox; quyền tối thiểu, host permission optional theo site; right-click, toolbar popup, overlay; takeover mặc định bật (chủ dự án chọn như IDM, 2026-10-26), tắt trong popup.
 - **Engine**: tokio + reqwest/hyper + rustls; HTTP/1.1 + HTTP/2; phân đoạn thích ứng; preallocate + positional writes; SQLite WAL cho journal; verify; speed limit; retry/backoff; Doctor.
 - **Media**: yt-dlp (external) cho site extractor; ffmpeg (external) cho mux/remux; HLS/DASH VOD native cho URL trực tiếp. Không bundle binary GPL; quản lý phiên bản, checksum, license notice, rollback.
-- **Lưu trữ**: SQLite `%LOCALAPPDATA%\UTD-Data\utd.db`; settings `%APPDATA%\UTD\settings.json`; log `%LOCALAPPDATA%\UTD-Data\logs`; download mặc định `%USERPROFILE%\Downloads\UTD`; quarantine `%LOCALAPPDATA%\UTD-Data\quarantine`. Không lưu cookie/token.
+- **Lưu trữ**: SQLite `%LOCALAPPDATA%\UTD-Data\utd.db`; settings `%APPDATA%\UTD\settings.json`; log `%LOCALAPPDATA%\UTD-Data\logs`; download mặc định `%USERPROFILE%\Downloads\UTD`; quarantine `%LOCALAPPDATA%\UTD-Data\quarantine`. Không lưu cookie/token (journal chỉ ghi task nào cần đăng nhập ở trang nào, không ghi giá trị).
 - **Phân phối**: NSIS installer + Tauri updater (chữ ký), WebView2 bootstrap; portable/ARM64 để sau.
 
 ### 3. Luồng chính
@@ -240,10 +257,10 @@ Kênh TikTok (`@user`, link rút gọn), kênh/playlist YouTube; mở từ hộp
 - AC-12: KHI gặp lỗi phổ biến THÌ HỆ THỐNG PHẢI hiện Doctor với nguyên nhân và hành động sửa cụ thể.
 - AC-13: KHI cấu hình proxy THÌ HỆ THỐNG PHẢI áp dụng cho mọi request và báo lỗi rõ nếu proxy sai; NTLM/Kerberos ngoài phạm vi v1.
 - AC-14: KHI người dùng chuột phải link/trang trong Chrome/Edge/Firefox THÌ HỆ THỐNG PHẢI nhận URL + headers/cookies theo opt-in và mở đúng luồng.
-- AC-15: KHI bật takeover THÌ HỆ THỐNG PHẢI hủy download của browser và chuyển sang UTD với headers/cookies; tắt thì browser tải như thường.
+- AC-15: KHI bật takeover THÌ HỆ THỐNG PHẢI hủy download của browser và chuyển sang UTD với headers/cookies; tắt thì browser tải như thường. (2026-10-26: tạm dừng bản của trình duyệt trước, chỉ huỷ khi UTD đã dò được file; UTD chưa chạy/không nhận/quá 20 s thì trình duyệt tải tiếp — không mất download nào. Mặc định bật, S-76/S-77, `notes/auth-plan.md` §9.1 "GĐ3 — Tự bắt link tải".)
 - AC-16: KHI người dùng tải video từ trang được hỗ trợ THÌ HỆ THỐNG PHẢI hiện danh sách chất lượng và tải format đã chọn; extractor lỗi THÌ có nút cập nhật/thử lại.
 - AC-17: KHI URL là HLS/DASH không DRM THÌ HỆ THỐNG PHẢI tải và ghép bằng ffmpeg; KHI phát hiện DRM THÌ phải từ chối rõ, không thử bypass.
-- AC-18: KHI người dùng chưa opt-in cookie THÌ HỆ THỐNG PHẢI không đọc/gửi cookie; khi opt-in THÌ cookie chỉ dùng cho request đó và không ghi disk/log.
+- AC-18: KHI người dùng chưa opt-in cookie THÌ HỆ THỐNG PHẢI không đọc/gửi cookie; khi opt-in THÌ cookie chỉ dùng cho request đó và không ghi disk/log. Opt-in là cho phép theo từng trang trong popup; extension chỉ đọc cookie bên trong cú bấm của người dùng trên trình duyệt (menu chuột phải, nút popup), app không bao giờ tự xin cookie (2026-10-25).
 - AC-19: KHI app chạy THÌ HỆ THỐNG PHẢI không gửi telemetry; chỉ có request update và request do người dùng yêu cầu.
 - AC-20: KHI có bản update THÌ HỆ THỐNG PHẢI chỉ chấp nhận gói đã ký; sai chữ ký THÌ từ chối và giữ bản cũ.
 - AC-21: KHI mở app lần đầu THÌ HỆ THỐNG PHẢI hướng dẫn cài native host/extension và tải thử; lỗi THÌ có cách sửa.

@@ -386,7 +386,14 @@ pub struct DownloadTask {
     /// UTD đang tự cứu download (chờ thử lại, chờ mạng, chờ chỗ trống, chờ link mới).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<Recovery>,
+    /// Task cần đăng nhập ở các trang này (tên miền gốc, vd `google.com`). Chỉ là dấu: cookie không bao giờ
+    /// vào journal, mỗi lượt chạy phải đưa lại qua `DownloadControl::cookies` (notes/auth-plan.md §6).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auth_sites: Vec<String>,
 }
+
+/// Tối đa chừng này trang cần đăng nhập trên một task.
+pub const MAX_AUTH_SITES: usize = 8;
 
 impl DownloadTask {
     pub fn new(
@@ -429,6 +436,7 @@ impl DownloadTask {
             max_request_bytes: None,
             request_headers: Vec::new(),
             recovery: None,
+            auth_sites: Vec::new(),
         };
         task.validate()?;
         Ok(task)
@@ -557,6 +565,18 @@ impl DownloadTask {
         {
             return Err(Error::InvalidInput(format!(
                 "max_request_bytes must be at least {MIN_REQUEST_BYTES}"
+            )));
+        }
+        let site_ok = |site: &String| {
+            !site.is_empty()
+                && site.len() <= 253
+                && site
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-:[]".contains(&byte))
+        };
+        if self.auth_sites.len() > MAX_AUTH_SITES || !self.auth_sites.iter().all(site_ok) {
+            return Err(Error::InvalidInput(format!(
+                "auth_sites must be at most {MAX_AUTH_SITES} lowercase host names"
             )));
         }
         validate_request_headers(&self.request_headers)

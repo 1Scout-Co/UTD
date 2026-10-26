@@ -16,7 +16,7 @@ pub struct IpcConfig {
     pub pipe: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PipeRequest {
     token: String,
@@ -27,6 +27,22 @@ struct PipeRequest {
     /// Lô link ("Tải tất cả link bằng UTD"): mở hộp Thêm hàng loạt, `url` khi đó là trang đang mở.
     #[serde(default)]
     batch: Option<Vec<String>>,
+    /// `auth-pending` · `auth-renew` (popup tiện ích); không có = cú bấm tải như cũ.
+    #[serde(default)]
+    kind: Option<String>,
+    /// Cookie đăng nhập đọc trong cú bấm (tin nhắn bản 2); kiểm ở `auth::accept`.
+    #[serde(default)]
+    auth: Option<crate::auth::AuthPayload>,
+    /// Nút trên trang (`media-formats`): nguồn của thẻ `<video>`, tải thẳng khi yt-dlp không đọc được trang.
+    #[serde(default)]
+    src: Option<String>,
+    /// Nút trên trang (`media-download`): định dạng người dùng chọn (như hộp Tải media gửi).
+    #[serde(default)]
+    selector: Option<String>,
+    #[serde(default)]
+    audio_format: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 /// Câu trả cho extension khi link cần người dùng xác nhận cảnh báo trước khi tải (S-22).
@@ -49,22 +65,46 @@ enum Route {
     /// mở hộp Thêm hàng loạt với đúng link này để người dùng xem cảnh báo rồi quyết.
     Confirm(Vec<String>),
     Download,
+    /// Popup hỏi tab đang mở có việc chờ đăng nhập không.
+    AuthPending,
+    /// Popup gửi cookie (người dùng vừa bấm cho phép): tải tiếp việc đang chờ.
+    AuthRenew,
+    /// Nút "Tải video này" trên trang: định dạng cho bảng chọn (GĐ3).
+    MediaFormats,
+    /// Bảng trên trang: tải với định dạng đã chọn, không mở hộp Tải media.
+    MediaDownload,
+    /// Download trình duyệt vừa bắt đầu (tự bắt link tải, takeover.rs): nhận nếu dò được file.
+    Takeover,
 }
 
 fn route(request: &PipeRequest, token: &str) -> Route {
     if !secure_eq(&request.token, token) {
         Route::Reject("Token IPC không hợp lệ.")
+    } else if request.url.len() > 8192 {
+        Route::Reject("URL quá dài.")
+    } else if let Some(kind) = request.kind.as_deref() {
+        match kind {
+            "auth-pending" => Route::AuthPending,
+            "auth-renew" if request.auth.is_some() => Route::AuthRenew,
+            "media-formats" => Route::MediaFormats,
+            "media-download" if request.selector.as_deref().is_some_and(|selector| !selector.trim().is_empty()) => {
+                Route::MediaDownload
+            }
+            "takeover" => Route::Takeover,
+            _ => Route::Reject("Yêu cầu từ trình duyệt không hợp lệ."),
+        }
     } else if let Some(links) = &request.batch {
         match crate::batch::clean_links(links) {
             Ok(links) => Route::Batch(links),
             Err(message) => Route::Reject(message),
         }
-    } else if request.url.len() > 8192 {
-        Route::Reject("URL quá dài.")
     } else if crate::media_pages::is_media_page(&request.url) {
         Route::Media
     } else if crate::media_pages::is_channel_page(&request.url) {
         Route::Channel
+    } else if crate::media_pages::is_drive_folder(&request.url) {
+        // Không gắn vào download chờ link mới, không tạo dòng tải hỏng: báo cách làm.
+        Route::Reject(crate::media_pages::DRIVE_FOLDER)
     } else if let Some(links) = needs_confirm(request) {
         Route::Confirm(links)
     } else {
@@ -92,6 +132,12 @@ struct PipeResponse {
     ok: bool,
     task_id: Option<String>,
     message: Option<String>,
+    /// Trả lời popup (`auth-pending`, `auth-renew`): trang, số việc chờ… Không bao giờ có cookie.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth: Option<serde_json::Value>,
+    /// Trả lời `media-formats`: tiêu đề, các định dạng cho bảng trên trang.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    media: Option<serde_json::Value>,
 }
 
 impl PipeResponse {
@@ -100,6 +146,8 @@ impl PipeResponse {
             ok: true,
             task_id: Some(task_id),
             message: None,
+            auth: None,
+            media: None,
         }
     }
 
@@ -109,6 +157,8 @@ impl PipeResponse {
             ok: true,
             task_id: None,
             message: Some(message.into()),
+            auth: None,
+            media: None,
         }
     }
 
@@ -117,6 +167,36 @@ impl PipeResponse {
             ok: false,
             task_id: None,
             message: Some(message.into()),
+            auth: None,
+            media: None,
+        }
+    }
+
+    /// Trả lời popup: lỗi là mã ngắn (`auth.disabled`…) để tiện ích dịch.
+    fn auth(result: Result<serde_json::Value, &'static str>) -> Self {
+        match result {
+            Ok(value) => Self {
+                ok: true,
+                task_id: None,
+                message: None,
+                auth: Some(value),
+                media: None,
+            },
+            Err(code) => Self::error(code),
+        }
+    }
+
+    /// Trả lời `media-formats`: lỗi giữ nguyên câu có mã (`[media.login] …`) để tiện ích biết cần đăng nhập.
+    fn media(result: Result<serde_json::Value, String>) -> Self {
+        match result {
+            Ok(value) => Self {
+                ok: true,
+                task_id: None,
+                message: None,
+                auth: None,
+                media: Some(value),
+            },
+            Err(message) => Self::error(message),
         }
     }
 }
@@ -433,6 +513,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use zeroize::Zeroize;
 
     let mut line = String::new();
     {
@@ -446,37 +527,108 @@ where
         }
     }
 
-    let request: PipeRequest =
-        serde_json::from_str(&line).map_err(|_| "IPC payload không hợp lệ".to_string())?;
+    // Dòng có thể mang cookie: đọc xong là xoá khỏi bộ nhớ.
+    let parsed = serde_json::from_str::<PipeRequest>(&line);
+    line.zeroize();
+    let mut request = parsed.map_err(|_| "IPC payload không hợp lệ".to_string())?;
+    // Trang file Google Drive ("Tải trang này", chuột phải link file): tải file gốc bằng link tải thật.
+    if let Some(download) = crate::media_pages::drive_download_url(&request.url) {
+        request.url = download;
+    }
     let response = match route(&request, token) {
         Route::Reject(message) => PipeResponse::error(message),
         Route::Media => open_media(&app, request, crate::media_pages::MEDIA_PAGE_NOTE),
         Route::Channel => open_media(&app, request, crate::media_pages::CHANNEL_PAGE_NOTE),
+        Route::AuthPending => PipeResponse::auth(crate::auth::flow::pending(&app, &request.url)),
+        Route::MediaFormats => {
+            let urls: Vec<&str> = std::iter::once(request.url.as_str())
+                .chain(request.page_url.as_deref())
+                .collect();
+            let grant = crate::auth::flow::grant_from_click(&app, request.auth.take(), &urls);
+            let result =
+                crate::video_button::formats(&app, &request.url, request.src.as_deref(), grant).await;
+            PipeResponse::media(result)
+        }
+        Route::MediaDownload => {
+            let urls: Vec<&str> = std::iter::once(request.url.as_str())
+                .chain(request.page_url.as_deref())
+                .collect();
+            let grant = crate::auth::flow::grant_from_click(&app, request.auth.take(), &urls);
+            let picked = crate::video_button::PageDownload {
+                url: request.url,
+                page_url: crate::media_pages::clean_page_url(request.page_url),
+                title: request.title,
+                selector: request.selector.unwrap_or_default(),
+                audio_format: request.audio_format,
+            };
+            match crate::video_button::download(app.clone(), picked, grant).await {
+                Ok(task_id) => PipeResponse::ok(task_id),
+                Err(message) => PipeResponse::error(message),
+            }
+        }
+        Route::AuthRenew => match request.auth.take() {
+            Some(auth) => PipeResponse::auth(crate::auth::flow::renew(&app, &request.url, auth)),
+            None => PipeResponse::error("Yêu cầu từ trình duyệt không hợp lệ."),
+        },
+        Route::Takeover => {
+            let offer = crate::takeover::Offer {
+                url: request.url,
+                page_url: request.page_url,
+                suggested_name: request.suggested_name,
+                auth: request.auth.take(),
+            };
+            match crate::takeover::take(&app, &engine, &queue, offer).await {
+                Ok(task_id) => PipeResponse::ok(task_id),
+                Err(reason) => {
+                    log::info!("takeover declined: {reason}");
+                    PipeResponse::error(crate::takeover::DECLINED)
+                }
+            }
+        }
         Route::Batch(urls) => {
+            let page_url = crate::media_pages::clean_page_url(request.page_url);
+            // Cookie của trang đang mở; chỉ link cùng trang dùng (batch.rs).
+            let grant = page_url.as_deref().and_then(|page| {
+                crate::auth::flow::grant_from_click(&app, request.auth, &[page])
+            });
             let batch = crate::events::BatchRequest {
                 urls,
-                page_url: crate::media_pages::clean_page_url(request.page_url),
+                page_url,
+                auth_grant: grant.map(|grant| grant.id.clone()),
             };
             crate::batch::open_batch_flow(&app, batch);
             PipeResponse::note(crate::batch::BATCH_NOTE)
         }
         Route::Confirm(urls) => {
+            let page_url = crate::media_pages::clean_page_url(request.page_url);
+            let links: Vec<&str> = urls
+                .iter()
+                .map(String::as_str)
+                .chain(page_url.as_deref())
+                .collect();
+            let grant = crate::auth::flow::grant_from_click(&app, request.auth, &links);
             let batch = crate::events::BatchRequest {
                 urls,
-                page_url: crate::media_pages::clean_page_url(request.page_url),
+                page_url,
+                auth_grant: grant.map(|grant| grant.id.clone()),
             };
             crate::batch::open_batch_flow(&app, batch);
             PipeResponse::note(CONFIRM_NOTE)
         }
         Route::Download => {
+            let urls: Vec<&str> = std::iter::once(request.url.as_str())
+                .chain(request.page_url.as_deref())
+                .collect();
+            let grant = crate::auth::flow::grant_from_click(&app, request.auth.take(), &urls);
             // Đúng file của một download đang chờ link mới (link ký hết hạn, cần đăng nhập lại): gắn link
-            // vào download đó, giữ phần đã tải, không tạo download mới.
+            // (và cookie của cú bấm) vào download đó, giữ phần đã tải, không tạo download mới.
             let captured = crate::recover::capture_link(
                 &app,
                 &engine,
                 &queue,
                 &request.url,
                 request.suggested_name.as_deref(),
+                grant.as_ref(),
             )
             .await;
             match captured {
@@ -489,6 +641,7 @@ where
                         connections: None,
                         expected_sha256: None,
                         later: false,
+                        auth_grant: grant.map(|grant| grant.id.clone()),
                     };
                     match crate::commands::enqueue_download(app, engine, queue, input) {
                         Ok(task) => PipeResponse::ok(task.id),
@@ -509,9 +662,16 @@ where
 
 /// Trang video hoặc trang kênh: cùng sự kiện `utd://media-request`, giao diện tự nhận ra link kênh.
 fn open_media(app: &tauri::AppHandle, request: PipeRequest, note: &str) -> PipeResponse {
+    let url = request.url.trim().to_string();
+    let page_url = crate::media_pages::clean_page_url(request.page_url);
+    let urls: Vec<&str> = std::iter::once(url.as_str())
+        .chain(page_url.as_deref())
+        .collect();
+    let grant = crate::auth::flow::grant_from_click(app, request.auth, &urls);
     let media = crate::events::MediaRequest {
-        url: request.url.trim().to_string(),
-        page_url: crate::media_pages::clean_page_url(request.page_url),
+        url,
+        page_url,
+        auth_grant: grant.map(|grant| grant.id.clone()),
     };
     crate::media_pages::open_media_flow(app, media);
     PipeResponse::note(note)
@@ -541,6 +701,31 @@ mod tests {
     }
 
     #[test]
+    fn video_button_requests_route_by_kind() {
+        let ask = |value: serde_json::Value| {
+            let request: PipeRequest = serde_json::from_value(value).unwrap();
+            route(&request, TOKEN)
+        };
+        let watch = "https://www.youtube.com/watch?v=09OGSRptb0M";
+        assert_eq!(
+            ask(serde_json::json!({ "token": TOKEN, "url": watch, "kind": "media-formats" })),
+            Route::MediaFormats
+        );
+        assert_eq!(
+            ask(serde_json::json!({ "token": TOKEN, "url": watch, "kind": "media-download", "selector": "bv*+ba/b" })),
+            Route::MediaDownload
+        );
+        assert!(
+            matches!(ask(serde_json::json!({ "token": TOKEN, "url": watch, "kind": "media-download" })), Route::Reject(_)),
+            "thiếu định dạng"
+        );
+        assert!(matches!(
+            ask(serde_json::json!({ "token": "sai", "url": watch, "kind": "media-formats" })),
+            Route::Reject(_)
+        ));
+    }
+
+    #[test]
     fn video_page_from_the_browser_opens_the_media_flow() {
         let watch = "https://www.youtube.com/watch?v=09OGSRptb0M";
         assert_eq!(route(&request(TOKEN, watch), TOKEN), Route::Media);
@@ -563,6 +748,13 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(route(&named, TOKEN), Route::Confirm(_)), "tên trình duyệt gợi ý");
+        assert_eq!(
+            route(&request(TOKEN, "https://drive.google.com/drive/my-drive"), TOKEN),
+            Route::Reject(crate::media_pages::DRIVE_FOLDER),
+            "Tải trang này trên thư mục Drive (bản thử thật 2026-10-25): báo cách làm, không tạo dòng tải"
+        );
+        let drive_file = "https://drive.google.com/file/d/1AbC/view";
+        assert!(!matches!(route(&request(TOKEN, drive_file), TOKEN), Route::Reject(_)));
         assert_eq!(
             route(&request(TOKEN, "https://www.youtube.com/"), TOKEN),
             Route::Download,
@@ -612,6 +804,48 @@ mod tests {
             Route::Reject("Không có link hợp lệ.")
         );
         assert_eq!(request(TOKEN, "https://youtu.be/x").batch, None, "native host cũ");
+    }
+
+    /// Popup (tin nhắn bản 2): token kiểm trước; `auth-renew` phải mang cookie; phần `auth` đọc đúng.
+    #[test]
+    fn popup_requests_are_routed_after_the_token_check() {
+        let popup = |token: &str, kind: &str, auth: Option<serde_json::Value>| -> PipeRequest {
+            serde_json::from_value(serde_json::json!({
+                "token": token, "url": "https://drive.google.com/drive/my-drive", "kind": kind, "auth": auth,
+            }))
+            .unwrap()
+        };
+        let auth = serde_json::json!({
+            "site": "google.com",
+            "userAgent": "Mozilla/5.0",
+            "cookies": [{ "name": "SID", "value": "UTDCANARYipc", "domain": ".google.com", "hostOnly": false, "path": "/", "secure": true, "expires": null }],
+        });
+        assert_eq!(route(&popup(TOKEN, "auth-pending", None), TOKEN), Route::AuthPending);
+        assert_eq!(route(&popup(TOKEN, "takeover", Some(auth.clone())), TOKEN), Route::Takeover);
+        assert_eq!(route(&popup(TOKEN, "takeover", None), TOKEN), Route::Takeover, "trang chưa dùng đăng nhập");
+        assert_eq!(
+            route(&popup(&"f".repeat(TOKEN.len()), "takeover", None), TOKEN),
+            Route::Reject("Token IPC không hợp lệ.")
+        );
+        assert_eq!(route(&popup(TOKEN, "auth-renew", Some(auth.clone())), TOKEN), Route::AuthRenew);
+        assert_eq!(
+            route(&popup(TOKEN, "auth-renew", None), TOKEN),
+            Route::Reject("Yêu cầu từ trình duyệt không hợp lệ.")
+        );
+        assert_eq!(
+            route(&popup(TOKEN, "exec", None), TOKEN),
+            Route::Reject("Yêu cầu từ trình duyệt không hợp lệ.")
+        );
+        let wrong = "f".repeat(TOKEN.len());
+        assert_eq!(
+            route(&popup(&wrong, "auth-renew", Some(auth.clone())), TOKEN),
+            Route::Reject("Token IPC không hợp lệ.")
+        );
+        let parsed = popup(TOKEN, "auth-renew", Some(auth));
+        let payload = parsed.auth.as_ref().unwrap();
+        assert_eq!(payload.site, "google.com");
+        assert_eq!(payload.cookies.len(), 1);
+        assert!(!format!("{parsed:?}").contains("UTDCANARYipc"), "Debug không được in cookie");
     }
 
     #[test]

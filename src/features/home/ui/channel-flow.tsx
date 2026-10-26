@@ -60,13 +60,13 @@ function useChannelSender(onAdded: (task: EngineTask) => void) {
  */
 export function useChannelFlow(onAdded: (task: EngineTask) => void) {
   // `key` đổi ⇒ hộp dựng lại và liệt kê từ đầu.
-  const [request, setRequest] = useState<{ url: string; key: number } | null>(null)
+  const [request, setRequest] = useState<{ url: string; key: number; authGrant?: string } | null>(null)
   const [open, setOpen] = useState(false)
   const queue = useChannelSender(onAdded)
   const { send } = queue
 
-  const openChannel = useCallback((url: string) => {
-    setRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1 }))
+  const openChannel = useCallback((url: string, authGrant?: string) => {
+    setRequest((previous) => ({ url, key: (previous?.key ?? 0) + 1, authGrant }))
     setOpen(true)
   }, [])
 
@@ -95,6 +95,7 @@ export function ChannelFlow({
         <ChannelDialog
           key={request.key}
           url={request.url}
+          authGrant={request.authGrant}
           open={flow.open}
           onOpenChange={flow.setOpen}
           desktop={desktop}

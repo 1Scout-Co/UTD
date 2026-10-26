@@ -16,6 +16,7 @@ import { SettingsDownloadDir } from "./settings-download-dir"
 import { SettingsLanguage } from "./settings-language"
 import { SettingsMediaTools } from "./settings-media-tools"
 import { SettingsQueue } from "./settings-queue"
+import { SettingsSignIn } from "./settings-sign-in"
 import { SettingsSection as Section, SettingsPrivacy } from "./settings-section"
 import { SettingsUpdates, useAppVersion } from "./settings-updates"
 
@@ -83,6 +84,8 @@ export function SettingsDialog(props: SettingsDialogProps) {
           <SettingsQueue open={open} desktop={desktop} />
 
           <SettingsBrowser open={open} desktop={desktop} />
+
+          <SettingsSignIn open={open} desktop={desktop} />
 
           <Section
             title={t("tools.title")}

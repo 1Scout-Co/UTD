@@ -6,12 +6,12 @@
 use std::path::Path;
 
 #[cfg(windows)]
-pub(super) use imp::{open_file, open_folder, recycle, select_in_folder, with_com};
+pub(super) use imp::{open_file, open_folder, open_web_page, recycle, select_in_folder, with_com};
 
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(target_os = "macos")]
-pub(super) use mac::{open_file, open_folder, recycle, select_in_folder, with_com};
+pub(super) use mac::{open_file, open_folder, open_web_page, recycle, select_in_folder, with_com};
 
 #[cfg(not(any(windows, target_os = "macos")))]
 mod fallback {
@@ -33,10 +33,13 @@ mod fallback {
     pub fn recycle(_: &[std::path::PathBuf]) -> Result<(), String> {
         Err(text::WINDOWS_ONLY.into())
     }
+    pub fn open_web_page(_: &str) -> Result<(), String> {
+        Err(text::WINDOWS_ONLY.into())
+    }
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub(super) use fallback::{open_file, open_folder, recycle, select_in_folder, with_com};
+pub(super) use fallback::{open_file, open_folder, open_web_page, recycle, select_in_folder, with_com};
 
 /// Chuỗi UTF-16 kết thúc bằng 0 cho API Windows (đường dẫn đã bỏ `\\?\`).
 #[cfg(windows)]
@@ -126,6 +129,11 @@ mod imp {
     /// Mở chính thư mục. Động từ "explore" chỉ có ở thư mục: không bao giờ chạy một file.
     pub fn open_folder(folder: &Path) -> Result<(), String> {
         execute(w!("explore"), folder, None).map_err(|_| text::OPEN_FAILED.to_string())
+    }
+
+    /// Mở trang web bằng trình duyệt mặc định (`files::open_web_page` đã kiểm chỉ http/https).
+    pub fn open_web_page(url: &str) -> Result<(), String> {
+        execute(PCWSTR::null(), Path::new(url), None).map_err(|_| text::OPEN_FAILED.to_string())
     }
 
     /// Mở Explorer ở thư mục chứa file và chọn sẵn file đó.

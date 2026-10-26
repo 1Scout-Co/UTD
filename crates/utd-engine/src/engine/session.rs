@@ -23,8 +23,9 @@ use super::http::{host_key, probe, sanitize_suggested_name, Probe, RequestFailur
 use super::limiter::Limiter;
 use super::net::{NetEpoch, NetState, NetWatch};
 use super::pulse::Pulse;
+use super::interstitial;
 use super::relink::{self, LinkError};
-use super::transport::{plain_policy, scoped_policy, Transport};
+use super::transport::{plain_policy, scoped_policy, Clients, Transport};
 use super::verify::{sha256_file, HashOutcome};
 use super::worker::{
     run_segment, RetryPolicy, SegmentFailure, SegmentJob, SegmentRuntime, StreamJob,
@@ -34,6 +35,7 @@ use super::{
     DownloadControl, DownloadOutcome, DownloadRequest, EngineEvent, EngineOptions, ProgressSnapshot,
     RemoteFile, LARGE_FILE_BYTES,
 };
+use crate::auth::{auth_expired, auth_required, is_login_redirect, CookieJar};
 use crate::db::Journal;
 use crate::headers::{validate_request_headers, RequestHeader};
 use crate::safety::{self, GuardAction};
@@ -60,9 +62,7 @@ const MIN_IDLE_PIECE: u64 = MIN_SEGMENT_BYTES;
 
 pub struct DownloadEngine {
     journal: Arc<Journal>,
-    client: Client,
-    /// Cho task có header riêng: dừng ở chuyển hướng sang origin khác (xem `Transport`).
-    scoped_client: Client,
+    clients: Clients,
     limiter: Arc<Limiter>,
     options: EngineOptions,
     /// Hỏi đường ra mạng (bài thử thay bằng mạng giả).
@@ -134,16 +134,18 @@ impl SegmentContext {
 impl DownloadEngine {
     pub fn new(journal: Arc<Journal>, options: EngineOptions) -> Result<Self> {
         options.validate()?;
-        let client = build_client(&options, plain_policy())?;
-        let scoped_client = build_client(&options, scoped_policy())?;
+        let clients = Clients {
+            plain: build_client(&options, plain_policy())?,
+            scoped: build_client(&options, scoped_policy())?,
+            manual: build_client(&options, reqwest::redirect::Policy::none())?,
+        };
         let limiter = Arc::new(Limiter::new(
             usize::from(options.global_connections),
             usize::from(options.host_connections),
         ));
         Ok(Self {
             journal,
-            client,
-            scoped_client,
+            clients,
             limiter,
             options,
             route: RouteProbe::default(),
@@ -156,13 +158,13 @@ impl DownloadEngine {
         self
     }
 
-    fn transport(&self, task: &DownloadTask, url: &Url) -> Result<Transport> {
+    fn transport(&self, task: &DownloadTask, url: &Url, control: &DownloadControl) -> Result<Transport> {
         Transport::new(
-            &self.client,
-            &self.scoped_client,
+            &self.clients,
             url,
             &task.request_headers,
             task.max_request_bytes,
+            control.cookies.clone(),
         )
     }
 
@@ -173,12 +175,22 @@ impl DownloadEngine {
     /// Dò nhanh một link mà không tạo task (HEAD, hoặc GET 1 byte): tên, kích thước, có phải trang web.
     /// Cho bảng xem trước của hộp Thêm hàng loạt: thử một lần, mỗi yêu cầu tối đa `connect_timeout`.
     pub async fn inspect(&self, raw_url: &str) -> std::result::Result<RemoteFile, TaskError> {
+        self.inspect_signed(raw_url, None).await
+    }
+
+    /// Như `inspect`, kèm cookie đăng nhập của một cú bấm (tự bắt link tải của trình duyệt): cookie chỉ
+    /// dùng cho lần dò này, tính lại theo từng bước chuyển hướng như khi tải.
+    pub async fn inspect_signed(
+        &self,
+        raw_url: &str,
+        cookies: Option<Arc<CookieJar>>,
+    ) -> std::result::Result<RemoteFile, TaskError> {
         let url = validate_url(raw_url.trim()).map_err(|error| TaskError {
             class: ErrorClass::User,
             code: "url.invalid".into(),
             message: error.to_string(),
         })?;
-        let transport = Transport::new(&self.client, &self.scoped_client, &url, &[], None)
+        let transport = Transport::new(&self.clients, &url, &[], None, cookies)
             .map_err(|_| internal_error())?;
         let probe = probe(&transport, &url, self.options.connect_timeout)
             .await
@@ -198,12 +210,14 @@ impl DownloadEngine {
 
     /// Cập nhật link của task đang dừng/lỗi (link ký hết hạn, cần đăng nhập lại): chỉ nhận khi link mới
     /// trỏ đúng file đang tải dở (relink.rs), giữ phần đã tải. `headers`: header thường cho link mới (đã
-    /// lọc, không cookie). Không đổi trạng thái task; người gọi xếp nó vào hàng đợi.
+    /// lọc, không cookie). `signed`: link mới gửi kèm đăng nhập — trang (ghi vào `auth_sites`) và cookie
+    /// (chỉ dùng để dò, không lưu). Không đổi trạng thái task; người gọi xếp nó vào hàng đợi.
     pub async fn replace_link(
         &self,
         task_id: &str,
         raw_url: &str,
         headers: Vec<RequestHeader>,
+        signed: Option<(&str, Arc<CookieJar>)>,
     ) -> std::result::Result<DownloadTask, LinkError> {
         let mut task = self
             .journal
@@ -220,14 +234,14 @@ impl DownloadEngine {
         }
         let url = validate_url(raw_url.trim()).map_err(|_| LinkError::Invalid)?;
         validate_request_headers(&headers).map_err(|_| LinkError::Invalid)?;
-        let transport = Transport::new(
-            &self.client,
-            &self.scoped_client,
-            &url,
-            &headers,
-            task.max_request_bytes,
-        )
-        .map_err(|_| LinkError::Invalid)?;
+        let (site, cookies) = signed.unzip();
+        let transport = Transport::new(&self.clients, &url, &headers, task.max_request_bytes, cookies)
+            .map_err(|_| LinkError::Invalid)?;
+        if let Some(site) = site
+            && !task.auth_sites.iter().any(|own| own == site)
+        {
+            task.auth_sites.push(site.to_string());
+        }
         let segments = self.journal.load_segments(task_id).unwrap_or_default();
         let timeout = self.options.connect_timeout;
         let probe = relink::verify(&transport, &url, &task, &segments, timeout).await?;
@@ -304,6 +318,7 @@ impl DownloadEngine {
         }
         task.max_request_bytes = request.max_request_bytes;
         task.request_headers = request.request_headers;
+        task.auth_sites = request.auth_sites;
         task.validate()?;
         self.journal.save_task(&task)?;
         Ok(task)
@@ -388,9 +403,14 @@ impl DownloadEngine {
         self.journal.save_task(&task)?;
         emit_task(&control, &task);
 
+        // Cần đăng nhập mà lượt này không có cookie (vd vừa mở lại app): không gửi yêu cầu nào, chờ người
+        // dùng cho phép lại từ trình duyệt.
+        if !task.auth_sites.is_empty() && control.cookies.is_none() {
+            return self.fail(task, auth_required(), &control);
+        }
         let url = validate_url(&task.url)?;
-        let transport = self.transport(&task, &url)?;
-        let probe = match self.probe_with_retry(&transport, &url, &control).await {
+        let transport = self.transport(&task, &url, &control)?;
+        let mut probe = match self.probe_with_retry(&transport, &url, &control).await {
             Ok(probe) => probe,
             Err(failure) => {
                 if control.cancel.is_cancelled() {
@@ -399,6 +419,23 @@ impl DownloadEngine {
                 return self.fail_with(task, failure.error, failure.retry_after, &control);
             }
         };
+        // Máy chủ đưa về trang đăng nhập (trang HTML, không phải file đính kèm) thay vì trả file. File thật
+        // nằm dưới đường dẫn có chữ `login` vẫn tải như thường.
+        let landed_on_page = !probe.attachment && probe.content_type.as_deref().is_none_or(is_html_type);
+        if landed_on_page && is_login_redirect(&url, &probe.url) {
+            let error = if transport.has_cookies() { auth_expired() } else { auth_required() };
+            return self.fail(task, error, &control);
+        }
+        // Trang xác nhận trước khi tải (Google Drive: file lớn không quét virus được) ⇒ theo form tải của trang.
+        // Mỗi lượt đều theo lại: link trong form (`uuid`) có thể hết hạn giữa hai lượt. Chỉ khi máy chủ nói rõ là
+        // HTML: không nói kiểu thì đa phần là file, đọc thêm một lần là tải phí.
+        let html_page = !probe.attachment && probe.content_type.as_deref().is_some_and(is_html_type);
+        if html_page
+            && let Some(next) = interstitial::follow(&transport, &probe.url, self.options.connect_timeout).await
+            && let Ok(found) = self.probe_with_retry(&transport, &next, &control).await
+        {
+            probe = found;
+        }
         pulse.mark("probe");
         if control.cancel.is_cancelled() {
             return self.pause(task, &control);

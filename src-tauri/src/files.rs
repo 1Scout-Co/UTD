@@ -55,6 +55,14 @@ mod text {
 /// Giới hạn một lần hỏi icon (giao diện chỉ hỏi các dòng đang hiện).
 const MAX_ICON_TASKS: usize = 500;
 
+/// "Mở trang" (S-14, S-72): mở trang cần đăng nhập bằng trình duyệt mặc định để người dùng bấm biểu tượng
+/// UTD ở đó. Chỉ link http/https không kèm tên/mật khẩu: không bao giờ mở `file:` hay giao thức lạ.
+#[tauri::command]
+pub async fn open_web_page(url: String) -> Result<(), String> {
+    let url = utd_engine::validate_url(url.trim()).map_err(|_| text::OPEN_FAILED.to_string())?;
+    blocking(move || shell::with_com(|| shell::open_web_page(url.as_str()))).await
+}
+
 /// Mở file bằng ứng dụng mặc định. Chỉ task đã xong, file còn đó, không bị cách ly.
 #[tauri::command]
 pub async fn open_download(state: State<'_, AppState>, task_id: String) -> Result<(), String> {

@@ -210,17 +210,19 @@ export function SortHeader({
   )
 }
 
-export function StatusPill({ status }: { status: DownloadStatus }) {
+/** `signIn`: task lỗi vì cần đăng nhập (S-72): nhãn "Cần đăng nhập" màu hổ phách thay cho "Lỗi". */
+export function StatusPill({ status, signIn = false }: { status: DownloadStatus; signIn?: boolean }) {
   const meta = STATUS_META[status]
   return (
     <span
+      data-s={signIn ? "S-72" : undefined}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold whitespace-nowrap",
-        meta.pill
+        signIn ? "bg-amber-50 text-amber-800" : meta.pill
       )}
     >
-      <span className={cn("size-1.5 rounded-full", meta.dot)} />
-      {t(`status.${status}`)}
+      <span className={cn("size-1.5 rounded-full", signIn ? "bg-amber-500" : meta.dot)} />
+      {signIn ? t("auth.needed") : t(`status.${status}`)}
     </span>
   )
 }

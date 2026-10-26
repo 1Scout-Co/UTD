@@ -169,7 +169,8 @@ handler `contextMenus.onClicked`, hoặc khi người dùng bấm nút trong pop
   - Aria2-Explorer (`5e97685`) dự phòng bằng `downloads.download({url})`: tải lại bằng GET, nên mất download
     POST và link dùng-một-lần.
 - **Quyền:** cần thêm `downloads`. Muốn kèm cookie cho mọi trang thì phải có quyền mọi trang (cảnh báo "all
-  websites"), nên chủ dự án cần quyết (Q5).
+  websites"), nên chủ dự án cần quyết (Q5). **Đã quyết 2026-10-26: mọi trang, xin một lần lúc cài** (Q5, Q11). Đã
+  làm: mục "GĐ3 — Tự bắt link tải" ở §9.1.
 
 ## 5. Đưa cookie cho yt-dlp và engine
 
@@ -259,7 +260,8 @@ Thiết kế pipe Windows (`src-tauri/src/auth/pipe.rs`):
     HTML thay vì file (đã có AC-06) ⇒ `auth.required`.
   - Danh sách đặt một chỗ, có test.
 - **Tiếp tục mà không có credentials:** task có `auth` nhưng đang thiếu credentials thì không gửi request nào,
-  trả `auth.required` ngay. Phiên khôi phục xếp nó vào hàng chờ `Login` (Phụ lục B).
+  trả `auth.required` ngay. App xếp nó vào chờ link mới (`RecoveryWait::Link`), cùng chỗ chờ với link hết hạn
+  (Phụ lục B).
 
 ## 6. Vòng đời cookie
 
@@ -405,6 +407,289 @@ Hộp hỏi quyền là của trình duyệt, tự theo ngôn ngữ trình duy�
     `cargo clippy` 3 crate `-D warnings`, `pnpm lint`.
   - macOS chưa chạy. Phần chỉ-Windows đều gắn `#[cfg(windows)]`; phần còn lại là code chung.
 
+#### Kết quả GĐ1 (2026-10-25, nhánh này)
+
+Đã làm:
+- **SPEC (Q9):** S-14, S-63 theo luồng đăng nhập; thêm S-70..S-73; AC-18 ghi rõ cookie chỉ đọc trong cú bấm.
+- **Engine (`utd-engine/src/auth.rs`):**
+  - `CookieJar` chỉ ở RAM, đi theo `DownloadControl::cookies` của từng lượt chạy.
+  - Journal v4 chỉ ghi `auth_sites`. Task có `auth_sites` mà thiếu cookie thì dừng `auth.required` trước khi gửi
+    yêu cầu nào.
+  - Có cookie thì `Transport` tự theo chuyển hướng, tính lại `Cookie` từng bước, gộp `Set-Cookie`; 401/403 ⇒
+    `auth.expired` ngay (không thử 8 lượt).
+  - Chuyển hướng về trang đăng nhập ⇒ `auth.required` / `auth.expired`.
+- **App (`src-tauri/src/auth/`):**
+  - Lần cho phép (`Grant`) gắn task, thả khi xong/xoá.
+  - `psl` 2.1.242; mẫu quyền `*://*.site/*`; miền nhạy cảm (Q10).
+  - Kiểm cookie: đúng trang, trần 300 cookie / 64 KiB.
+  - Pipe cookie cho yt-dlp (PID, `loaded`).
+  - IPC/native host bản 2: `auth`, `auth-pending`, `auth-renew`, sự kiện `utd://auth-granted`.
+  - Nối vào tải file, lô link (chỉ link cùng trang), Tải media (Phân tích, resolve, đường tải nhanh, yt-dlp
+    tải), Tải cả kênh.
+  - `--user-agent` của trình duyệt; Q7 (bỏ `final_url` khi xong).
+  - Lệnh Cài đặt; lệnh `open_web_page` (chỉ http/https).
+- **Tiện ích:**
+  - `optional_permissions` / `optional_host_permissions`.
+  - Đọc cookie trong cú bấm, theo kho cookie của tab; bỏ Strict khi chéo trang; Firefox FPI thử lại với
+    `firstPartyDomain`.
+  - Popup S-70/S-71: Dùng đăng nhập / Tiếp tục (n), công tắc theo trang.
+  - 7 câu mới × 16 ngôn ngữ.
+- **Giao diện:**
+  - S-14 trong hộp Tải media và S-63 trong Tải cả kênh: tự phân tích/liệt kê lại khi popup cho phép.
+  - S-72: nhãn "Cần đăng nhập" + Doctor "Mở trang".
+  - S-73 trong Cài đặt.
+  - 18 khoá mới + 5 câu cũ sửa × 16 ngôn ngữ. `scripts/i18n-check.mjs` quét thêm mã `auth.*`.
+
+Khác kế hoạch (cố ý):
+- SameSite chỉ lọc ở tiện ích lúc đọc; engine không lọc thêm.
+- Engine không gộp trường `formats[].cookies` của yt-dlp: định dạng có trích dẫn kiểu Python, engine tự gộp
+  `Set-Cookie` khi tải. Xem lại nếu có trang cần.
+- Huy hiệu "!" trên biểu tượng tiện ích (§8.1, cải tiến nhỏ) để GĐ2.
+- Firefox < 128 không có `optional_host_permissions`: popup báo "Trình duyệt chưa cho phép" (S-71), phần còn lại
+  chạy như cũ.
+- macOS: pipe cookie cho yt-dlp báo `auth.pipe` tới khi có FIFO (GĐ2). Tải file trực tiếp kèm cookie vẫn chạy.
+- Task cần đăng nhập: `failed` với mã `auth.*`. Đã đổi khi ghép main: chờ `RecoveryWait::Link` (mục "Ghép main"
+  bên dưới, Phụ lục B).
+
+Kiểm (Windows):
+- `cargo test` app 222 (+ 1 yt-dlp thật `#[ignore]` chạy tay: đạt), engine 159 (thêm `auth` 7 unit + 7 tích hợp).
+- `clippy` 3 crate `-D warnings`; `pnpm lint` (eslint + i18n 601 khoá); `tsc`; `pnpm build` (JS 190,9 / 200 kB).
+- e2e toàn bộ 76/76 (gồm `sign-in.spec.ts` 4 bài mới; bài S-63 cũ sửa theo SPEC mới). `ui-check` đạt.
+- Thử thật:
+  - `auth-thu/ext-auth.cjs`: tiện ích trong Chromium 156.
+  - `auth-thu/auth-e2e.py`: trọn luồng trên app debug — đăng nhập, khởi động lại giữa chừng, cho phép lại, không
+    sót cookie mồi.
+
+#### Ghép main (2026-10-25, origin/main 16a882f: màn Chi tiết, tự cứu download, GĐ0)
+
+- Journal: cột `auth_sites_json` thành migration **v6** (main có v4 `task_events`, v5 `recovery_json`); `save_task`
+  ghi trong transaction của main.
+- Cần đăng nhập lại đi chung đường chờ link mới `RecoveryWait::Link` (Phụ lục B), không có trạng thái chờ riêng:
+  - `recovery::plan`: `auth.required`, `auth.expired`, `media.login` ⇒ `Link` (task gốc, cả media).
+  - `auth.pipe` bỏ khỏi nhóm "cần đăng nhập" (đăng nhập lại không sửa được) ⇒ lỗi thường, có nút Thử lại.
+  - Popup "Dùng đăng nhập": chỉ xếp lại task đang chờ `Link` của trang đó; hộp "Cập nhật link" đang mở cho task
+    đó thì đóng (`utd://link-updated`).
+  - Bấm tải lại trên trình duyệt (`capture_link`): `DownloadEngine::replace_link(…, signed)` dò link mới bằng cookie
+    của cú bấm, ghi trang vào `auth_sites`; app gắn lần cho phép vào task trước khi xếp hàng.
+  - Chẩn đoán (S-72) của download thường: nút chính "Cập nhật link…", thêm "Mở trang"; task media chỉ "Mở trang".
+- IPC: link có cảnh báo trước khi tải (S-22, `Route::Confirm`) mang lần cho phép của cú bấm sang hộp Thêm hàng loạt.
+- Bundle JS: main riêng 199,14 kB; ghép xong 200,09 kB / 200 kB (vượt 91 B) dù đã cắt: gộp ba hook nghe sự kiện
+  (`use-app-event.ts`), S-73 chỉ hiện số trang (đúng SPEC), công tắc lên đầu mục, bỏ icon `LogIn`. Chủ dự án
+  cho nâng giới hạn lên 220 kB (2026-10-25, ghi trong AI_RULES.md).
+- Thêm bài thử: engine `a_sign_in_wait_takes_a_new_link_only_with_the_cookies`, unit `recovery` (mã đăng nhập ⇒
+  `Link`, task con và `auth.pipe` thì không), app `a_sign_in_after_restart_waits_like_an_expired_link`.
+
+#### Thử thật trên Chrome của chủ dự án (2026-10-25, bản release từ nhánh này)
+
+- **Lỗi 1 — không hỏi được quyền:** manifest khai `optional_host_permissions: ["http://*/*", "https://*/*"]` mà app
+  xin `*://*.google.com/*`; Chrome ném "Only permissions specified in the manifest may be requested.", popup nuốt
+  lỗi và chỉ báo "Trình duyệt chưa cho phép". `ext-auth.cjs` không bắt được vì bản "đã cho phép" khai sẵn quyền.
+  - Sửa: hai manifest khai `["*://*/*"]` (phiên chính sửa, đã thử: chủ dự án cho phép google.com thành công).
+  - Popup hiện đúng câu lỗi của trình duyệt khi `permissions.request` ném lỗi.
+  - Bài thử: Rust `both_extensions_may_request_every_pattern_utd_asks_for` (mẫu `permission_pattern` sinh ra phải
+    nằm trong manifest cả hai trình duyệt); e2e `extension-permissions.spec.ts` chạy tiện ích thật trong Chromium,
+    xin `cookies` + mẫu của app trong cú bấm ⇒ Chrome hỏi (không ném lỗi); cả hai bài đỏ với manifest cũ.
+- **Lỗi 2 — trang thư mục Drive:** Drive mở file xem trước đè lên `drive.google.com/drive/my-drive`, địa chỉ tab
+  không đổi; "Tải trang này" gửi link thư mục ⇒ 3 dòng tải "my-drive" lỗi.
+  - Sửa: `media_pages::is_drive_folder` (`drive.google.com/` và `/drive/…`) ⇒ mã `link.drive_folder` "Mở file ở
+    trang riêng rồi thử lại", ở mọi đường (IPC trả lỗi trước khi gắn link, Thêm URL, lô link); tiện ích đổi câu có
+    mã sang chữ của nó (16 ngôn ngữ).
+  - Còn mở: tìm id file đang xem trước trong DOM của Drive để tải thẳng từ trang thư mục.
+- **Lỗi 3 — trang file Drive tải ra "view":** tab đúng trang file `drive.google.com/file/d/<id>/view` (video riêng
+  tư, đã đăng nhập, google.com đã cho phép) ⇒ task HTTP tên "view", `http.not_a_file` sau 3 s. Sửa ở mục "Google
+  Drive" ngay dưới.
+
+#### Google Drive: trang file (đưa từ GĐ2 lên, 2026-10-25)
+
+- **Nhận trang file** (`media_pages::drive_download_url`): `drive.google.com/file/d/<id>/view|edit|preview`,
+  `open?id=`, `uc?id=` (cả `/u/<n>/…`, `docs.google.com/uc?id=`) ⇒ link tải thật
+  `https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t` (giữ `resourcekey`). Đổi ở IPC
+  (trước khi định tuyến) và ở `create_download` (Thêm URL, lô link). id chỉ nhận `[A-Za-z0-9_-]`, 10–200 ký tự.
+- **Trang xác nhận quét virus** (file lớn): engine `engine/interstitial.rs` — trang HTML có form GET
+  `id="download-form"` cùng host ⇒ dựng link từ các ô của form (`confirm`, `uuid`…) rồi dò lại; mỗi lượt chạy đều
+  theo lại (link trong form có thể hết hạn). Đọc trang tối đa 256 KiB, không chạy script, form khác host / POST bị bỏ.
+- **Tên file** lấy từ `Content-Disposition` của máy chủ (task tạo không đặt tên nên engine được đổi tên theo máy chủ).
+- **Cookie**: quyền `*://*.google.com/*` phủ `drive.usercontent.google.com`; tiện ích đọc thêm cookie áp cho
+  `https://drive.usercontent.google.com/download` khi link là trang file Drive (cookie riêng của máy tải nếu có).
+  Chuyển hướng sang `*.googleusercontent.com` (miền khác) thì không mang cookie, đúng luật cũ.
+- **Video trên Drive: tải file gốc, không qua yt-dlp.** Lý do:
+  - Đúng byte của file người dùng tải lên, như nút Tải xuống của Drive; yt-dlp (extractor GoogleDrive) có thể chọn
+    bản chuyển mã của trình phát (độ phân giải thấp hơn) khi không lấy được bản gốc.
+  - Một đường cho mọi loại file (pdf, zip, video…), không cần yt-dlp/ffmpeg, tải đa luồng và tiếp tục được như file
+    thường; lỗi đăng nhập đi chung đường chờ `Link` đã có.
+  - Cookie chỉ đi qua engine (RAM, theo host), không phải đưa sang tiến trình yt-dlp qua pipe.
+- **Trang thư mục/danh sách** (`/drive/my-drive`, `/drive/folders/…`, `/drive/search?q=…`, `drive.google.com/`):
+  không tạo task, báo `link.drive_folder` (xem Lỗi 2).
+- Bài thử: unit nhận dạng link (`drive_file_pages_download_the_original_file`), unit form (`interstitial`), engine
+  `a_drive_virus_scan_page_is_followed_with_the_cookies_and_named_by_the_server` (máy chủ giả: cần cookie, trang
+  xác nhận, tên trong Content-Disposition; đỏ khi bỏ bước theo form).
+- Chưa thử thật: file Drive của chủ dự án (bản release dựng lại cho chủ dự án tự thử).
+
+#### Doctor cho `http.not_a_file`
+
+- Báo cáo riêng "Link này là trang web, không phải file" (16 ngôn ngữ): mở trang và bấm nút tải của trang, hoặc
+  chuột phải đúng link tải › Tải bằng UTD; Drive thì mở file ra trang riêng. Không có nút Thử lại (lần nào cũng
+  hỏng); download thường có nút "Cập nhật link…" để dán link tải thật cho chính download đó. Hộp Doctor và màn Chi
+  tiết S-21 dùng chung (`model/doctor.ts`), có e2e cho cả hai.
+- `http.empty` (máy chủ không gửi dữ liệu) để nguyên báo cáo chung: nguyên nhân khác (máy chủ hỏng/tạm thời), không
+  phải "link là trang web".
+- `auth-e2e.py` chạy lại trên bản release: đạt 6 bước, 0 file chứa cookie mồi; sửa cách đếm yêu cầu sau khi mở lại
+  (chỉ dòng `GET`/`HEAD`).
+- Trên máy này app do phiên AI mở thì Chrome không nối được (pipe/AppData của phiên bị cô lập): thử thật phải để
+  chủ dự án tự mở app.
+
+Chưa làm, cần chủ dự án:
+- Thử với tài khoản thật: YouTube giới hạn tuổi, file Google Drive riêng (Q6).
+- Cần nạp tiện ích bản mới và chạy bản UTD mới. Native host đang đăng ký trên máy là của bản 0.1.0, chưa hiểu tin
+  bản 2.
+
+#### GĐ3 — Nút "Tải video này" trên trang, kiểu IDM (kế hoạch 2026-10-26)
+
+Chủ dự án (lời gốc): "luồng tiện như IDM… tự động bắt link rồi hiển thị cái nút Tải video này gọn gọn trên phần cần
+tải… hoặc chuột phải… nhưng phải có phần chọn luôn định dạng tải về, chứ như hiện tại là nó hiển thị trong App";
+"chỉ xin quyền 1 lần giống IDM đi, xin cho mọi trang luôn chứ".
+
+**Q11 — quyền (chủ dự án quyết 2026-10-26).** Tiện ích xin một lần lúc cài: `host_permissions: ["*://*/*"]`,
+`cookies` bắt buộc, content script trên mọi trang http(s). Chrome cảnh báo "đọc và thay đổi mọi dữ liệu của bạn
+trên mọi trang web" (Firefox tương tự). Thay cách xin quyền theo từng trang của Q1/Q5. Lý do: IDM xin như vậy; bản
+thử thật cho thấy hộp xin quyền theo trang dễ hỏng (lỗi manifest 2026-10-25) và thêm một bước mỗi trang.
+
+Hệ quả cho mô hình cookie (giữ nguyên nguyên tắc: chỉ đọc cookie trong cú bấm của người dùng, chỉ nằm trong RAM của
+app):
+- Quyền mọi trang dùng để gắn nút; không có đường nào đọc cookie ngầm. Cookie chỉ đọc khi: chuột phải › UTD, popup
+  "Tải trang này"/"Dùng đăng nhập", hoặc bấm nút/dòng định dạng trên trang (sự kiện `isTrusted`; trang không giả
+  được cú bấm, không gửi được tin cho tiện ích).
+- Trình duyệt không còn phân biệt trang nào đã cho phép (quyền đã phủ mọi trang), nên lựa chọn theo trang chuyển
+  sang tiện ích + app: mặc định dùng đăng nhập ở mọi trang; tắt riêng một trang bằng công tắc "Đăng nhập trên trang
+  này" trong popup (lưu `signin-off:<trang>`); công tắc chung trong Cài đặt (S-73) giữ nguyên; trang nhạy cảm (Q10)
+  vẫn phải bấm xác nhận trong popup, app vẫn chặn (`auth.sensitive`).
+- Trước khi đọc cookie, tiện ích hỏi app trang gốc của link (`auth-pending`: PSL, nhạy cảm, công tắc chung) — tiện
+  ích không có danh sách hậu tố. Nhớ câu trả lời 5 phút.
+- Media: phân tích không kèm cookie trước; chỉ khi nguồn đòi đăng nhập (`media.login`, `auth.*`) mới phân tích lại
+  kèm cookie trong cùng cú bấm, và lượt tải đó kèm cookie. Video công khai không mang cookie.
+
+**Luồng.**
+1. Content script (`content.js`, khung chính, mọi trang http(s)) tìm `<video>` đủ lớn (≥ 160×90, đang hiện). Rê chuột
+   vào video (hoặc video vừa phát) ⇒ nút nhỏ "⬇ Tải video này" ở góc trên-phải, nằm ngay trên mép video nếu còn
+   chỗ (không đè điều khiển của trình phát), hết chỗ thì nằm trong góc. Ẩn sau 1,5 s khi rời chuột; ẩn khi toàn màn
+   hình. Shadow DOM (CSS trang không phá), z-index cao nhất. Không chèn vào khung khác nguồn (GĐ sau nếu cần).
+2. Bấm nút ⇒ bảng ngay dưới nút: "Đang đọc định dạng…" rồi danh sách Tốt nhất · 2160p · 1440p · 1080p · 720p · 480p
+   · 360p · 240p · 144p (mức có thật) · Chỉ âm thanh (M4A) · MP3 (khi có ffmpeg), mỗi dòng kèm dung lượng ước tính.
+   Bấm một dòng ⇒ app tạo task media với đúng định dạng đó và xếp hàng ngay, không mở hộp "Tải media"; bảng báo "Đã
+   thêm vào UTD" rồi đóng. Esc / bấm ra ngoài thì đóng.
+3. Link không phải trang video quen mà yt-dlp không đọc được, nhưng `<video>` có nguồn http(s) thật (không phải
+   `blob:`) ⇒ một dòng "Tải file video" (tải thẳng nguồn đó bằng engine).
+4. Chuột phải lên video, hoặc lên trang/link của trang video quen ⇒ mục UTD mở cùng bảng đó trên trang, đặt ở chỗ
+   vừa bấm. Khung không có content script (khung khác nguồn, trang mở trước khi cài) ⇒ như cũ: gửi link cho app.
+5. Đọc sẵn: trên trang video quen (YouTube, TikTok, Facebook… danh sách `VIDEO_PAGES`), lần đầu nút hiện thì đọc định
+   dạng trước (không cookie). Kết quả nhớ theo URL 10 phút ở tiện ích (gộp các yêu cầu trùng) và ở app.
+6. Popup thêm công tắc "Hiện nút Tải video trên trang" (mặc định bật, `videoButton`).
+
+**Tin nhắn mới (bản 2).** `media-formats {url, src?, auth?}` ⇒ `{ok, media: {title, webpageUrl, signed, formats: [{id,
+sizeBytes, selector, audioFormat}]}}`; `media-download {url, pageUrl, title, selector, audioFormat, auth?}` ⇒
+`{ok, taskId}`. Native host chuyển thêm trường `media`; macOS đợi trả lời tới 60 s (phân tích lâu). App kiểm selector
+như hộp Tải media (`checked_choice`), dùng lại `create_media` + hàng đợi; phân tích trên trang liệt kê đủ các mức (hộp
+trong app vẫn tối đa 5 mức).
+
+**Kiểm.**
+- Rust: định tuyến IPC hai loại mới; native host chuyển `media`; app trả đủ mức chiều cao khi yêu cầu; nhớ kết quả.
+- e2e: trang thử cục bộ có `<video>`, `content.js` thật với API trình duyệt giả: nút hiện khi rê chuột, nằm trên mép
+  video, bảng "đang đọc" rồi danh sách kèm dung lượng, bấm dòng gửi đúng selector, tắt công tắc thì không có nút,
+  cú bấm giả từ trang (`isTrusted` = false) không làm gì; tiện ích thật trong Chromium chèn nút vào trang thử.
+- Bài cũ của popup/quyền theo trang sửa theo Q11. size-limit JS ≤ 220 kB (content script nằm trong tiện ích, không
+  tính vào bundle app).
+
+**Rủi ro.** Trình phát tự vẽ (YouTube đặt lớp phủ lên video) ⇒ dò chuột theo khung của video thay vì sự kiện trên
+video. Trang SPA đổi URL không tải lại ⇒ theo dõi `location.href`. `<video>` trong khung khác nguồn (nhúng YouTube)
+chưa có nút. Firefox: content script và quyền mọi trang chạy được từ Firefox 127; thử chính trên Chromium.
+
+**Kết quả GĐ3 (2026-10-26, commit b1a0e76).** Làm đúng kế hoạch trên, khác/thêm:
+- Không có nút "Mở trong UTD" khi bảng báo lỗi: chủ dự án không muốn mở hộp trong app; lỗi báo gọn trong bảng (cần
+  đăng nhập · UTD không đọc được video này · UTD chưa chạy).
+- YouTube: nút chỉ hiện ở trang xem video (`/watch`, `/shorts/`, `/live/`, `/embed/`), không ở video xem thử ở trang
+  chủ / danh sách.
+- Trang file Google Drive: bảng có một dòng "Tải file video" (file gốc, như mục Google Drive ở trên).
+- Kiểm: cargo test app 251 (+2 ignored), engine, mp4; clippy sạch; lint (716 khoá); build; size-limit JS 200,11 / 220 kB;
+  e2e 117/117 (mới: `video-button.spec.ts` 6 bài, `extension.spec.ts` viết lại theo Q11 — tiện ích thật trong
+  Chromium có quyền ngay lúc cài và chèn nút vào trang thử; `sign-in.spec.ts` sửa theo Q11, thêm bài nền nút trên trang).
+- Chưa thử thật trên Chrome của chủ dự án; Firefox chưa thử.
+
+#### GĐ3 — Tự bắt link tải (takeover, AC-15), 2026-10-26, nhánh `claude/takeover-787f20`
+
+Chủ dự án: tải một file trên Chrome/Firefox thì UTD tự nhận, như IDM. Quyền: Q5 đã quyết (mọi trang, một lần lúc
+cài), thêm `downloads`. Làm trên nhánh riêng, đã ghép `claude/auth-plan-6b2e91` (c045304, có Q11 + nút video).
+
+**Luồng** (`extensions/*/takeover.js`, module riêng; Chromium nạp bằng `importScripts` ở `background.js`, Firefox
+nạp theo `background.scripts`):
+1. `downloads.onCreated` ⇒ bỏ qua nếu: công tắc tắt; link không phải http(s) (`blob:`, `data:`, `file:`…); không còn
+   `in_progress`; download do tiện ích tạo (`byExtensionId`, kể cả tiện ích khác); kích thước đã biết nhỏ hơn ngưỡng
+   (mặc định **1 MB**: file nhỏ trình duyệt tải trong tích tắc, UTD không lợi gì); đuôi nằm trong danh sách "không
+   bắt" (mặc định trống); vừa bấm kèm **Alt** (bỏ qua một lần, như IDM).
+2. `downloads.pause(id)` (lỗi ⇒ đã xong/hỏng, để nguyên) ⇒ đọc cookie theo đúng luật của cú chuột phải (`authFor`:
+   trang dùng đăng nhập, không nhạy cảm, không tắt riêng) ⇒ tin `takeover {url: finalUrl||url, pageUrl: referrer,
+   suggestedName: tên trình duyệt đặt, auth?}`.
+3. UTD trả `ok` ⇒ `downloads.cancel` + `erase`. Mọi trường hợp khác — không có native host, UTD chưa chạy, UTD từ
+   chối, lỗi, **quá 20 s** — ⇒ `downloads.resume`: trình duyệt tải tiếp đúng request cũ (giữ POST, link dùng một
+   lần). Không download nào bị mất.
+4. App (`src-tauri/src/takeover.rs`, route `Takeover` ở `ipc.rs`): lần cho phép từ cú bấm (`grant_from_click`, cùng
+   luật cũ) ⇒ dò link **kèm cookie** (`DownloadEngine::inspect_signed`, mới; trần 12 s) ⇒ chỉ nhận khi là file thật,
+   không phải trang web, và **không có cảnh báo S-22** (file chạy được, `http://`, tên giả đuôi, MIME lệch: những
+   file cần hỏi người dùng thì để trình duyệt tải — trình duyệt có Safe Browsing và hộp cảnh báo riêng; không mở hộp
+   nào trong UTD) ⇒ link khớp download đang chờ link mới thì gắn vào đó (`recover::capture_link`), không thì tạo
+   task (`enqueue_download`) với tên trình duyệt gợi ý (hợp lệ) hoặc tên máy chủ (Content-Disposition) ⇒ sự kiện
+   `utd://taken-over` ⇒ thông báo nhỏ S-77 "Nhận từ trình duyệt · tên file" 4 s, không mở hộp thoại, không giành
+   focus.
+5. Popup S-76: công tắc "Tự bắt link tải" (mặc định bật, `takeover`), "Tuỳ chọn" gập lại: "Bỏ qua file nhỏ hơn (MB)"
+   (`takeoverMinMb`), "Không bắt các đuôi" (`takeoverSkip`), một dòng gợi ý Alt. 5 câu × 16 ngôn ngữ; app 1 câu × 16.
+6. Alt: `takeover-keys.js` đăng ký lúc chạy bằng `scripting.registerContentScripts` (mọi khung, `document_start`),
+   chỉ báo "vừa bấm kèm Alt" ⇒ download bắt đầu trong 5 s tiếp theo để trình duyệt tải. Đăng ký lúc chạy để không sửa
+   `content_scripts` trong manifest (đụng nút video); Chrome cũng tự hiểu Alt+bấm link là "tải link này".
+
+**Vì sao takeover vẫn đúng luật cookie §4.3.**
+- Luật: tiện ích chỉ đọc cookie trong một hành động của người dùng trên trình duyệt; tin nhắn từ app không bao giờ
+  dẫn tới việc đọc cookie. Takeover đọc cookie bên trong `downloads.onCreated`: download do người dùng bấm tải trên
+  trang (hành động của người dùng). App chỉ *trả lời* nhận/không, không xin được cookie, không gọi được takeover.
+- Cookie đọc ra là cookie của đúng link trình duyệt **vừa tự gửi cookie tới** (và trang chứa nó khi cùng trang gốc,
+  như chuột phải). Trang tự khởi động download (không cú bấm) thì trình duyệt cũng đã gửi chính cookie đó tới chính
+  link đó: UTD gửi lại không cho trang thêm gì. Mã độc cùng máy muốn lợi dụng thì phải tự mở trình duyệt tải link
+  — khi đó trình duyệt cũng đã gửi cookie, nên không thành cửa sau của App-Bound Encryption (T1).
+- Download do tiện ích tạo (`byExtensionId`, kể cả tiện ích khác dùng `downloads.download`) không bị bắt: không phải
+  cú bấm trên trang.
+- Trang chưa dùng đăng nhập (công tắc chung tắt, nhạy cảm, tắt riêng trang) ⇒ không đọc cookie nào; UTD dò không
+  cookie, gặp trang đăng nhập thì trả lại trình duyệt.
+- Khoá bằng bài thử `takeover.spec.ts` "luật cookie": không đọc khi trang không dùng đăng nhập; chỉ đọc cho link của
+  download (bỏ trang chứa khác trang gốc); mọi lần đọc xảy ra trước tin `takeover`, trả lời của UTD (kể cả trường lạ)
+  không gây thêm lần đọc nào.
+
+**Khác/thêm so với §4.4.**
+- Link có cảnh báo S-22 để trình duyệt tải (xem bước 4). Hệ quả: link `http://` không bị bắt. Nếu chủ dự án muốn
+  UTD bắt cả những file này thì phương án là mở hộp xác nhận S-22 của UTD rồi mới huỷ bản trình duyệt (thêm một hộp).
+- Không phát hiện được download POST (API không cho biết phương thức): UTD dò bằng GET; máy chủ trả lỗi/trang web
+  ⇒ trả lại trình duyệt. Rủi ro còn lại: máy chủ trả *file khác* cho GET (hiếm).
+- Link nhận rồi mà sau đó hết hạn giữa chừng ⇒ đường tự cứu có sẵn (chờ link mới, bấm tải lại trên trình duyệt thì
+  gắn vào).
+- UTD quá 20 s mới trả lời (tiện ích đã cho trình duyệt tải tiếp) mà vẫn nhận ⇒ hai bản; UTD dò tối đa 12 s nên chỉ
+  xảy ra khi máy rất chậm.
+
+**Kiểm (Windows, 2026-10-26).**
+- `cargo test --workspace` xanh (app 255 + 2 bỏ qua có sẵn; mới: `takeover` 2 unit, route IPC, native host
+  `takeovers_are_version_two_links`, `both_extensions_ship_the_takeover_scripts`; engine
+  `inspecting_with_the_click_cookies_sees_the_file_behind_a_sign_in`). `cargo clippy --workspace --all-targets -D
+  warnings` sạch. `pnpm lint` (eslint + i18n 717 khoá). size-limit JS 200,37 / 220 kB.
+- e2e 126/126; mới `e2e/takeover.spec.ts` 9 bài: API downloads giả (nhận ⇒ pause/cancel/erase; không có native host,
+  UTD chưa chạy, UTD từ chối ⇒ resume; không trả lời ⇒ resume sau 20 s; bỏ qua blob:/data:/nhỏ/đuôi/tiện ích
+  khác/đã xong/công tắc tắt; Alt; luật cookie), popup S-76, thông báo S-77 (axe sạch), và **tiện ích thật trong
+  Chromium không có native host: download thật bị tạm dừng rồi tải tiếp xong, đủ byte**.
+- Thử thật `auth-thu/takeover-e2e.py` trên bản release, `UTD_DATA_DIR` riêng: không cookie ⇒ không nhận, không tạo
+  task; trang HTML ⇒ không nhận; kèm cookie + tên gợi ý ⇒ nhận, tải xong đủ byte, đúng tên, ghi dấu trang; app tắt
+  ⇒ native host báo "UTD chưa chạy"; 0 file chứa cookie mồi. **ĐẠT.**
+- Chưa thử: Chrome thật của chủ dự án (tiến trình mở từ phiên AI bị cô lập); Firefox.
+
+**Chỗ dễ trùng khi ghép** (nhánh đăng nhập đang sửa tiếp tiện ích): `manifest.json` (thêm `"downloads"`; Firefox
+thêm `takeover.js` vào `background.scripts`), `background.js` (một dòng `importScripts` trước `runtime.onMessage`),
+`popup.html`/`popup.js` (thẻ S-76 sau thẻ nút video; S-74/S-75 đã là của nút video), `_locales/*` (5 khoá cuối file), `ipc.rs` (route `Takeover`),
+`native_host.rs` (nhánh `download | takeover`), `browser_integration.rs` (2 file mới mỗi trình duyệt), `lib.rs`.
+
 ### 9.2 File sẽ sửa (GĐ0–1)
 
 - **Extension:** `extensions/{chromium,firefox}/`
@@ -434,7 +719,7 @@ Hộp hỏi quyền là của trình duyệt, tự theo ngôn ngữ trình duy�
 - **App:**
   - `src-tauri/src/{commands,state,lib,events}.rs`: lệnh `auth_status`, `auth_forget`; sự kiện
     `utd://auth-granted`.
-  - `queue.rs` và `recover.rs` (của phiên khôi phục): chờ `Login`.
+  - `recover.rs` (của phiên khôi phục): chờ `Link` (không thêm `Login`, xem Phụ lục B).
 - **Engine:**
   - `crates/utd-engine/src/cookies.rs` (mới).
   - `engine/{transport,session,mod}.rs`, `model.rs` (`AuthMarker`), `db.rs` (migration `auth_json`).
@@ -507,7 +792,8 @@ Rủi ro:
 Câu cần chủ dự án quyết. **Đã quyết 2026-10-25: theo đề xuất ở cả 10 câu** (nhớ theo trang; công tắc chung mặc
 định Bật; giữ cookie tới khi tắt app; không làm cookies.txt và `--cookies-from-browser`; takeover xin quyền theo
 trang; chủ dự án tự đăng nhập lúc thử thật; xoá query của task cần đăng nhập khi xong; bản phát hành chỉ nhận ID
-store; sửa SPEC khi bắt đầu GĐ1; có danh sách miền nhạy cảm ở GĐ1).
+store; sửa SPEC khi bắt đầu GĐ1; có danh sách miền nhạy cảm ở GĐ1). **2026-10-26:** Q1 và Q5 đổi theo Q11 — xin
+quyền mọi trang một lần lúc cài.
 1. **Q1 — Nhớ theo trang hay hỏi mỗi lần?**
    - Đề xuất: **nhớ theo trang**, dùng quyền theo trang của trình duyệt, tắt được trong popup. Chỉ cookie không bao
      giờ được lưu.
@@ -523,6 +809,9 @@ store; sửa SPEC khi bắt đầu GĐ1; có danh sách miền nhạy cảm ở 
    - Đề xuất: theo trang, như §8: trang chưa cho phép thì takeover không kèm cookie, UTD dò không được thì trả lại
      trình duyệt.
    - Hay xin mọi trang một lần như IDM (cảnh báo "all websites")?
+   - **Đã quyết lại 2026-10-26: xin mọi trang một lần như IDM** (lời gốc: "chỉ xin quyền 1 lần giống IDM đi, xin
+     cho mọi trang luôn chứ"; cùng quyết định với Q11). Takeover thêm quyền `downloads`. Kết quả: mục "GĐ3 — Tự bắt
+     link tải" ở §9.1.
 6. **Q6 — Tài khoản để thử thật:**
    - YouTube giới hạn tuổi (tài khoản đã xác minh tuổi) và file Google Drive riêng: chủ dự án tự đăng nhập trên
      Chrome của máy này lúc thử, hay cấp tài khoản thử?
@@ -584,11 +873,16 @@ Playwright 1.64): `auth-thu/README.md`.
 ## Phụ lục B — Ghép với hai phiên song song
 
 - **Khôi phục download** (`claude/recovery-9f3b1d`, chưa commit; đọc `notes/recovery.md` và `recovery.rs`):
-  - Có `RecoveryWait::{Disk, Link, Network, Retry}`. Đề xuất thêm **`RecoveryWait::Login`**.
-  - Task có `auth` mà gặp 401/403 hoặc trang đăng nhập ⇒ `Login` thay vì `Link`; không tự thử lại mù.
-  - Khi `mark_interrupted` mở app, task có `auth` và không có grant ⇒ `Login` ngay.
-  - Grant mới tới (`utd://auth-granted`) ⇒ xếp lại mọi task `Login` của trang đó.
-  - "Cập nhật link" (link ký hết hạn) giữ nguyên; với media có cookie thì `resolve` chạy kèm grant.
+  - Có `RecoveryWait::{Disk, Link, Network, Retry}`. Lúc lập kế hoạch đề xuất thêm `RecoveryWait::Login`.
+  - **Đã làm khác khi ghép (2026-10-25, theo phiên chính):** không thêm `Login`. Cần đăng nhập lại đi chung đường
+    chờ link mới `Link`, không có đường thứ hai:
+    - `recovery::plan`: `auth.required`, `auth.expired`, `media.login` ⇒ `Link` (cả task media; task con thì không).
+    - Mở lại app: task bị ngắt chạy lại, engine dừng ngay với `auth.required` (không gửi gì) ⇒ `Link`.
+    - Hai cách gỡ, cùng một chỗ chờ: (1) popup "Dùng đăng nhập" xếp lại mọi task chờ `Link` của trang đó có mã
+      cần đăng nhập; (2) bấm tải lại trên trình duyệt ⇒ `capture_link` gắn link vào task, dò bằng cookie của cú
+      bấm, gắn lần cho phép rồi mới xếp hàng.
+    - Hộp "Cập nhật link" đang mở (`await_download_link`) mà popup cho phép đăng nhập ⇒ báo `utd://link-updated`
+      để hộp đóng.
 - **Màn chi tiết + cảnh báo trước khi tải** (`claude/detail-screen-7c21e4`, chưa commit):
   - Doctor S-21 thêm nguyên nhân `auth.required` / `auth.expired`, cách sửa "Bấm biểu tượng UTD › Tiếp tục".
   - `detail_log.rs` đã bỏ query; thêm test T-L1 cho bảng sự kiện mới của phiên đó.

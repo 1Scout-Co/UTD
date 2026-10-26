@@ -19,6 +19,18 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../extensions/chromium/background.js"),
     ),
     (
+        "chromium/content.js",
+        include_bytes!("../../extensions/chromium/content.js"),
+    ),
+    (
+        "chromium/takeover.js",
+        include_bytes!("../../extensions/chromium/takeover.js"),
+    ),
+    (
+        "chromium/takeover-keys.js",
+        include_bytes!("../../extensions/chromium/takeover-keys.js"),
+    ),
+    (
         "chromium/popup.html",
         include_bytes!("../../extensions/chromium/popup.html"),
     ),
@@ -41,6 +53,18 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
     (
         "firefox/background.js",
         include_bytes!("../../extensions/firefox/background.js"),
+    ),
+    (
+        "firefox/content.js",
+        include_bytes!("../../extensions/firefox/content.js"),
+    ),
+    (
+        "firefox/takeover.js",
+        include_bytes!("../../extensions/firefox/takeover.js"),
+    ),
+    (
+        "firefox/takeover-keys.js",
+        include_bytes!("../../extensions/firefox/takeover-keys.js"),
     ),
     (
         "firefox/popup.html",
@@ -351,6 +375,34 @@ mod tests {
         assert_eq!(fresh, include_bytes!("../../extensions/chromium/background.js"));
         assert!(directory.join("firefox").join("popup.js").is_file());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Tự bắt link tải (takeover.js): quyền `downloads`; mọi script hai bản tiện ích nạp đều được UTD cài kèm
+    /// (Firefox theo manifest, Chromium bằng importScripts, takeover-keys.js đăng ký lúc chạy).
+    #[test]
+    fn both_extensions_ship_the_takeover_scripts() {
+        let bundled = |path: &str| EXTENSION_FILES.iter().any(|(relative, _)| *relative == path);
+        for browser in ["chromium", "firefox"] {
+            let manifest = EXTENSION_FILES
+                .iter()
+                .find(|(relative, _)| *relative == format!("{browser}/manifest.json"))
+                .map(|(_, bytes)| serde_json::from_slice::<serde_json::Value>(bytes).unwrap())
+                .unwrap();
+            assert!(manifest["permissions"].as_array().unwrap().contains(&"downloads".into()));
+            for script in ["background.js", "takeover.js", "takeover-keys.js"] {
+                assert!(bundled(&format!("{browser}/{script}")), "{browser}/{script}");
+            }
+        }
+        let firefox = serde_json::from_slice::<serde_json::Value>(include_bytes!(
+            "../../extensions/firefox/manifest.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            firefox["background"]["scripts"],
+            serde_json::json!(["background.js", "takeover.js"])
+        );
+        let background = String::from_utf8_lossy(include_bytes!("../../extensions/chromium/background.js"));
+        assert!(background.contains("importScripts(\"takeover.js\")"));
     }
 
     #[test]

@@ -12,6 +12,7 @@ import { formatPercent } from "@/shared/i18n/format"
 import { t } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
+import { needsSignIn } from "../../model/sign-in"
 import type { DownloadFilter, DownloadItem } from "../../model/types"
 import { Meter } from "../parts"
 import type { ActionMessage } from "./soniox-file-actions"
@@ -221,7 +222,10 @@ function SonioxRow({
       </td>
       <td className="px-3 py-2.5 text-end font-medium">{item.size}</td>
       <td className="px-2 py-2.5">
-        <StatusPill status={item.status} />
+        <StatusPill
+          status={item.status}
+          signIn={item.status === "failed" && needsSignIn(item.errorCode)}
+        />
       </td>
       <ProgressCell item={item} />
       <SpeedCell item={item} />

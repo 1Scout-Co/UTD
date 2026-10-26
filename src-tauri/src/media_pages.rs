@@ -138,6 +138,66 @@ pub fn is_channel_page(raw: &str) -> bool {
     matches_site(raw, CHANNEL_SITES)
 }
 
+/// Trang thư mục/danh sách Google Drive (`/drive/my-drive`, `/drive/folders/…`): không phải file. Drive mở file xem
+/// trước đè lên trang này mà không đổi địa chỉ, nên "Tải trang này" từng gửi nhầm link thư mục (bản thử thật
+/// 2026-10-25): báo cách làm, không tạo dòng tải hỏng.
+pub fn is_drive_folder(raw: &str) -> bool {
+    matches_site(raw, &[("drive.google.com", drive_folder)])
+}
+
+pub const DRIVE_FOLDER: &str =
+    "[link.drive_folder] Đây là thư mục Google Drive, không phải file. Mở file ở trang riêng rồi thử lại.";
+
+/// Máy chủ tải thật của Google Drive (nút Tải xuống trên Drive đi tới đây).
+const DRIVE_DOWNLOAD: &str = "https://drive.usercontent.google.com/download";
+
+/// Trang file Google Drive (`/file/d/<id>/view|edit|preview`, `open?id=`, `uc?id=`, cả `/u/<n>/…`) ⇒ link tải thật
+/// của file đó. Tải file gốc như nút Tải xuống của Drive (đúng byte, mọi loại file), không qua yt-dlp kể cả video
+/// (notes/auth-plan.md, "Google Drive"). `confirm=t` bỏ trang hỏi quét virus khi Google cho; file lớn mà vẫn ra trang
+/// hỏi thì engine theo form của trang (`utd_engine` `interstitial`). `None`: không phải trang file Drive.
+pub fn drive_download_url(raw: &str) -> Option<String> {
+    let url = utd_engine::validate_url(raw.trim()).ok()?;
+    let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    if host != "drive.google.com" && host != "docs.google.com" {
+        return None;
+    }
+    let mut path: Vec<&str> = url
+        .path_segments()
+        .map(|parts| parts.filter(|part| !part.is_empty()).collect())
+        .unwrap_or_default();
+    // Tài khoản thứ n: `/u/1/file/d/<id>/view`.
+    if path.first() == Some(&"u") && path.get(1).is_some_and(|part| part.bytes().all(|b| b.is_ascii_digit())) {
+        path.drain(..2);
+    }
+    let param = |name: &str| {
+        url.query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
+    };
+    let id = match path.as_slice() {
+        ["file", "d", id, ..] if host == "drive.google.com" => (*id).to_string(),
+        ["open"] if host == "drive.google.com" => param("id")?,
+        ["uc"] => param("id")?,
+        _ => return None,
+    };
+    let valid = (10..=200).contains(&id.len())
+        && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    if !valid {
+        return None;
+    }
+    let mut download = url::Url::parse(DRIVE_DOWNLOAD).ok()?;
+    download
+        .query_pairs_mut()
+        .append_pair("id", &id)
+        .append_pair("export", "download")
+        .append_pair("confirm", "t");
+    // File chia sẻ bằng link kiểu cũ cần `resourcekey` mới mở được.
+    if let Some(key) = param("resourcekey").filter(|key| !key.is_empty()) {
+        download.query_pairs_mut().append_pair("resourcekey", &key);
+    }
+    Some(download.into())
+}
+
 fn matches_site(raw: &str, sites: &[(&str, Rule)]) -> bool {
     let Ok(url) = utd_engine::validate_url(raw.trim()) else {
         return false;
@@ -219,6 +279,10 @@ fn is_file_name(part: &str) -> bool {
 
 fn is_digits(part: &str) -> bool {
     !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn drive_folder(page: &Page<'_>) -> bool {
+    !page.has(0) || page.at(0) == "drive"
 }
 
 fn short_link(page: &Page<'_>) -> bool {
@@ -509,6 +573,66 @@ mod tests {
     ];
 
     #[test]
+    fn drive_file_pages_download_the_original_file() {
+        let id = "1hfaJWoyFptsG9niNHVfOB8m6snwbibpl";
+        let expected =
+            format!("https://drive.usercontent.google.com/download?id={id}&export=download&confirm=t");
+        for page in [
+            format!("https://drive.google.com/file/d/{id}/view?t=0.177"),
+            format!("https://drive.google.com/file/d/{id}/view?usp=sharing"),
+            format!("https://drive.google.com/file/d/{id}/edit"),
+            format!("https://drive.google.com/file/d/{id}/preview"),
+            format!("https://drive.google.com/u/1/file/d/{id}/view"),
+            format!("https://drive.google.com/open?id={id}"),
+            format!("https://drive.google.com/uc?id={id}&export=download"),
+            format!("https://drive.google.com/u/0/uc?id={id}&export=download"),
+            format!("https://docs.google.com/uc?export=download&id={id}"),
+        ] {
+            assert_eq!(drive_download_url(&page).as_deref(), Some(expected.as_str()), "{page}");
+            assert!(!is_drive_folder(&page), "{page}");
+        }
+        assert_eq!(
+            drive_download_url(&format!("https://drive.google.com/file/d/{id}/view?resourcekey=0-AbC_d")),
+            Some(format!("{expected}&resourcekey=0-AbC_d"))
+        );
+        for other in [
+            "https://drive.google.com/drive/my-drive",
+            "https://drive.google.com/drive/folders/1AbCdEfGhIjK",
+            "https://drive.google.com/open?id=",
+            "https://drive.google.com/file/d/short/view",
+            "https://drive.google.com/file/d/1AbCdEfGh%2F..%2Fx/view",
+            "https://docs.google.com/document/d/1AbCdEfGhIjKlMn/edit",
+            "https://drive.usercontent.google.com/download?id=1AbCdEfGhIjK&export=download",
+            "https://evil.example/file/d/1AbCdEfGhIjKlMn/view",
+            "http://drive.google.com.evil.example/file/d/1AbCdEfGhIjKlMn/view",
+        ] {
+            assert_eq!(drive_download_url(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn drive_folders_are_not_files() {
+        for url in [
+            "https://drive.google.com/drive/my-drive",
+            "https://drive.google.com/drive/u/0/my-drive",
+            "https://drive.google.com/drive/folders/1AbC?usp=sharing",
+            "https://drive.google.com/drive/shared-with-me",
+            "https://drive.google.com/",
+        ] {
+            assert!(is_drive_folder(url), "{url}");
+        }
+        for url in [
+            "https://drive.google.com/file/d/1AbC/view?usp=sharing",
+            "https://drive.google.com/uc?id=1AbC&export=download",
+            "https://drive.usercontent.google.com/download?id=1AbC",
+            "https://docs.google.com/drive/my-drive",
+            "https://example.com/drive/my-drive",
+        ] {
+            assert!(!is_drive_folder(url), "{url}");
+        }
+    }
+
+    #[test]
     fn channel_pages_open_the_channel_flow() {
         for url in CHANNEL_PAGES {
             assert!(is_channel_page(url), "{url}");
@@ -591,6 +715,7 @@ mod tests {
         let request = |url: &str| MediaRequest {
             url: url.into(),
             page_url: None,
+            auth_grant: None,
         };
         assert!(pending.hold(&request("https://youtu.be/a")));
         assert!(pending.hold(&request("https://youtu.be/b")));

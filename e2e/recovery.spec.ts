@@ -155,6 +155,27 @@ test('S-21: Doctor — link hết hạn mở Cập nhật link, file đổi thì
   ])
 })
 
+test('S-21: Doctor — link là trang web: không có Thử lại; cách làm (cả Drive) và Cập nhật link…', async ({ page }) => {
+  const notFile = task('page', 'view', {
+    status: 'failed',
+    url: 'https://drive.google.com/file/d/1hfaJWoyFptsG9niNHVfOB8m6snwbibpl/view',
+    totalBytes: null,
+    downloadedBytes: 0,
+    error: error('user', 'http.not_a_file', 'Link này là một trang web, không phải file.'),
+  })
+  await mockTauri(page, { list_downloads: [notFile] })
+  await page.goto('/')
+  await openMenu(page, 'view')
+  await page.getByRole('menuitem', { name: 'Chẩn đoán' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: 'Link này là trang web, không phải file' })).toBeVisible()
+  await expect(dialog).toContainText('Hoặc chuột phải đúng link tải › Tải bằng UTD.')
+  await expect(dialog).toContainText('Google Drive: mở file ra trang riêng rồi thử lại.')
+  await expect(dialog.getByRole('button', { name: /^(Thử lại|Tiếp tục)$/ })).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Cập nhật link…' }).click()
+  await expect(dialog.getByRole('heading', { name: 'Cập nhật link' })).toBeVisible()
+})
+
 test('S-21: a11y — hộp Cập nhật link không có lỗi truy cập', async ({ page }) => {
   await mockTauri(page, { list_downloads: TASKS })
   await page.goto('/')

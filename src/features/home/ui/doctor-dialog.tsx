@@ -25,6 +25,7 @@ import { t } from "@/shared/i18n/i18n"
 
 import { diagnose, type DoctorAction, type DoctorCategory } from "../model/doctor"
 import type { DownloadItem } from "../model/types"
+import { OpenPageButton } from "./sign-in-notice"
 
 // Nhãn nhóm: t(`doctor.cat.${category}`). Màn Chi tiết (S-21) dùng chung.
 export const CATEGORY_STYLE: Record<
@@ -171,6 +172,9 @@ export function DoctorDialog({
             >
               {t("app.close")}
             </Button>
+            {report.signIn && item.url ? (
+              <OpenPageButton url={item.url} outline={Boolean(run)} />
+            ) : null}
             {run && button && ButtonIcon ? (
               <Button
                 type="button"

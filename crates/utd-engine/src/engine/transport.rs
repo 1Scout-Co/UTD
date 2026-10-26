@@ -1,13 +1,19 @@
-//! Cách gửi yêu cầu của một task: header riêng chỉ tới đúng origin của link gốc, và trần byte
-//! mỗi yêu cầu (YouTube bóp yêu cầu Range lớn hơn `http_chunk_size`).
+//! Cách gửi yêu cầu của một task: header riêng chỉ tới đúng origin của link gốc, cookie đăng nhập theo
+//! luật miền/đường dẫn ở từng bước chuyển hướng, và trần byte mỗi yêu cầu (YouTube bóp yêu cầu Range lớn
+//! hơn `http_chunk_size`).
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::{ACCEPT_ENCODING, HeaderMap, HeaderName, HeaderValue, LOCATION, RANGE};
+use reqwest::header::{
+    ACCEPT_ENCODING, COOKIE, HeaderMap, HeaderName, HeaderValue, LOCATION, RANGE, SET_COOKIE,
+};
 use reqwest::redirect::Policy;
-use reqwest::{Client, Method, RequestBuilder, Response};
+use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use url::{Origin, Url};
 
+use super::http::{RequestFailure, failure_from_status};
+use crate::auth::{CookieJar, auth_expired};
 use crate::headers::RequestHeader;
 use crate::{Error, Result};
 
@@ -36,22 +42,32 @@ pub(crate) fn scoped_policy() -> Policy {
     })
 }
 
+/// Ba client dùng chung của engine (mỗi client giữ pool kết nối riêng).
+#[derive(Clone)]
+pub(crate) struct Clients {
+    pub plain: Client,
+    /// Dừng ở chuyển hướng sang origin khác (`scoped_policy`).
+    pub scoped: Client,
+    /// Không tự theo chuyển hướng: task có cookie tự theo để tính lại `Cookie` ở từng bước.
+    pub manual: Client,
+}
+
 #[derive(Clone)]
 pub(crate) struct Transport {
-    plain: Client,
-    scoped: Client,
+    clients: Clients,
     origin: Origin,
     headers: HeaderMap,
     max_request: Option<u64>,
+    cookies: Option<Arc<CookieJar>>,
 }
 
 impl Transport {
     pub fn new(
-        plain: &Client,
-        scoped: &Client,
+        clients: &Clients,
         task_url: &Url,
         headers: &[RequestHeader],
         max_request: Option<u64>,
+        cookies: Option<Arc<CookieJar>>,
     ) -> Result<Self> {
         let mut map = HeaderMap::new();
         for header in headers {
@@ -66,11 +82,11 @@ impl Transport {
             map.insert(name, value);
         }
         Ok(Self {
-            plain: plain.clone(),
-            scoped: scoped.clone(),
+            clients: clients.clone(),
             origin: task_url.origin(),
             headers: map,
             max_request: max_request.filter(|bytes| *bytes > 0),
+            cookies,
         })
     }
 
@@ -86,6 +102,22 @@ impl Transport {
         }
     }
 
+    /// Lỗi cho một mã HTTP không thành công. Đã kèm cookie mà máy chủ vẫn 401/403 ⇒ `auth.expired`
+    /// (không thử lại: đăng nhập phải làm mới từ trình duyệt).
+    pub fn status_failure(&self, status: StatusCode, headers: &HeaderMap) -> RequestFailure {
+        if self.cookies.is_some() && matches!(status.as_u16(), 401 | 403) {
+            return RequestFailure {
+                error: auth_expired(),
+                retry_after: None,
+            };
+        }
+        failure_from_status(status, headers)
+    }
+
+    pub fn has_cookies(&self) -> bool {
+        self.cookies.is_some()
+    }
+
     /// Gửi một yêu cầu. Header riêng chỉ đi kèm khi `url` cùng origin với link gốc; server
     /// chuyển hướng sang origin khác thì gửi lại tới đó không kèm header riêng.
     pub async fn send(
@@ -95,9 +127,19 @@ impl Transport {
         range: Option<&str>,
         timeout: Option<Duration>,
     ) -> reqwest::Result<Response> {
-        let scoped = !self.headers.is_empty() && url.origin() == self.origin;
+        if let Some(cookies) = &self.cookies {
+            return self
+                .send_with_cookies(cookies, method, url, range, timeout)
+                .await;
+        }
+        let scoped = self.scoped_to(url);
+        let client = if scoped {
+            &self.clients.scoped
+        } else {
+            &self.clients.plain
+        };
         let response = self
-            .build(method.clone(), url, range, timeout, scoped)
+            .build(client, method.clone(), url, range, timeout, scoped)
             .send()
             .await?;
         if !scoped || !response.status().is_redirection() {
@@ -107,20 +149,63 @@ impl Transport {
             return Ok(response);
         };
         drop(response);
-        self.build(method, &next, range, timeout, false)
+        self.build(&self.clients.plain, method, &next, range, timeout, false)
             .send()
             .await
     }
 
+    /// Tự theo chuyển hướng (tối đa `MAX_REDIRECTS`): mỗi bước gửi đúng cookie hợp miền/đường dẫn của bước
+    /// đó (trang lạ không nhận cookie nào) và gộp `Set-Cookie` vào hũ. Hết lượt thì trả phản hồi 3xx cuối,
+    /// người gọi coi như lỗi máy chủ.
+    async fn send_with_cookies(
+        &self,
+        cookies: &CookieJar,
+        method: Method,
+        url: &Url,
+        range: Option<&str>,
+        timeout: Option<Duration>,
+    ) -> reqwest::Result<Response> {
+        let mut current = url.clone();
+        let mut hops = 0;
+        loop {
+            let mut request = self.build(
+                &self.clients.manual,
+                method.clone(),
+                &current,
+                range,
+                timeout,
+                self.scoped_to(&current),
+            );
+            if let Some(cookie) = cookies.header_for(&current) {
+                request = request.header(COOKIE, cookie);
+            }
+            let response = request.send().await?;
+            cookies.absorb(&current, response.headers().get_all(SET_COOKIE));
+            if !response.status().is_redirection() || hops >= MAX_REDIRECTS {
+                return Ok(response);
+            }
+            let Some(next) = redirect_target(&response) else {
+                return Ok(response);
+            };
+            drop(response);
+            current = next;
+            hops += 1;
+        }
+    }
+
+    fn scoped_to(&self, url: &Url) -> bool {
+        !self.headers.is_empty() && url.origin() == self.origin
+    }
+
     fn build(
         &self,
+        client: &Client,
         method: Method,
         url: &Url,
         range: Option<&str>,
         timeout: Option<Duration>,
         scoped: bool,
     ) -> RequestBuilder {
-        let client = if scoped { &self.scoped } else { &self.plain };
         let mut request = client
             .request(method, url.clone())
             .header(ACCEPT_ENCODING, "identity");
@@ -149,8 +234,13 @@ mod tests {
 
     fn transport(cap: Option<u64>) -> Transport {
         let client = Client::new();
+        let clients = Clients {
+            plain: client.clone(),
+            scoped: client.clone(),
+            manual: client,
+        };
         let url = Url::parse("https://example.com/a").unwrap();
-        Transport::new(&client, &client, &url, &[], cap).unwrap()
+        Transport::new(&clients, &url, &[], cap, None).unwrap()
     }
 
     #[test]

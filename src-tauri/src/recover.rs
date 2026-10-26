@@ -23,6 +23,7 @@ use utd_engine::{
     TaskStatus,
 };
 
+use crate::auth::{AuthStore, Grant};
 use crate::events::TASK_EVENT;
 use crate::queue::{DownloadQueue, Entry, Place};
 use crate::state::AppState;
@@ -266,14 +267,20 @@ fn link_error(error: &LinkError) -> String {
     }
 }
 
-/// Thay link rồi xếp task vào đầu hàng đợi.
+/// Thay link rồi xếp task vào đầu hàng đợi. `signed`: link tải lại từ trình duyệt kèm đăng nhập (cú bấm
+/// trên trang đã cho phép): dò bằng cookie đó, gắn lần cho phép vào task trước khi xếp hàng.
 async fn relink(
     engine: &DownloadEngine,
     queue: &DownloadQueue,
     task_id: &str,
     url: &str,
+    signed: Option<(&AuthStore, &Arc<Grant>)>,
 ) -> Result<DownloadTask, LinkError> {
-    let task = engine.replace_link(task_id, url, Vec::new()).await?;
+    let cookies = signed.map(|(_, grant)| (grant.site.as_str(), grant.jar.clone()));
+    let task = engine.replace_link(task_id, url, Vec::new(), cookies).await?;
+    if let Some((auth, grant)) = signed {
+        auth.bind(task_id, &grant.id);
+    }
     if let Err(error) = queue.submit(vec![Entry::new(task_id)], Place::Front) {
         log::warn!("recover: đã thay link nhưng không xếp được task={task_id}: {error}");
     }
@@ -293,7 +300,7 @@ pub async fn update_download_link(
     }
     let engine = state.engine.clone();
     let queue = state.queue.clone();
-    let task = relink(&engine, &queue, &task_id, &url)
+    let task = relink(&engine, &queue, &task_id, &url, None)
         .await
         .map_err(|error| link_error(&error))?;
     if recover.awaiting().as_deref() == Some(task_id.as_str()) {
@@ -331,23 +338,26 @@ struct LinkUpdate {
 }
 
 /// Link tải từ trình duyệt: nếu đúng là file của một download đang chờ link mới (hộp "Cập nhật link"
-/// đang mở, hoặc task lỗi 401/403/410 cùng tên file) và cùng file thì gắn vào task đó, trả id. Không
-/// khớp ⇒ `None`, trình duyệt tạo download mới như thường.
+/// đang mở, hoặc task lỗi 401/403/410 / cần đăng nhập lại cùng tên file) và cùng file thì gắn vào task
+/// đó (kèm đăng nhập `grant` của cú bấm, nếu có), trả id. Không khớp ⇒ `None`, trình duyệt tạo download
+/// mới như thường.
 pub(crate) async fn capture_link(
     app: &AppHandle,
     engine: &Arc<DownloadEngine>,
     queue: &Arc<DownloadQueue>,
     url: &str,
     suggested_name: Option<&str>,
+    grant: Option<&Arc<Grant>>,
 ) -> Option<String> {
     let state = app.try_state::<AppState>()?;
     let awaiting = app.try_state::<Recover>().and_then(|recover| recover.awaiting());
     let candidates = link_candidates(&state.journal, awaiting.as_deref(), url, suggested_name);
+    let signed = grant.map(|grant| (state.auth.as_ref(), grant));
     for task_id in candidates {
         if state.running.contains(&task_id) {
             continue;
         }
-        let result = relink(engine, queue, &task_id, url).await;
+        let result = relink(engine, queue, &task_id, url, signed).await;
         let chosen = awaiting.as_deref() == Some(task_id.as_str());
         if chosen || result.is_ok() {
             let update = LinkUpdate {
@@ -365,6 +375,23 @@ pub(crate) async fn capture_link(
         }
     }
     None
+}
+
+/// Download chờ link mới vừa chạy lại theo đường khác (popup tiện ích cho phép đăng nhập): hộp "Cập nhật
+/// link" đang mở cho nó thì báo xong để hộp đóng.
+pub(crate) fn link_settled(app: &AppHandle, task_id: &str) {
+    let Some(recover) = app.try_state::<Recover>() else {
+        return;
+    };
+    if recover.awaiting().as_deref() != Some(task_id) {
+        return;
+    }
+    recover.set_awaiting(None);
+    let update = LinkUpdate {
+        task_id: task_id.to_string(),
+        error: None,
+    };
+    let _ = app.emit(LINK_EVENT, update);
 }
 
 /// Task có thể nhận link này: task đang mở hộp "Cập nhật link" trước, rồi task chờ link mới cùng tên file.

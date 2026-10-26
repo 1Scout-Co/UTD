@@ -7,7 +7,9 @@ mod kit;
 use std::sync::Arc;
 
 use kit::*;
-use utd_engine::{DownloadControl, DownloadRequest, DownloadTask, Journal, allowed_request_headers};
+use utd_engine::{
+    DownloadControl, DownloadRequest, DownloadTask, Journal, allowed_request_headers,
+};
 use uuid::Uuid;
 
 fn canary() -> String {
@@ -38,14 +40,20 @@ async fn credential_headers_never_reach_the_server_or_the_disk() {
         .await
         .expect("download");
     assert!(outcome.is_completed(), "unexpected outcome: {outcome:?}");
-    assert_eq!(std::fs::read(final_path(outcome.task())).expect("file"), data);
+    assert_eq!(
+        std::fs::read(final_path(outcome.task())).expect("file"),
+        data
+    );
 
     let requests = server.requests();
     assert!(requests.len() > 2, "{requests:?}");
     for request in &requests {
         assert_eq!(request.header("user-agent"), Some("UTD-Test"));
         assert!(
-            request.headers.iter().all(|(_, value)| !value.contains(&secret)),
+            request
+                .headers
+                .iter()
+                .all(|(_, value)| !value.contains(&secret)),
             "máy chủ nhận bí mật: {request:?}"
         );
     }

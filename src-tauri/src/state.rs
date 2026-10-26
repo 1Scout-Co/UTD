@@ -12,6 +12,8 @@ pub struct AppState {
     pub running: Arc<RunningTasks>,
     /// Mọi download (HTTP, media) chạy qua hàng đợi chung: giới hạn số chạy cùng lúc.
     pub queue: Arc<DownloadQueue>,
+    /// Cookie đăng nhập của trình duyệt, chỉ ở RAM (src/auth).
+    pub auth: Arc<crate::auth::AuthStore>,
 }
 
 #[derive(Default)]

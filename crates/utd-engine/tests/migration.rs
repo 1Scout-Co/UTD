@@ -139,6 +139,7 @@ fn migrates_a_v2_journal_to_v3_and_keeps_every_row() {
     for task in &tasks {
         assert_eq!(task.parent_id, None);
         assert_eq!(task.max_request_bytes, None);
+        assert!(task.auth_sites.is_empty());
         assert!(task.request_headers.is_empty());
     }
     let paused = journal

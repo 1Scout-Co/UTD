@@ -10,15 +10,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { t } from "@/shared/i18n/i18n"
+import { commandErrorText, t } from "@/shared/i18n/i18n"
 
 import {
   channelPageUrl,
   mediaProbe,
-  subscribeMediaRequest,
-  takeMediaRequest,
 } from "../api/downloads"
 import { isChannelPage } from "../model/media-pages"
+import { commandCode, needsSignIn } from "../model/sign-in"
 import type { AddMediaPayload, MediaProbe } from "../model/types"
 import {
   FormatList,
@@ -27,39 +26,8 @@ import {
   SupportedSites,
   UrlField,
 } from "./media-picker-parts"
+import { SignInNotice, useAuthGranted } from "./sign-in-notice"
 import { ToolsAutoNote } from "./tools-auto"
-
-/**
- * Link trang video từ trình duyệt (chuột phải / popup): `onUrl` cần ổn định (useCallback). Link tới
- * trước khi kịp nghe (UTD vừa mở) được app giữ lại: lấy một lần ngay sau khi nghe.
- */
-export function useMediaRequests(
-  desktop: boolean,
-  onUrl: (url: string) => void,
-) {
-  useEffect(() => {
-    if (!desktop) return
-    let disposed = false
-    let unlisten: (() => void) | undefined
-    subscribeMediaRequest((request) => {
-      if (!disposed) onUrl(request.url)
-    })
-      .then(async (off) => {
-        if (disposed) {
-          off()
-          return
-        }
-        unlisten = off
-        const early = await takeMediaRequest()
-        if (early && !disposed) onUrl(early.url)
-      })
-      .catch((reason: unknown) => console.error("UTD media request:", reason))
-    return () => {
-      disposed = true
-      unlisten?.()
-    }
-  }, [desktop, onUrl])
-}
 
 /**
  * `initialUrl`: mở sẵn link này và tự phân tích (từ hộp Thêm hoặc trình duyệt). Đổi link thì đổi `key`
@@ -72,6 +40,7 @@ export function MediaPickerDialog({
   busy,
   error,
   initialUrl,
+  authGrant,
   onSubmit,
   onChannel,
 }: {
@@ -81,9 +50,11 @@ export function MediaPickerDialog({
   busy: boolean
   error: string | null
   initialUrl?: string | null
+  /** Trang đã được cho phép đăng nhập (cú bấm trên trình duyệt): mã lần cho phép, không phải cookie. */
+  authGrant?: string | null
   onSubmit: (payload: AddMediaPayload) => void | Promise<void>
   /** Link là kênh (dán vào đây, hoặc link rút gọn app thấy trỏ tới kênh): mở hộp Tải cả kênh. */
-  onChannel: (url: string) => void
+  onChannel: (url: string, authGrant?: string) => void
 }) {
   const autoAnalyze = Boolean(initialUrl) && desktop
   const [url, setUrl] = useState(initialUrl ?? "")
@@ -94,6 +65,9 @@ export function MediaPickerDialog({
     initialUrl && !desktop ? t("media.desktopOnly") : null,
   )
   const autoStarted = useRef(false)
+  // S-14: lần cho phép hiện dùng (từ trình duyệt, hoặc popup vừa cho phép) và trạng thái "cần đăng nhập".
+  const [grant, setGrant] = useState<string | null>(authGrant ?? null)
+  const [signIn, setSignIn] = useState(false)
 
   const selected =
     probe?.formats.find((format) => format.id === selectedId) ??
@@ -105,6 +79,7 @@ export function MediaPickerDialog({
     setProbe(null)
     setSelectedId(null)
     setLocalError(null)
+    setSignIn(false)
   }
 
   const close = () => {
@@ -125,9 +100,9 @@ export function MediaPickerDialog({
   }
 
   // Chỉ đổi state sau `await`: gọi được từ effect tự phân tích bên dưới.
-  const runProbe = useCallback(async (value: string) => {
+  const runProbe = useCallback(async (value: string, withGrant: string | null) => {
     try {
-      const result = await mediaProbe(value)
+      const result = await mediaProbe(value, withGrant)
       setProbe(result)
       setSelectedId(
         result.formats.find((format) => format.recommended)?.id ??
@@ -136,8 +111,11 @@ export function MediaPickerDialog({
       )
     } catch (reason) {
       const channel = channelPageUrl(reason)
-      if (channel) onChannel(channel)
-      else setLocalError(reason instanceof Error ? reason.message : String(reason))
+      if (channel) onChannel(channel, withGrant ?? undefined)
+      else {
+        setSignIn(needsSignIn(commandCode(reason)))
+        setLocalError(commandErrorText(reason))
+      }
     } finally {
       setLoading(false)
     }
@@ -147,8 +125,21 @@ export function MediaPickerDialog({
   useEffect(() => {
     if (!autoAnalyze || !initialUrl || autoStarted.current) return
     autoStarted.current = true
-    void runProbe(initialUrl.trim())
-  }, [autoAnalyze, initialUrl, runProbe])
+    void runProbe(initialUrl.trim(), authGrant ?? null)
+  }, [autoAnalyze, initialUrl, authGrant, runProbe])
+
+  // Popup tiện ích vừa cho phép trang này: phân tích lại với đăng nhập.
+  const regrant = useCallback(
+    (fresh: string) => {
+      setGrant(fresh)
+      setSignIn(false)
+      setLocalError(null)
+      setLoading(true)
+      void runProbe(url.trim(), fresh)
+    },
+    [runProbe, url],
+  )
+  useAuthGranted(open && signIn, url.trim(), regrant)
 
   const analyze = (value = url) => {
     if (!desktop) {
@@ -165,9 +156,10 @@ export function MediaPickerDialog({
     }
     setLoading(true)
     setLocalError(null)
+    setSignIn(false)
     setProbe(null)
     setSelectedId(null)
-    void runProbe(value.trim())
+    void runProbe(value.trim(), grant)
   }
 
   const submit = (event: FormEvent) => {
@@ -183,6 +175,7 @@ export function MediaPickerDialog({
       selector: selected.selector,
       audioFormat: selected.audioFormat ?? undefined,
       pageUrl: probe.webpageUrl || undefined,
+      authGrant: grant ?? undefined,
     })
   }
 
@@ -226,13 +219,14 @@ export function MediaPickerDialog({
               ) : null}
             </>
           ) : null}
+          {signIn ? <SignInNotice url={url.trim()} detail={localError} /> : null}
           {/* text-red-700: text-destructive trên nền này chỉ đạt 4,49:1, dưới mức 4,5:1 của WCAG AA. */}
-          {localError || error ? (
+          {(localError && !signIn) || error ? (
             <p
               role="alert"
               className="rounded-lg bg-destructive/5 px-3 py-2 text-sm text-red-700"
             >
-              {localError ?? error}
+              {signIn ? error : (localError ?? error)}
             </p>
           ) : null}
 

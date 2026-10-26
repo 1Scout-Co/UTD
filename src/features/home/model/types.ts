@@ -69,6 +69,8 @@ export interface EngineTask {
   updatedAt: number
   completedAt: number | null
   recovery?: EngineRecovery
+  /** Task cần đăng nhập ở các trang này (cookie chỉ nằm trong RAM của app, không bao giờ tới giao diện). */
+  authSites?: string[]
 }
 
 export type EngineSegmentStatus = "pending" | "active" | "done" | "failed"
@@ -152,6 +154,8 @@ export interface AddMediaPayload {
   destDir?: string
   /** true ⇒ xếp cuối hàng đợi chung (tải cả kênh); mặc định chen đầu hàng. */
   later?: boolean
+  /** Lần cho phép đăng nhập từ trình duyệt (mã ngẫu nhiên, không phải cookie). */
+  authGrant?: string
 }
 
 /** Chất lượng chung cho link trang video trong lô (src-tauri/src/media/preset.rs). */
@@ -163,6 +167,8 @@ export interface AddBatchPayload {
   quality: BatchQuality
   /** true = "Thêm vào hàng đợi" (cuối hàng); false = "Bắt đầu ngay" (đầu hàng). */
   later: boolean
+  /** Lần cho phép đăng nhập của trang gửi lô (chỉ link cùng trang dùng). */
+  authGrant?: string
 }
 
 export interface BatchResult {
@@ -304,6 +310,8 @@ export interface DownloadItem {
   waiting?: Exclude<EngineRecoveryWait, "link">
   /** Download thường (không phải media) chưa xong: đổi được link (link ký hết hạn, cần đăng nhập lại). */
   relinkable?: boolean
+  /** Link đã thêm (trang video với task media): nút "Mở trang" của S-72. */
+  url?: string
   tone: string
   date: string
   time: string

@@ -612,15 +612,15 @@ async fn expire_midway(validators: bool) {
     // Link mới trỏ tới file khác: không nhận, phần đã tải còn nguyên.
     let before = std::fs::read(&failed.temp_path).expect("part");
     let wrong_size = engine
-        .replace_link(&task.id, &server.url("/short.bin?sig=2"), Vec::new())
+        .replace_link(&task.id, &server.url("/short.bin?sig=2"), Vec::new(), None)
         .await;
     assert!(matches!(wrong_size, Err(LinkError::Size { .. })), "{wrong_size:?}");
     let different = engine
-        .replace_link(&task.id, &server.url("/other.bin"), Vec::new())
+        .replace_link(&task.id, &server.url("/other.bin"), Vec::new(), None)
         .await;
     assert_eq!(different.unwrap_err(), LinkError::Changed);
     let still_expired = engine
-        .replace_link(&task.id, &server.url("/model.bin?sig=1"), Vec::new())
+        .replace_link(&task.id, &server.url("/model.bin?sig=1"), Vec::new(), None)
         .await;
     assert!(matches!(still_expired, Err(LinkError::Unreachable(_))), "{still_expired:?}");
     assert_eq!(std::fs::read(&failed.temp_path).expect("part"), before);
@@ -628,7 +628,7 @@ async fn expire_midway(validators: bool) {
 
     // Link mới đúng file: nhận, tải tiếp từ phần đã có.
     let relinked = engine
-        .replace_link(&task.id, &server.url("/model.bin?sig=2"), Vec::new())
+        .replace_link(&task.id, &server.url("/model.bin?sig=2"), Vec::new(), None)
         .await
         .expect("same file");
     assert_eq!(relinked.downloaded_bytes, kept);

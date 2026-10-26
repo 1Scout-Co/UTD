@@ -20,6 +20,10 @@ pub struct MediaRequest {
     /// Trang đang mở khi chuột phải (nếu trình duyệt gửi kèm).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_url: Option<String>,
+    /// Lần cho phép đăng nhập đi kèm cú bấm (src/auth): giao diện chuyển lại cho lệnh Phân tích/Tải.
+    /// Chỉ là mã ngẫu nhiên, không có cookie.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_grant: Option<String>,
 }
 
 /// Lô link gửi từ trình duyệt ("Tải tất cả link bằng UTD"): giao diện mở hộp Thêm hàng loạt (batch.rs).
@@ -32,6 +36,30 @@ pub struct BatchRequest {
     pub urls: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_url: Option<String>,
+    /// Như `MediaRequest::auth_grant`; chỉ dùng cho link cùng trang với trang đang mở.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_grant: Option<String>,
+}
+
+/// Người dùng vừa cho phép một trang trong popup (S-70): hộp Tải media / Tải cả kênh đang chờ đăng nhập
+/// của trang đó phân tích lại với lần cho phép mới.
+pub const AUTH_GRANTED_EVENT: &str = "utd://auth-granted";
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthGranted {
+    pub site: String,
+    pub auth_grant: String,
+}
+
+/// UTD vừa nhận một download của trình duyệt (tự bắt link tải, takeover.rs): giao diện hiện thông báo nhỏ.
+pub const TAKEN_OVER_EVENT: &str = "utd://taken-over";
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TakenOver {
+    pub task_id: String,
+    pub file_name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

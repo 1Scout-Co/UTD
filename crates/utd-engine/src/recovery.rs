@@ -7,6 +7,7 @@ use std::net::{IpAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::auth::{AUTH_EXPIRED, AUTH_REQUIRED};
 use crate::model::{DownloadTask, ErrorClass, Recovery, RecoveryWait, TaskError, TaskKind};
 
 /// Lỗi tạm thời của mạng / máy chủ: tự thử lại chừng này lần liền nhau không thêm được byte nào.
@@ -48,7 +49,8 @@ pub fn plan(task: &DownloadTask, error: &TaskError, online: bool, now: i64) -> P
         wait.progress = task.downloaded_bytes;
         return Plan::Wait(wait);
     }
-    if is_link_refused(code) && task.kind == TaskKind::Http && task.parent_id.is_none() {
+    let refused = is_link_refused(code) && task.kind == TaskKind::Http;
+    if (refused || is_sign_in(code)) && task.parent_id.is_none() {
         let mut wait = Recovery::new(RecoveryWait::Link);
         wait.progress = task.downloaded_bytes;
         return Plan::Wait(wait);
@@ -123,6 +125,12 @@ pub fn is_disk_wait(code: &str) -> bool {
 /// Máy chủ từ chối link (thường là link ký đã hết hạn, hoặc cần đăng nhập lại).
 pub fn is_link_refused(code: &str) -> bool {
     matches!(code, "http.401" | "http.403" | "http.407" | "http.410")
+}
+
+/// Cần đăng nhập (lại): cookie bị từ chối, chưa có (mở lại app thì cookie ở RAM đã mất), hoặc yt-dlp đòi
+/// đăng nhập. Chờ như link mới: người dùng cho phép lại trên trình duyệt (notes/auth-plan.md §8.1).
+pub fn is_sign_in(code: &str) -> bool {
+    matches!(code, AUTH_REQUIRED | AUTH_EXPIRED | "media.login")
 }
 
 fn is_server_busy(code: &str) -> bool {
@@ -288,6 +296,19 @@ mod tests {
             plan(&media, &error(ErrorClass::User, "http.403"), true, 0),
             Plan::GiveUp,
             "media tự hỏi yt-dlp link mới"
+        );
+        for code in [AUTH_REQUIRED, AUTH_EXPIRED, "media.login"] {
+            for task in [&task, &media] {
+                let wait = waited(plan(task, &error(ErrorClass::User, code), true, 0));
+                assert_eq!((wait.wait, wait.retry_at), (RecoveryWait::Link, None), "{code}");
+            }
+        }
+        let part = task.clone().with_parent("media-1");
+        assert_eq!(plan(&part, &error(ErrorClass::User, AUTH_EXPIRED), true, 0), Plan::GiveUp);
+        assert_eq!(
+            plan(&task, &error(ErrorClass::User, "auth.pipe"), true, 0),
+            Plan::GiveUp,
+            "đăng nhập lại không sửa được pipe"
         );
         let vague = error(ErrorClass::Transient, "media.failed");
         let mut task = task;

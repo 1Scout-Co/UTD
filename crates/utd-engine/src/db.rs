@@ -13,7 +13,7 @@ use crate::model::{
 use crate::{Error, Result};
 
 /// Bản cấu trúc journal mới nhất (bài thử so với hằng này, không ghi số cứng).
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 struct Migration {
     version: u32,
@@ -119,12 +119,19 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE tasks ADD COLUMN recovery_json TEXT;
         "#,
     },
+    Migration {
+        version: 6,
+        // Task cần đăng nhập ở trang nào (JSON danh sách tên miền). Chỉ là dấu, không bao giờ có cookie.
+        sql: r#"
+            ALTER TABLE tasks ADD COLUMN auth_sites_json TEXT;
+        "#,
+    },
 ];
 
 const TASK_COLUMNS: &str = "id, url, final_url, file_name, dest_dir, temp_path, kind, status, \
      total_bytes, downloaded_bytes, etag, last_modified, expected_sha256, hash_state, connections, \
      error_json, created_at, updated_at, completed_at, parent_id, max_request_bytes, \
-     request_headers_json, recovery_json";
+     request_headers_json, recovery_json, auth_sites_json";
 
 /// Danh sách cho giao diện, đếm trạng thái, khôi phục: chỉ task gốc (task con đi theo cha).
 const TOP_LEVEL: &str = "parent_id IS NULL";
@@ -203,6 +210,11 @@ impl Journal {
             .as_ref()
             .map(serde_json::to_string)
             .transpose()?;
+        let auth_sites_json = if task.auth_sites.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&task.auth_sites)?)
+        };
         let mut conn = self.conn()?;
         let transaction = conn.transaction()?;
         let before = read_event_key(&transaction, &task.id)?;
@@ -211,9 +223,9 @@ impl Journal {
                 id, url, final_url, file_name, dest_dir, temp_path, kind, status,
                 total_bytes, downloaded_bytes, etag, last_modified, expected_sha256,
                 hash_state, connections, error_json, created_at, updated_at, completed_at,
-                parent_id, max_request_bytes, request_headers_json, recovery_json
+                parent_id, max_request_bytes, request_headers_json, recovery_json, auth_sites_json
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                ?18, ?19, ?20, ?21, ?22, ?23)
+                ?18, ?19, ?20, ?21, ?22, ?23, ?24)
              ON CONFLICT(id) DO UPDATE SET
                 url = excluded.url,
                 final_url = excluded.final_url,
@@ -236,7 +248,8 @@ impl Journal {
                 parent_id = excluded.parent_id,
                 max_request_bytes = excluded.max_request_bytes,
                 request_headers_json = excluded.request_headers_json,
-                recovery_json = excluded.recovery_json",
+                recovery_json = excluded.recovery_json,
+                auth_sites_json = excluded.auth_sites_json",
             params![
                 &task.id,
                 &task.url,
@@ -261,6 +274,7 @@ impl Journal {
                 max_request_bytes,
                 headers_json,
                 recovery_json,
+                auth_sites_json,
             ],
         )?;
         // Lưu lại cùng trạng thái (tiến độ, đổi tên…) thì không thêm mốc.
@@ -711,6 +725,10 @@ fn task_from_row(row: &Row<'_>) -> Result<DownloadTask> {
     let recovery = row
         .get::<_, Option<String>>(22)?
         .and_then(|json| serde_json::from_str::<Recovery>(&json).ok());
+    let auth_sites = match row.get::<_, Option<String>>(23)? {
+        Some(json) => serde_json::from_str::<Vec<String>>(&json)?,
+        None => Vec::new(),
+    };
     let task = DownloadTask {
         id: row.get(0)?,
         url: row.get(1)?,
@@ -735,6 +753,7 @@ fn task_from_row(row: &Row<'_>) -> Result<DownloadTask> {
         max_request_bytes,
         request_headers,
         recovery,
+        auth_sites,
     };
     task.validate()?;
     Ok(task)

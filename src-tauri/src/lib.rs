@@ -1,5 +1,6 @@
 #[cfg(target_os = "macos")]
 mod app_nap;
+mod auth;
 mod batch;
 mod browser_integration;
 mod coded;
@@ -18,8 +19,10 @@ mod preflight;
 mod queue;
 mod recover;
 mod state;
+mod takeover;
 mod titlebar;
 mod updater;
+mod video_button;
 
 #[cfg(windows)]
 use std::path::Path;
@@ -231,6 +234,7 @@ pub fn run() {
                 journal,
                 running,
                 queue: queue.clone(),
+                auth: Arc::default(),
             });
             queue.start(Arc::new(queue::AppRuntime(app.handle().clone())));
             // Download chờ tự thử lại / chờ mạng / chờ chỗ trống: tới lúc thì vào lại hàng đợi.
@@ -253,6 +257,7 @@ pub fn run() {
             commands::reset_default_download_dir,
             commands::disk_space,
             files::open_download,
+            files::open_web_page,
             files::reveal_download,
             files::rename_download,
             files::move_download,
@@ -271,6 +276,9 @@ pub fn run() {
             media::add_media_download,
             media::channel::channel_list,
             media::channel::channel_list_cancel,
+            auth::settings::auth_status,
+            auth::settings::set_auth_enabled,
+            auth::settings::forget_auth_cookies,
             media_pages::take_media_request,
             batch::take_batch_request,
             batch::add_batch_downloads,

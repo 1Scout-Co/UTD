@@ -135,10 +135,10 @@ pub(crate) async fn probe(
         if total == Some(0) {
             return Ok(empty_file(&response, head_probe));
         }
-        return Err(failure_from_status(status, response.headers()));
+        return Err(transport.status_failure(status, response.headers()));
     }
     if !status.is_success() {
-        return Err(failure_from_status(status, response.headers()));
+        return Err(transport.status_failure(status, response.headers()));
     }
     let partial = status == StatusCode::PARTIAL_CONTENT;
     let headers = response.headers();

@@ -105,7 +105,8 @@ function checkLanguages(languages) {
 // Phần test (`#[cfg(test)]` trở đi) có tên file mẫu kiểu "tool.exe", không phải mã lỗi.
 function rustCodes() {
   const codes = new Set()
-  const pattern = /(starts_with\()?"((?:http|network|disk|file|guard|verify|tool|internal|media)\.[a-z0-9_]+)"/g
+  // auth.*: mã của tải cần đăng nhập (2026-10-25, src/auth và utd-engine/src/auth.rs).
+  const pattern = /(starts_with\()?"((?:http|network|disk|file|guard|verify|tool|internal|media|auth)\.[a-z0-9_]+)"/g
   const walk = (directory) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name)

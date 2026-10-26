@@ -31,7 +31,7 @@ pub use seen::{ChannelPick, forget, remember};
 pub(crate) use seen::is_downloaded;
 
 use crate::media::{
-    auto_tools, interactive_tools, kill_tree, probe, tools, yt_dlp_command,
+    auto_tools, interactive_tools, kill_tree, probe, tools, yt_dlp_signed,
 };
 use crate::state::AppState;
 
@@ -100,7 +100,9 @@ pub async fn channel_list(
     url: String,
     listing_id: String,
     on_event: Channel<ListingEvent>,
+    auth_grant: Option<String>,
 ) -> Result<(), String> {
+    let grant = crate::commands::signed_in(&app, auth_grant.as_deref(), &url);
     let id_ok = |character: char| character.is_ascii_alphanumeric() || character == '-';
     if listing_id.is_empty() || listing_id.len() > 64 || !listing_id.chars().all(id_ok) {
         return Err("[channel.bad_listing] Mã lượt liệt kê không hợp lệ.".into());
@@ -123,6 +125,7 @@ pub async fn channel_list(
         cancel.clone(),
         ready.clone(),
     );
+    let auth = app.state::<AppState>().auth.clone();
     tauri::async_runtime::spawn(async move {
         let request = Request {
             tools: &tools,
@@ -131,8 +134,16 @@ pub async fn channel_list(
             playlist: listing_url.contains("/playlist?"),
             cancel: &cancel,
             ready: &ready,
+            grant: grant.as_deref(),
         };
         let done = list_with_retry(&request, &on_event).await;
+        // S-63: kênh riêng tư ⇒ popup tiện ích đếm hộp này vào việc chờ đăng nhập của trang.
+        if let ListingEvent::Done { error: Some(error), .. } = &done
+            && (error.starts_with("[channel.private") || error.starts_with("[auth."))
+            && let Some(site) = crate::auth::site::of_url(&listing_url)
+        {
+            auth.wait_dialog(&site, &url);
+        }
         ready.notify_one();
         let _ = on_event.deliver(done);
         let mut running = listings();
@@ -236,10 +247,15 @@ struct Request<'a> {
     cancel: &'a CancellationToken,
     /// Báo phần lấy ảnh đại diện: yt-dlp đã đọc được đầu danh sách.
     ready: &'a Notify,
+    /// Đăng nhập của trình duyệt cho kênh riêng tư (S-63).
+    grant: Option<&'a crate::auth::Grant>,
 }
 
 async fn list_entries(request: &Request<'_>, sink: &impl Sink) -> ListingEvent {
-    let mut command = yt_dlp_command(request.tools);
+    let (mut command, pipe) = match yt_dlp_signed(request.tools, request.grant) {
+        Ok(signed) => signed,
+        Err(error) => return failed(format!("[{}] {}", error.code, error.message)),
+    };
     command
         .args(listing_args(request.url))
         .stdin(Stdio::null())
@@ -250,6 +266,9 @@ async fn list_entries(request: &Request<'_>, sink: &impl Sink) -> ListingEvent {
         Ok(child) => child,
         Err(error) => return failed(format!("[media.spawn] Không chạy được yt-dlp: {error}")),
     };
+    if let (Some(pipe), Some(pid)) = (&pipe, child.id()) {
+        pipe.allow(pid);
+    }
     let stderr = child
         .stderr
         .take()
@@ -268,6 +287,11 @@ async fn list_entries(request: &Request<'_>, sink: &impl Sink) -> ListingEvent {
         Some(task) => task.await.unwrap_or_default(),
         None => String::new(),
     };
+    // Có đăng nhập mà yt-dlp không đọc cookie: danh sách là của người chưa đăng nhập, báo rõ.
+    if pipe.is_some_and(|pipe| !pipe.loaded()) {
+        let error = crate::media::sign_in_pipe_error();
+        return failed(format!("[{}] {}", error.code, error.message));
+    }
     listing.finish(stop, success, &stderr)
 }
 
@@ -431,7 +455,7 @@ impl<'a, S: Sink> Listing<'a, S> {
 fn listing_error(stderr: &str) -> String {
     let message = stderr.to_ascii_lowercase();
     if message.contains("account is private") || message.contains("likely either private") {
-        return "[channel.private_all] Tài khoản riêng tư hoặc mọi video đều riêng tư. UTD chưa dùng cookie đăng nhập nên không xem được.".into();
+        return "[channel.private_all] Tài khoản riêng tư hoặc mọi video đều riêng tư.".into();
     }
     if message.contains("does not have any videos") {
         return "[channel.no_videos] Kênh chưa đăng video nào.".into();

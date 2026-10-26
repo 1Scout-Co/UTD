@@ -2,6 +2,7 @@ mod adaptive;
 mod content;
 mod file;
 mod http;
+mod interstitial;
 mod limiter;
 mod net;
 mod pulse;
@@ -11,12 +12,14 @@ mod transport;
 mod verify;
 mod worker;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
+use crate::auth::CookieJar;
 use crate::headers::RequestHeader;
 use crate::model::{DownloadTask, HashState, TaskStatus};
 
@@ -131,6 +134,9 @@ pub struct DownloadRequest {
     pub request_headers: Vec<RequestHeader>,
     /// Có ⇒ task con ẩn (loại `MediaPart`) của task này; cha phải có sẵn trong journal.
     pub parent_id: Option<String>,
+    /// Task cần đăng nhập ở các trang này (ghi vào journal, không có cookie). Cookie đi riêng qua
+    /// `DownloadControl::cookies` ở mỗi lượt chạy.
+    pub auth_sites: Vec<String>,
 }
 
 impl DownloadRequest {
@@ -144,6 +150,7 @@ impl DownloadRequest {
             max_request_bytes: None,
             request_headers: Vec::new(),
             parent_id: None,
+            auth_sites: Vec::new(),
         }
     }
 }
@@ -155,6 +162,9 @@ pub struct DownloadControl {
     /// Số kết nối mở ngay từ đầu lượt này (vd media chia ngân sách kết nối giữa hình và tiếng).
     /// `None` = theo `EngineOptions`. Bộ điều khiển vẫn tự tăng/giảm sau đó.
     pub initial_connections: Option<u16>,
+    /// Cookie đăng nhập cho lượt này, chỉ ở RAM. Task có `auth_sites` mà không có cookie thì dừng ngay với
+    /// `auth.required`, không gửi yêu cầu nào.
+    pub cookies: Option<Arc<CookieJar>>,
 }
 
 impl DownloadControl {
@@ -163,6 +173,7 @@ impl DownloadControl {
             cancel: CancellationToken::new(),
             events: None,
             initial_connections: None,
+            cookies: None,
         }
     }
 

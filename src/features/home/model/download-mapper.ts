@@ -134,6 +134,7 @@ export function mapEngineTask(
     hashState: task.hashState,
     note: task.error?.message,
     errorCode: task.error?.code,
+    url: task.url,
     waiting,
     relinkable:
       task.kind === "http" &&

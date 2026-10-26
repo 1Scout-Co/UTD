@@ -158,6 +158,42 @@ fn an_expired_link_stays_failed_and_waits_for_a_new_link() {
 }
 
 #[test]
+fn a_sign_in_after_restart_waits_like_an_expired_link() {
+    use crate::auth::flow::waiting_tasks;
+
+    let fx = Fixture::new();
+    let disk = FakeDisk::new(Some((u64::MAX, u64::MAX)));
+    // Mở lại app: cookie ở RAM đã mất, engine dừng ngay với `auth.required` (phần đã tải giữ nguyên).
+    let mut task = fx.failed("g.iso", ErrorClass::User, "auth.required");
+    task.auth_sites = vec!["example.com".into()];
+    fx.journal.save_task(&task).unwrap();
+    let settled = settle(&fx.journal, &task.id, None, true, &disk, NOW).expect("changed");
+    assert_eq!(settled.status, TaskStatus::Failed);
+    assert_eq!(settled.recovery.as_ref().unwrap().wait, RecoveryWait::Link);
+    assert!(due(&fx.journal, true, &disk, true, NOW + 86_400_000).is_empty(), "chờ người dùng");
+    assert_eq!(
+        link_candidates(&fx.journal, None, "https://example.com/g.iso", None),
+        vec![task.id.clone()],
+        "bấm tải lại trên trình duyệt cũng gắn vào task này"
+    );
+    let ids = |site: &str| -> Vec<String> {
+        waiting_tasks(&fx.journal, site).into_iter().map(|task| task.id).collect()
+    };
+    assert_eq!(ids("example.com"), vec![task.id.clone()], "popup thấy việc đang chờ");
+    assert!(ids("other.com").is_empty());
+
+    // Lỗi đưa cookie cho yt-dlp: đăng nhập lại không sửa được, không chờ.
+    let pipe = fx.failed("h.iso", ErrorClass::User, "auth.pipe");
+    let settled = settle(&fx.journal, &pipe.id, None, true, &disk, NOW);
+    assert!(settled.is_none_or(|task| task.recovery.is_none()));
+    assert_eq!(ids("example.com"), vec![task.id.clone()]);
+
+    // Người dùng bấm Thử lại / Tạm dừng: bỏ chờ, popup không còn đếm.
+    forget(&fx.journal, &task.id).expect("bỏ chờ");
+    assert!(ids("example.com").is_empty());
+}
+
+#[test]
 fn permanent_errors_and_the_retry_limit_end_as_errors() {
     let fx = Fixture::new();
     let disk = FakeDisk::new(Some((u64::MAX, u64::MAX)));

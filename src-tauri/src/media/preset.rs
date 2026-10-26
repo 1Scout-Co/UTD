@@ -129,6 +129,7 @@ pub(super) async fn settle(
     job: MediaJob,
     tools: &MediaTools,
     cancel: &CancellationToken,
+    grant: Option<&crate::auth::Grant>,
 ) -> Result<Settled, String> {
     let Some(quality) = Quality::from_selector(&job.selector) else {
         return Ok(Settled::Ready(job));
@@ -141,7 +142,7 @@ pub(super) async fn settle(
 
     // Runner đã chờ ffmpeg (nếu đang tự tải) trước khi tới đây: chỉ tính bản đã có.
     let probed = tokio::select! {
-        result = probe::probe(tools, &job.url, tools.ffmpeg.is_some()) => result,
+        result = probe::probe(tools, &job.url, tools.ffmpeg.is_some(), grant) => result,
         () = cancel.cancelled() => {
             let downloaded = task.downloaded_bytes;
             pause(sink, journal, task, downloaded)?;

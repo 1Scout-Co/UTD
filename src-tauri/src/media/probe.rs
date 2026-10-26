@@ -4,7 +4,14 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::time::{timeout, Duration};
 
-use crate::media::{auto, probe_cache, resolve, tools, yt_dlp_command};
+use crate::media::{
+    auto, probe_cache, resolve, run_signed, sign_in_pipe_error, tools, yt_dlp_signed,
+};
+
+/// Lỗi có mã ⇒ câu "[mã] lời" như các lỗi Phân tích khác (giao diện dịch theo mã).
+fn coded(error: utd_engine::TaskError) -> ProbeFailure {
+    ProbeFailure::from(format!("[{}] {}", error.code, error.message))
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,6 +24,9 @@ pub struct MediaProbeResult {
     pub thumbnail: Option<String>,
     pub formats: Vec<MediaFormatOption>,
     pub ffmpeg_available: bool,
+    /// Như `formats` nhưng đủ mức chiều cao tới 144p: bảng chọn định dạng trên trang (tiện ích, GĐ3).
+    #[serde(skip)]
+    pub every_height: Vec<MediaFormatOption>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,12 +83,14 @@ impl From<String> for ProbeFailure {
 }
 
 /// `ffmpeg_available`: có ffmpeg, hoặc app đang tự tải (lúc bấm Tải thì task chờ ffmpeg xong).
+/// `grant`: đăng nhập của trình duyệt cho trang này (S-14), cookie qua pipe.
 pub async fn probe(
     tools: &tools::MediaTools,
     url: &str,
     ffmpeg_available: bool,
+    grant: Option<&crate::auth::Grant>,
 ) -> Result<MediaProbeResult, ProbeFailure> {
-    let mut command = yt_dlp_command(tools);
+    let (mut command, pipe) = yt_dlp_signed(tools, grant).map_err(coded)?;
     command
         .args([
             "--encoding",
@@ -99,10 +111,14 @@ pub async fn probe(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = timeout(Duration::from_secs(45), command.output())
+    let (output, cookies_read) = timeout(Duration::from_secs(45), run_signed(command, pipe.as_ref()))
         .await
         .map_err(|_| "[probe.timeout] Nguồn media phản hồi quá lâu.".to_string())?
         .map_err(|error| format!("[media.spawn] Không chạy được yt-dlp: {error}"))?;
+    // Có đăng nhập mà yt-dlp không đọc cookie: kết quả là của người chưa đăng nhập, không dùng.
+    if !cookies_read {
+        return Err(coded(sign_in_pipe_error()));
+    }
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ProbeFailure {
@@ -175,8 +191,9 @@ fn build_result(
         uploader,
         duration_seconds,
         thumbnail,
-        formats: format_options(&formats, ffmpeg_available),
+        formats: format_options(&formats, ffmpeg_available, false),
         ffmpeg_available,
+        every_height: format_options(&formats, ffmpeg_available, true),
     })
 }
 
@@ -201,10 +218,10 @@ fn parse_formats(value: &Value) -> Result<Vec<Format>, String> {
     Ok(formats)
 }
 
-fn format_options(formats: &[Format], ffmpeg_available: bool) -> Vec<MediaFormatOption> {
+fn format_options(formats: &[Format], ffmpeg_available: bool, every: bool) -> Vec<MediaFormatOption> {
     let heights = video_heights(formats);
     let mut options = vec![best_option(formats, heights.first().copied())];
-    for height in listed_heights(&heights) {
+    for height in listed_heights(&heights, every) {
         options.push(height_option(formats, height));
     }
     if formats.iter().any(|format| format.has_audio) {
@@ -227,11 +244,17 @@ fn video_heights(formats: &[Format]) -> Vec<u64> {
     heights
 }
 
-/// Tối đa 5 mức quen thuộc có thật, thêm mức cao nhất nếu lạ (vd. 1600p).
-fn listed_heights(heights: &[u64]) -> Vec<u64> {
-    let preferred = [2160_u64, 1440, 1080, 720, 480, 360];
+/// Mức quen thuộc có thật, thêm mức cao nhất nếu lạ (vd. 1600p). Hộp Tải media: tối đa 5 mức; `every` (bảng
+/// trên trang): đủ mức tới 144p.
+fn listed_heights(heights: &[u64], every: bool) -> Vec<u64> {
+    let preferred: &[u64] = if every {
+        &[2160, 1440, 1080, 720, 480, 360, 240, 144]
+    } else {
+        &[2160, 1440, 1080, 720, 480, 360]
+    };
     let mut chosen: Vec<u64> = preferred
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|height| heights.contains(height))
         .collect();
     if let Some(&maximum) = heights.first()
@@ -240,7 +263,9 @@ fn listed_heights(heights: &[u64]) -> Vec<u64> {
         chosen.push(maximum);
         chosen.sort_unstable_by(|left, right| right.cmp(left));
     }
-    chosen.truncate(5);
+    if !every {
+        chosen.truncate(5);
+    }
     chosen
 }
 
@@ -561,7 +586,7 @@ pub(super) fn classify_stderr(stderr: &str) -> String {
         || message.contains("cookies")
         || message.contains("not a bot")
     {
-        return "[media.login] Nguồn này cần đăng nhập hoặc cookie. UTD chưa gửi cookie ở bản này.".into();
+        return "[media.login] Nguồn này cần đăng nhập.".into();
     }
     if message.contains("unsupported url") || message.contains("no video formats found") {
         return "[probe.unsupported] URL này chưa được hỗ trợ hoặc không có định dạng tải được.".into();
@@ -723,6 +748,29 @@ mod tests {
         assert!(best.recommended);
         assert_eq!(best.size_bytes, Some(55_000_000));
         assert_eq!(best.selector, "137+140/bv*+ba/b");
+    }
+
+    #[test]
+    fn the_page_panel_lists_every_height_down_to_144p() {
+        let mut formats: Vec<Value> = [2160_u64, 1440, 1080, 720, 480, 360, 240, 144]
+            .into_iter()
+            .map(|height| video(&format!("v{height}"), "mp4", height, height * 1000))
+            .collect();
+        formats.push(audio("140", "m4a", 1000));
+        let result = build_result("https://example.com/watch", &info(formats), true).unwrap();
+        let ids = |options: &[MediaFormatOption]| -> Vec<String> {
+            options.iter().map(|option| option.id.clone()).collect()
+        };
+        assert_eq!(
+            ids(&result.formats),
+            ["best", "2160", "1440", "1080", "720", "480", "audio-m4a", "audio-mp3"],
+            "hộp Tải media giữ tối đa 5 mức"
+        );
+        assert_eq!(
+            ids(&result.every_height),
+            ["best", "2160", "1440", "1080", "720", "480", "360", "240", "144", "audio-m4a", "audio-mp3"]
+        );
+        assert!(result.every_height.iter().skip(1).take(8).all(|option| option.size_bytes.is_some()));
     }
 
     #[test]

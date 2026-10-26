@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_URL_BYTES: usize = 8192;
 
-/// `type`: `download` (một link) hoặc `batch` (lô link "Tải tất cả link bằng UTD", trong `urls`).
-#[derive(Debug, Deserialize)]
+/// `type`: `download` (một link), `batch` (lô link "Tải tất cả link bằng UTD", trong `urls`); bản 2 thêm
+/// `auth-pending` (popup hỏi trang đang mở có task chờ đăng nhập không) và `auth-renew` (popup gửi cookie để
+/// tải tiếp). Không derive `Debug`: `auth` mang cookie.
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HostRequest {
     version: u32,
@@ -19,7 +21,23 @@ struct HostRequest {
     suggested_name: Option<String>,
     #[serde(default)]
     urls: Vec<String>,
+    /// Bản 2: cookie đăng nhập của trang, tiện ích đọc trong cú bấm. Chuyển nguyên, app kiểm (src/auth).
+    #[serde(default)]
+    auth: Option<serde_json::Value>,
+    /// Bản 2, nút "Tải video này" (`media-formats`, `media-download`): nguồn `<video>`, định dạng đã chọn.
+    #[serde(default)]
+    src: Option<String>,
+    #[serde(default)]
+    selector: Option<String>,
+    #[serde(default)]
+    audio_format: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
 }
+
+/// Selector / tiêu đề dài hơn thì từ chối (app kiểm kỹ lại).
+const MAX_SELECTOR_CHARS: usize = 512;
+const MAX_TITLE_CHARS: usize = 300;
 
 fn is_web_url(value: &str) -> bool {
     value.len() <= MAX_URL_BYTES && (value.starts_with("http://") || value.starts_with("https://"))
@@ -27,13 +45,15 @@ fn is_web_url(value: &str) -> bool {
 
 /// Tin nhắn từ trình duyệt ⇒ dòng JSON gửi qua pipe (chưa kèm token). App kiểm lại lần nữa (`ipc.rs`).
 fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
-    if request.version != 1 {
+    if !matches!(request.version, 1 | 2) {
         return Err("Yêu cầu từ trình duyệt không hợp lệ.".into());
     }
+    let auth = request.auth.clone().filter(|_| request.version >= 2);
     // Trang đang mở (để UTD mở đúng luồng media); bỏ qua nếu lạ thay vì từ chối cả yêu cầu.
     let page_url = request.page_url.as_deref().map(str::trim).filter(|page| is_web_url(page));
     match request.kind.as_str() {
-        "download" => {
+        // `takeover` (bản 2): download trình duyệt vừa bắt đầu, tiện ích đang tạm dừng nó (takeover.rs).
+        "download" | "takeover" if request.kind == "download" || request.version >= 2 => {
             let url = request.url.trim();
             if !is_web_url(url) {
                 return Err("Chỉ hỗ trợ URL HTTP/HTTPS.".into());
@@ -43,11 +63,16 @@ fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
                 .as_deref()
                 .map(str::trim)
                 .filter(|name| !name.is_empty() && name.chars().count() <= 180);
-            Ok(serde_json::json!({
+            let mut payload = serde_json::json!({
                 "url": url,
                 "suggestedName": suggested_name,
                 "pageUrl": page_url,
-            }))
+                "auth": auth,
+            });
+            if request.kind == "takeover" {
+                payload["kind"] = "takeover".into();
+            }
+            Ok(payload)
         }
         "batch" => {
             if request.urls.len() > crate::batch::MAX_LINKS {
@@ -66,6 +91,44 @@ fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
                 "url": page_url.unwrap_or(""),
                 "pageUrl": page_url,
                 "batch": urls,
+                "auth": auth,
+            }))
+        }
+        // `url` là tab đang mở; `auth-renew` bắt buộc có cookie.
+        "auth-pending" | "auth-renew" if request.version >= 2 => {
+            let url = request.url.trim();
+            if !is_web_url(url) {
+                return Err("Chỉ hỗ trợ URL HTTP/HTTPS.".into());
+            }
+            if request.kind == "auth-renew" && auth.is_none() {
+                return Err("Yêu cầu từ trình duyệt không hợp lệ.".into());
+            }
+            Ok(serde_json::json!({ "url": url, "kind": request.kind, "auth": auth }))
+        }
+        // Nút "Tải video này" trên trang: hỏi định dạng (`src` = nguồn `<video>` nếu có), tải định dạng đã chọn.
+        "media-formats" | "media-download" if request.version >= 2 => {
+            let url = request.url.trim();
+            if !is_web_url(url) {
+                return Err("Chỉ hỗ trợ URL HTTP/HTTPS.".into());
+            }
+            let src = request.src.as_deref().map(str::trim).filter(|src| is_web_url(src));
+            let selector = request.selector.as_deref().map(str::trim).filter(|selector| !selector.is_empty());
+            let title = request.title.as_deref().map(str::trim).filter(|title| !title.is_empty());
+            if request.kind == "media-download"
+                && (selector.is_none_or(|selector| selector.chars().count() > MAX_SELECTOR_CHARS)
+                    || title.is_some_and(|title| title.chars().count() > MAX_TITLE_CHARS))
+            {
+                return Err("Yêu cầu từ trình duyệt không hợp lệ.".into());
+            }
+            Ok(serde_json::json!({
+                "url": url,
+                "pageUrl": page_url,
+                "kind": request.kind,
+                "src": src,
+                "selector": selector,
+                "audioFormat": request.audio_format,
+                "title": title,
+                "auth": auth,
             }))
         }
         _ => Err("Yêu cầu từ trình duyệt không hợp lệ.".into()),
@@ -78,6 +141,12 @@ struct HostResponse {
     ok: bool,
     task_id: Option<String>,
     message: Option<String>,
+    /// Trả lời `auth-pending` / `auth-renew` (trang, số task chờ…), không có cookie.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth: Option<serde_json::Value>,
+    /// Trả lời `media-formats`: các định dạng cho bảng trên trang.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<serde_json::Value>,
 }
 
 pub fn invoked() -> bool {
@@ -109,6 +178,8 @@ pub fn run() -> i32 {
                 ok: false,
                 task_id: None,
                 message: Some(message),
+                auth: None,
+                media: None,
             });
             1
         }
@@ -155,7 +226,8 @@ fn connect(
     let directory = config_path.parent().ok_or_else(|| NOT_RUNNING.to_string())?;
     let stream = std::os::unix::net::UnixStream::connect(crate::ipc::socket_path(directory))
         .map_err(|_| NOT_RUNNING.to_string())?;
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(15)));
+    // Phân tích định dạng (nút trên trang) có thể mất tới vài chục giây.
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(60)));
     Ok(stream)
 }
 
@@ -182,6 +254,10 @@ fn exchange<S: Read + Write>(mut stream: S, payload: &str) -> Result<HostRespons
         ok: bool,
         task_id: Option<String>,
         message: Option<String>,
+        #[serde(default)]
+        auth: Option<serde_json::Value>,
+        #[serde(default)]
+        media: Option<serde_json::Value>,
     }
     let response: Response =
         serde_json::from_str(line.trim()).map_err(|_| "UTD trả về dữ liệu lạ.".to_string())?;
@@ -189,6 +265,8 @@ fn exchange<S: Read + Write>(mut stream: S, payload: &str) -> Result<HostRespons
         ok: response.ok,
         task_id: response.task_id,
         message: response.message,
+        auth: response.auth,
+        media: response.media,
     })
 }
 
@@ -293,12 +371,93 @@ mod tests {
         .unwrap();
         assert_eq!(
             payload,
-            serde_json::json!({ "url": "https://example.com/a.zip", "suggestedName": null, "pageUrl": null })
+            serde_json::json!({ "url": "https://example.com/a.zip", "suggestedName": null, "pageUrl": null, "auth": null })
         );
         let bad = message(serde_json::json!({ "version": 1, "type": "download", "url": "file:///c:/x" }));
         assert!(pipe_payload(&bad).is_err());
-        let old = message(serde_json::json!({ "version": 2, "type": "download", "url": "https://a.b/c" }));
+        let future = message(serde_json::json!({ "version": 3, "type": "download", "url": "https://a.b/c" }));
+        assert!(pipe_payload(&future).is_err());
+    }
+
+    /// Bản 2 chuyển nguyên phần `auth` cho app kiểm; bản 1 không mang cookie dù có gửi.
+    #[test]
+    fn version_two_carries_sign_in_requests() {
+        let auth = serde_json::json!({ "site": "google.com", "cookies": [{ "name": "SID", "value": "x", "domain": ".google.com" }] });
+        let link = |version: u32| {
+            pipe_payload(&message(serde_json::json!({
+                "version": version, "type": "download", "url": "https://drive.google.com/file/d/1/view", "auth": auth,
+            })))
+            .unwrap()
+        };
+        assert_eq!(link(2)["auth"], auth);
+        assert_eq!(link(1)["auth"], serde_json::Value::Null);
+
+        let pending = pipe_payload(&message(serde_json::json!({
+            "version": 2, "type": "auth-pending", "url": "https://drive.google.com/drive/my-drive",
+        })))
+        .unwrap();
+        assert_eq!(pending["kind"], "auth-pending");
+        assert_eq!(pending["url"], "https://drive.google.com/drive/my-drive");
+
+        let renew = |value: serde_json::Value| pipe_payload(&message(value));
+        assert!(renew(serde_json::json!({ "version": 2, "type": "auth-renew", "url": "https://drive.google.com/" })).is_err());
+        assert!(renew(serde_json::json!({ "version": 2, "type": "auth-renew", "url": "chrome://settings", "auth": auth })).is_err());
+        assert!(renew(serde_json::json!({ "version": 1, "type": "auth-renew", "url": "https://drive.google.com/", "auth": auth })).is_err());
+        assert_eq!(
+            renew(serde_json::json!({ "version": 2, "type": "auth-renew", "url": "https://drive.google.com/", "auth": auth })).unwrap()["auth"],
+            auth
+        );
+    }
+
+    /// Tự bắt link tải: chỉ bản 2, cùng kiểm như một link; app biết đây là download trình duyệt đang dừng.
+    #[test]
+    fn takeovers_are_version_two_links() {
+        let takeover = |version: u32, url: &str| {
+            pipe_payload(&message(serde_json::json!({
+                "version": version, "type": "takeover", "url": url,
+                "pageUrl": "https://example.com/", "suggestedName": "a.zip",
+            })))
+        };
+        let payload = takeover(2, "https://cdn.example.com/a.zip").unwrap();
+        assert_eq!(payload["kind"], "takeover");
+        assert_eq!(payload["suggestedName"], "a.zip");
+        assert_eq!(payload["pageUrl"], "https://example.com/");
+        assert!(takeover(1, "https://cdn.example.com/a.zip").is_err());
+        assert!(takeover(2, "blob:https://example.com/1").is_err());
+        let plain = pipe_payload(&message(serde_json::json!({ "version": 1, "type": "download", "url": "https://a.b/c" })));
+        assert_eq!(plain.unwrap().get("kind"), None, "link thường như cũ");
+    }
+
+    /// Nút "Tải video này": hỏi định dạng, tải định dạng đã chọn; bản 1 không có hai loại này.
+    #[test]
+    fn video_button_requests_need_version_two_and_a_selector() {
+        let formats = pipe_payload(&message(serde_json::json!({
+            "version": 2, "type": "media-formats", "url": "https://www.youtube.com/watch?v=x",
+            "src": "blob:https://www.youtube.com/1", "pageUrl": "https://www.youtube.com/watch?v=x",
+        })))
+        .unwrap();
+        assert_eq!(formats["kind"], "media-formats");
+        assert_eq!(formats["src"], serde_json::Value::Null, "blob: không gửi");
+        let old = message(serde_json::json!({ "version": 1, "type": "media-formats", "url": "https://a.b/" }));
         assert!(pipe_payload(&old).is_err());
+
+        let pick = |selector: &str, title: String| {
+            pipe_payload(&message(serde_json::json!({
+                "version": 2, "type": "media-download", "url": "https://www.youtube.com/watch?v=x",
+                "selector": selector, "audioFormat": "m4a", "title": title,
+            })))
+        };
+        let payload = pick("137+140/bv*+ba/b", "Video".into()).unwrap();
+        assert_eq!(payload["selector"], "137+140/bv*+ba/b");
+        assert_eq!(payload["audioFormat"], "m4a");
+        assert!(pick("  ", "Video".into()).is_err());
+        assert!(pick(&"x".repeat(MAX_SELECTOR_CHARS + 1), "Video".into()).is_err());
+        assert!(pick("best", "t".repeat(MAX_TITLE_CHARS + 1)).is_err());
+
+        let reply = "{\"ok\":true,\"taskId\":null,\"message\":null,\"media\":{\"title\":\"Video\"}}
+";
+        let response = exchange(&mut peer(reply), "{}").unwrap();
+        assert_eq!(response.media.unwrap()["title"], "Video");
     }
 
     #[test]
@@ -330,7 +489,7 @@ mod tests {
         for request in [
             serde_json::json!({ "version": 1, "type": "download", "url": format!("file:///c:/{secret}") }),
             serde_json::json!({ "version": 1, "type": "download", "url": format!("https://a.b/?t={secret}{}", "x".repeat(MAX_URL_BYTES)) }),
-            serde_json::json!({ "version": 2, "type": "download", "url": format!("https://a.b/?t={secret}") }),
+            serde_json::json!({ "version": 3, "type": "download", "url": format!("https://a.b/?t={secret}") }),
             serde_json::json!({ "version": 1, "type": secret, "url": "https://a.b/" }),
             serde_json::json!({ "version": 1, "type": "batch", "urls": [format!("javascript:{secret}")] }),
         ] {

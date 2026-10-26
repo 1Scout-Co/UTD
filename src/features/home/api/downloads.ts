@@ -94,8 +94,9 @@ export async function openExtensionFolder(): Promise<string> {
   return invoke<string>("open_extension_folder")
 }
 
-export async function mediaProbe(url: string): Promise<MediaProbe> {
-  return invoke<MediaProbe>("media_probe", { url })
+/** `authGrant`: lần cho phép đăng nhập từ trình duyệt (S-14); không có thì Phân tích như chưa đăng nhập. */
+export async function mediaProbe(url: string, authGrant?: string | null): Promise<MediaProbe> {
+  return invoke<MediaProbe>("media_probe", authGrant ? { url, authGrant } : { url })
 }
 
 export async function addMediaDownload(
@@ -146,9 +147,11 @@ export function channelPageUrl(error: unknown): string | null {
 }
 
 /** Link trang video gửi từ trình duyệt (chuột phải / popup của extension). */
-interface MediaRequest {
+export interface MediaRequest {
   url: string
   pageUrl?: string
+  /** Trang đã được cho phép đăng nhập: mã lần cho phép (không phải cookie). */
+  authGrant?: string
 }
 
 export async function subscribeMediaRequest(
@@ -188,6 +191,35 @@ export async function setQueueLimit(limit: number): Promise<QueueSettings> {
 export interface BatchRequest {
   urls: string[]
   pageUrl?: string
+  /** Như `MediaRequest.authGrant`; app chỉ dùng cho link cùng trang. */
+  authGrant?: string
+}
+
+/** Người dùng vừa cho phép một trang trong popup tiện ích (S-70): hộp đang chờ phân tích lại. */
+export interface AuthGranted {
+  site: string
+  authGrant: string
+}
+
+export async function subscribeAuthGranted(
+  onGranted: (granted: AuthGranted) => void,
+): Promise<UnlistenFn> {
+  return listen<AuthGranted>("utd://auth-granted", (event) => onGranted(event.payload))
+}
+
+/** UTD vừa nhận một download của trình duyệt (tự bắt link tải, S-77). */
+export interface TakenOver {
+  taskId: string
+  fileName: string
+}
+
+export async function subscribeTakenOver(onTaken: (taken: TakenOver) => void): Promise<UnlistenFn> {
+  return listen<TakenOver>("utd://taken-over", (event) => onTaken(event.payload))
+}
+
+/** "Mở trang" (S-14, S-72): mở trang bằng trình duyệt mặc định để người dùng bấm biểu tượng UTD ở đó. */
+export async function openWebPage(url: string): Promise<void> {
+  await invoke("open_web_page", { url })
 }
 
 export async function subscribeBatchRequest(
