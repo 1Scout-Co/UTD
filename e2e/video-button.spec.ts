@@ -154,6 +154,40 @@ test('không đọc được ⇒ báo gọn trong bảng; UTD chưa chạy ⇒ c
   await expect(panel(page)).toBeHidden()
 })
 
+// Facebook Tin: trang chặn mọi cú bấm ngay ở window (chạm là dừng / sang tin khác). content.js chạy từ document_start
+// nên nghe trước trang: mô phỏng bằng cách nạp content.js rồi mới nạp bộ chặn của trang.
+test('trang chặn mọi cú bấm (Facebook Tin) ⇒ nút và bảng vẫn bấm được, trang không thấy cú bấm vào UTD', async ({ page }) => {
+  await page.route('http://video.utd.test/**', (route) => route.fulfill({ contentType: 'text/html', body: PAGE }))
+  await page.addInitScript(stubContentApi, { messages: MESSAGES, replies: [media()], enabled: true })
+  await page.addInitScript({ path: 'extensions/chromium/content.js' })
+  await page.addInitScript(() => {
+    const seen: string[] = []
+    ;(window as unknown as { __pageSaw: string[] }).__pageSaw = seen
+    for (const type of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click']) {
+      addEventListener(
+        type,
+        (event) => {
+          seen.push(type)
+          event.stopImmediatePropagation()
+          event.preventDefault()
+        },
+        true,
+      )
+    }
+  })
+  await page.goto('http://video.utd.test/watch')
+  await hover(page, '#main')
+  await pill(page).click()
+  await expect(panel(page).locator('.title')).toHaveText('Video thử')
+  await panel(page).locator('.row').nth(1).click()
+  await expect(panel(page)).toContainText('Đã thêm vào UTD')
+  expect((await sent(page)).at(-1)).toMatchObject({ type: 'utd.video-download', selector: FORMATS[1].selector })
+  expect(await page.evaluate(() => (window as unknown as { __pageSaw: string[] }).__pageSaw)).toEqual([])
+  // Bấm ra ngoài vẫn tới trang như thường.
+  await page.mouse.click(5, 5)
+  expect(await page.evaluate(() => (window as unknown as { __pageSaw: string[] }).__pageSaw)).toContain('click')
+})
+
 test('cú bấm giả từ trang (không phải người dùng) không làm gì', async ({ page }) => {
   await openPage(page, [media()])
   await hover(page, '#main')
