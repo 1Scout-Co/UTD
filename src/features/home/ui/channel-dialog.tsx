@@ -104,6 +104,16 @@ export function ChannelDialog({
   )
   const entries = social ? socialEntries : all
   const counts = useMemo(() => sourceCounts(socialEntries), [socialEntries])
+  // Chip Ảnh / Video: hiện khi danh sách trộn cả hai loại (không cho Facebook: nhóm đã tách ảnh / video); số đếm trong
+  // các nhóm đang bật, để chip "Ảnh 0" giải thích danh sách trống.
+  const kindTotals = useMemo(
+    () => {
+      if (social?.platform === "facebook") return null
+      const total = kindCounts(socialEntries)
+      return total.photo > 0 && total.video > 0 ? kindCounts(inScope(socialEntries, sources, null)) : null
+    },
+    [social?.platform, socialEntries, sources],
+  )
   const scoped = useMemo(
     () => (social ? inScope(socialEntries, sources, kinds) : all),
     [social, socialEntries, sources, kinds, all],
@@ -173,7 +183,7 @@ export function ChannelDialog({
                   sources={sources}
                   onToggle={(source) => setSources((current) => toggleIn(current, source))}
                   kinds={kinds}
-                  kindCounts={social.platform === "facebook" ? null : kindCounts(socialEntries)}
+                  kindCounts={kindTotals}
                   onToggleKind={(kind) => setKinds((current) => toggleIn(current, kind))}
                 />
               ) : null}

@@ -299,7 +299,7 @@ export function SourceChips({
   counts: [SocialSource, number][]
   sources: ReadonlySet<SocialSource> | null
   onToggle: (source: SocialSource) => void
-  /** Ảnh / Video: chỉ hiện khi nhóm trộn cả hai loại (bài viết Instagram, Threads). */
+  /** Ảnh / Video (null = ẩn): số mục trong các nhóm đang bật, để số trên chip khớp danh sách. */
   kinds: ReadonlySet<SocialKind> | null
   kindCounts: Record<SocialKind, number> | null
   onToggleKind: (kind: SocialKind) => void
@@ -317,7 +317,7 @@ export function SourceChips({
           <span className="tabular-nums opacity-70">{formatNumber(count, 0)}</span>
         </button>
       ))}
-      {kindCounts && kindCounts.photo > 0 && kindCounts.video > 0
+      {kindCounts
         ? (["photo", "video"] as const).map((kind) => (
             <button
               key={kind}

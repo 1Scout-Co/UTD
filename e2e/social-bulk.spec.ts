@@ -784,6 +784,11 @@ test('S-61 hàng loạt: bật riêng "Ảnh" ⇒ chỉ ảnh của mọi nhóm;
   await expect(dialog.getByRole('button', { name: 'Tải 2 mục' })).toBeVisible()
   await expect(dialog.getByText('Không có mục khớp bộ lọc.')).toHaveCount(0)
   await chips.getByRole('button', { name: /^Ảnh/ }).click()
+  // Số trên chip Ảnh / Video đếm trong các nhóm đang bật: chỉ Reels (toàn video) ⇒ "Ảnh 0", khớp danh sách.
+  await chips.getByRole('button', { name: /^Reels/ }).click()
+  await expect(chips.getByRole('button', { name: /^(Ảnh|Video)/ })).toHaveText(['Ảnh0', 'Video1'])
+  await chips.getByRole('button', { name: /^Reels/ }).click()
+  await expect(chips.getByRole('button', { name: /^(Ảnh|Video)/ })).toHaveText(['Ảnh3', 'Video3'])
   // Bật cả 4 nhóm rồi tắt cả 4: không chip nào bật = tất cả.
   const groups = [/^Bài viết/, /^Reels/, /^Tin\s*\d/, /^Tin nổi bật/]
   for (const name of groups) await chips.getByRole('button', { name }).click()
