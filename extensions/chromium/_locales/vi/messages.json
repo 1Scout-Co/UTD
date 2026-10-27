@@ -48,7 +48,7 @@
   "menuSocial": { "message": "Tải hàng loạt bằng UTD" },
   "socialCollecting": { "message": "Đang thu $COUNT$ ảnh/video", "placeholders": { "count": { "content": "$1" } } },
   "socialStop": { "message": "Dừng" },
-  "socialHint": { "message": "Giữ tab này mở; tab có thể tự chuyển trang." },
+  "socialHint": { "message": "Giữ tab này mở tới khi xong." },
   "socialDone": { "message": "Đã gửi $COUNT$ ảnh/video sang UTD", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "Mở trang cá nhân, fanpage, nhóm hoặc Tin rồi bấm lại." },
   "socialFailed": { "message": "Không thu được ảnh/video trên trang này." },

@@ -5,28 +5,22 @@
 // Người dùng bấm "Tải hàng loạt bằng UTD" trên trang cá nhân / fanpage / nhóm / Tin. Mọi yêu cầu tới mạng xã hội chạy
 // NGAY TRONG TAB đó (scripting.executeScript) bằng phiên đăng nhập sẵn có của trình duyệt — tiện ích không đọc, không
 // gửi cookie. Danh sách đi sang UTD từng đợt (`social-list`); mỗi đợt UTD trả lời đi tiếp hay dừng (nút Dừng, đóng hộp)
-// và loại nào còn cần lấy. Giữa hai yêu cầu luôn nghỉ ngẫu nhiên 2–4 s và không quá 70 yêu cầu / 10 phút để tránh bị
-// khoá tạm vì gọi nhiều.
-//   - Instagram: truy vấn GraphQL của chính trang web (như Social Bulk Downloader), đọc thẳng, không cần cuộn.
-//   - Facebook, Threads: tiện ích tự cuộn trang (Facebook: lần lượt thẻ Ảnh / Video / Reels / Tin nổi bật), đọc ảnh/video
-//     trong dữ liệu JSON trang tự nạp (social-harvest.js). Không phụ thuộc mã truy vấn GraphQL hay đổi.
+// và loại nào còn cần lấy. Cả ba mạng: truy vấn GraphQL của chính trang web (doc_id + biến như Social Bulk Downloader
+// 1.8.8), đọc thẳng, không cuộn, không chuyển trang. Giữa hai yêu cầu luôn nghỉ ngẫu nhiên 1–2 s và không quá 200 yêu
+// cầu / 10 phút để tránh bị khoá tạm vì gọi nhiều.
 
 const SOCIAL_PART_ENTRIES = 150
 const SOCIAL_PART_CHARS = 600_000
 const SOCIAL_FLUSH_MS = 3000
 const SOCIAL_MAX_ENTRIES = 20_000
-// Nhịp gọi: nghỉ 2–4 s giữa hai yêu cầu (Instagram 1–2 s), tối đa 70 yêu cầu trong 10 phút (instaloader: 75 / 11 phút).
-const SOCIAL_GAP_MS = 2000
-const SOCIAL_IG_GAP_MS = 1000
+// Nhịp gọi: nghỉ 1–2 s giữa hai yêu cầu (câu trả lời JSON nhỏ như trang tự gọi khi cuộn), tối đa 200 yêu cầu trong
+// 10 phút (instaloader tự giới hạn 275 truy vấn GraphQL / 10 phút).
+const SOCIAL_GAP_MS = 1000
 // Instagram: bài viết hỏi bấy nhiêu một lượt (bị từ chối thì về 12 như web), tin nổi bật bấy nhiêu cái một lượt.
 const SOCIAL_IG_POSTS = 50
 const SOCIAL_IG_HIGHLIGHTS = 5
 const SOCIAL_WINDOW_MS = 10 * 60_000
-const SOCIAL_WINDOW_CALLS = 70
-// Cuộn: hết mục mới sau chừng này lượt liên tiếp thì coi như hết danh sách.
-const SOCIAL_IDLE_ROUNDS = 5
-// Ảnh Facebook trong lưới nhỏ hơn chừng này (cạnh dài) ⇒ mở trang ảnh lấy bản gốc.
-const SOCIAL_FULL_SIZE = 900
+const SOCIAL_WINDOW_CALLS = 200
 const SOCIAL_IG_APP_ID = "936619743392459"
 // Instagram: truy vấn GraphQL web của trang (`doc_id` + tên truy vấn), như tiện ích Social Bulk Downloader 1.8.8 dùng
 // (notes/social-bulk.md). `/api/v1/…` gọi từ tiện ích bị trả trang HTML / 429. `v2` = `/api/graphql`, còn lại
@@ -39,7 +33,58 @@ const SOCIAL_IG_QUERIES = {
   highlights: { doc: "26970053832668570", name: "PolarisProfileStoryHighlightsTrayContentQuery", v2: true },
   highlight: { doc: "38282502831363383", name: "PolarisStoriesV3HighlightsPageQuery" },
 }
-const SOCIAL_IG_RESERVED = new Set(["p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about", "legal", "developer", "web", "api", "challenge", "emails", "session"])
+// Threads: cùng kiểu GraphQL (`/graphql/query` của threads.com), mã và cờ `__relay_internal__pv__*` như Social Bulk
+// Downloader 1.8.8 dùng (notes/social-bulk.md). Danh sách bài 10 bài một lượt như web.
+const SOCIAL_TH_APP_ID = "238260118697367"
+const SOCIAL_TH_POSTS = 10
+const SOCIAL_TH_QUERIES = {
+  user: { doc: "25954331127572347", name: "BarcelonaUsernameHovercardImplDirectQuery" },
+  posts: { doc: "33544334045182488", name: "BarcelonaProfileThreadsTabRefetchableDirectQuery" },
+}
+const socialRelay = (flags) => Object.fromEntries(Object.entries(flags).map(([key, value]) => [`__relay_internal__pv__${key}relayprovider`, value]))
+const SOCIAL_TH_USER_FLAGS = socialRelay({
+  BarcelonaIsInternalUser: false, BarcelonaIsLoggedIn: true, BarcelonaThreadsWebCachingImprovements: false, BarcelonaHasSpoilerStylingInfo: true,
+  BarcelonaShouldShowFediverseM1Features: true, BarcelonaHasEventBadge: false,
+})
+const SOCIAL_TH_POSTS_FLAGS = socialRelay({
+  BarcelonaIsLoggedIn: true, BarcelonaHasProfileSelfReplyContext: true, BarcelonaHasInlineReplyComposer: true, BarcelonaIsReplyApprovalEnabled: true,
+  BarcelonaIsReplyApprovalsConsumptionEnabled: true, BarcelonaHasDearAlgoConsumption: true, BarcelonaHasEventBadge: false,
+  BarcelonaIsSearchDiscoveryEnabled: false, BarcelonaHasPodcastConsumption: true, BarcelonaHasCommunities: true, BarcelonaHasSelfThreadCount: true,
+  IsTagIndicatorEnabled: true, BarcelonaHasDeepDive: false, BarcelonaHasGhostPostConsumption: true, BarcelonaHasSpoilerStylingInfo: true,
+  BarcelonaHasGhostPostEmojiActivation: false, BarcelonaOptionalCookiesEnabled: true, BarcelonaHasDearAlgoWebProduction: false,
+  BarcelonaQuotedPostUFIEnabled: true, BarcelonaHasTopicTags: true, BarcelonaIsCrawler: false, BarcelonaHasDisplayNames: false,
+  BarcelonaHasCommunityTopContributors: true, BarcelonaCanSeeSponsoredContent: true, BarcelonaShouldShowFediverseM075Features: true,
+  BarcelonaImplicitTrendsGK: false, BarcelonaIsInternalUser: false,
+})
+// Facebook: `POST /api/graphql/` của trang, như Social Bulk Downloader 1.8.8 (notes/social-bulk.md). Danh sách video /
+// ảnh nhóm chỉ có mã ⇒ hỏi từng mục (`video`, `photo`).
+const SOCIAL_FB_QUERIES = {
+  photos: { doc: "24168515422830962", name: "ProfileCometAppCollectionPhotosRendererPaginationQuery" },
+  reels: { doc: "25443625298595118", name: "ProfileCometAppCollectionReelsRendererPaginationQuery" },
+  videos: { doc: "26070921649175153", name: "PagesCometChannelTabAllVideosCardImplPaginationQuery" },
+  highlights: { doc: "29865722229740235", name: "ProfileCometFeaturedHighlightsViewPaginationQuery" },
+  story: { doc: "25170215872629838", name: "StoriesSuspenseContentPaneRootWithEntryPointQuery" },
+  groupPhotos: { doc: "30127100086888552", name: "GroupsCometMediaPhotosTabGridQuery" },
+  groupVideos: { doc: "9352040021563569", name: "GroupsCometMediaVideosTabGridQuery" },
+  photo: { doc: "26823688820652915", name: "CometPhotoRootContentQuery" },
+  video: { doc: "25333743559590947", name: "FBUnifiedVideoRootWithEntrypointQuery" },
+}
+const SOCIAL_FB_VIDEO_FLAGS = socialRelay({
+  FBUnifiedVideoMediaFooter_comet_enable_reels_ads_gk: true, FBUnifiedVideoMediaFooter_community_notes_reels_fb_web_unified_gk: true,
+  FBReels_enable_view_dubbed_audio_type_gk: false, FBUnifiedVideoMediaFooter_enable_meta_ai_pill_gk: true, FBUnifiedVideoMediaFooter_enable_ai_info_pill_gk: true,
+})
+const SOCIAL_FB_REELS_FLAGS = socialRelay({
+  FBReels_deprecate_short_form_video_context_gk: true, FBReels_enable_view_dubbed_audio_type_gk: false, FBReels_enable_meta_ai_label_gk: true,
+  FBReelsMediaFooter_comet_enable_reels_ads_gk: true, FBUnifiedVideoMediaFooter_comet_enable_reels_ads_gk: true,
+  FBUnifiedVideoMediaFooter_community_notes_reels_fb_web_unified_gk: true, FBUnifiedVideoMediaFooter_enable_meta_ai_pill_gk: true,
+  FBUnifiedVideoMediaFooter_enable_ai_info_pill_gk: true,
+})
+const SOCIAL_FB_PHOTO_FLAGS = socialRelay({
+  GHLShouldChangeSponsoredDataFieldName: true, TestPilotShouldIncludeDemoAdUseCase: false, CometUFIShareActionMigration: true,
+  CometUFICommentAutoTranslationType: "AUTO_TRANSLATE", CometUFICommentAvatarStickerAnimatedImage: false, CometUFICommentActionLinksRewriteEnabled: false,
+  IsWorkUser: false, CometUFIReactionsEnableShortName: false, CometUFISingleLineUFI: true, CometImmersivePhotoCanUserDisable3DMotion: false,
+})
+const SOCIAL_IG_RESERVED =new Set(["p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about", "legal", "developer", "web", "api", "challenge", "emails", "session"])
 const SOCIAL_FB_RESERVED = new Set([
   "watch", "reel", "reels", "photo", "photo.php", "photos", "videos", "video.php", "marketplace", "gaming", "events", "search",
   "notifications", "messages", "friends", "saved", "settings", "help", "login", "login.php", "permalink.php", "story.php", "share",
@@ -75,12 +120,9 @@ function socialPlan(url) {
     return { platform: "facebook", kind: "story", id: parts[1], bucket: parts[1], highlight }
   }
   if (parts[0] === "groups" && /^[\w.-]{1,100}$/.test(parts[1] ?? "")) {
-    const base = `${page.origin}/groups/${parts[1]}`
-    return { platform: "facebook", kind: "group", id: `groups.${parts[1]}`, base, photos: `${base}/media/photos`, videos: `${base}/media/videos` }
+    return { platform: "facebook", kind: "group", id: `groups.${parts[1]}`, group: parts[1], base: `${page.origin}/groups/${parts[1]}` }
   }
-  let base = null
   let id = null
-  let tab = null
   const numeric = page.searchParams.get("id")
   if (parts[0] === "profile.php" && /^\d+$/.test(numeric ?? "")) {
     id = numeric
@@ -88,15 +130,10 @@ function socialPlan(url) {
     id = parts[2]
   } else if (parts[0] && /^[\w.-]{1,100}$/.test(parts[0]) && !SOCIAL_FB_RESERVED.has(parts[0].toLowerCase())) {
     id = parts[0]
-    base = `${page.origin}/${parts[0]}`
-    tab = (name) => `${base}/${name}`
   }
   if (!id) return null
-  if (!base) {
-    base = `${page.origin}/profile.php?id=${id}`
-    tab = (name) => `${base}&sk=${name === "reels" ? "reels_tab" : name}`
-  }
-  return { platform: "facebook", kind: "profile", id, base, photos: tab("photos_by"), videos: tab("videos"), reels: tab("reels") }
+  const base = /^\d+$/.test(id) ? `${page.origin}/profile.php?id=${id}` : `${page.origin}/${id}`
+  return { platform: "facebook", kind: "profile", id, base }
 }
 
 const socialSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -168,9 +205,7 @@ class SocialJob {
       const wait = SOCIAL_WINDOW_MS - (now - this.calls[0])
       await this.wait(socialDelay(wait))
     }
-    // Instagram: câu trả lời JSON nhỏ (như trang tự gọi khi cuộn) ⇒ nghỉ ngắn hơn trang Facebook / Threads.
-    const gap = this.plan.platform === "instagram" ? SOCIAL_IG_GAP_MS : SOCIAL_GAP_MS
-    if (this.calls.length > 0) await this.wait(socialDelay(gap + Math.random() * gap))
+    if (this.calls.length > 0) await this.wait(socialDelay(SOCIAL_GAP_MS + Math.random() * SOCIAL_GAP_MS))
     this.calls.push(Date.now())
   }
 
@@ -258,87 +293,30 @@ class SocialJob {
     if (this.pending.length >= SOCIAL_PART_ENTRIES || Date.now() - this.flushedAt >= SOCIAL_FLUSH_MS) await this.flush()
   }
 
-  /** Mở `url` trong tab (nếu chưa ở đó) rồi nạp lại social-harvest.js. */
-  async open(url) {
-    const tab = await api.tabs.get(this.tabId)
-    const same = (a, b) => a.replace(/[#?].*$/, "").replace(/\/$/, "") === b.replace(/[#?].*$/, "").replace(/\/$/, "")
-    if (!same(tab.url ?? "", url) || new URL(url).search !== new URL(tab.url ?? url).search) {
-      await this.pace()
-      const tabId = this.tabId
-      await new Promise((resolve) => {
-        let timer = 0
-        const listen = (id, change) => {
-          if (id === tabId && change.status === "complete") done()
-        }
-        const done = () => {
-          clearTimeout(timer)
-          api.tabs.onUpdated.removeListener(listen)
-          resolve()
-        }
-        timer = setTimeout(done, 30_000)
-        api.tabs.onUpdated.addListener(listen)
-        api.tabs.update(tabId, { url }).catch(done)
-      })
-      // Trang Comet còn vẽ sau "complete".
-      await socialSleep(socialDelay(1500))
-    }
-    return this.inject()
-  }
-
-  /** Cuộn trang và đọc mục mới tới khi hết (hoặc người dùng dừng / bỏ chọn nhóm). */
-  async scroll(source, keep, { rounds = Infinity, album = null } = {}) {
-    let idle = 0
-    let round = 0
-    while (this.wants(source) && !this.past(source) && idle < SOCIAL_IDLE_ROUNDS && round < rounds) {
-      round += 1
-      const got = await this.run(socialTake).catch(() => null)
-      if (!got) {
-        this.failure = this.failure ?? "social.changed"
-        return
-      }
-      const fresh = (got.items ?? []).filter((item) => !this.sent.has(item.id) && keep(item))
-      idle = fresh.length > 0 ? 0 : idle + 1
-      await this.push(await this.full(fresh), source, album)
-      await this.pill()
-      if (round < rounds) {
-        // Mỗi lần cuộn trang thường tự gọi một yêu cầu nạp thêm: tính vào nhịp gọi.
-        await this.run(socialScroll, [], null).catch(() => undefined)
-        await this.pace()
-      }
-    }
-  }
-
   /**
-   * Facebook: ảnh trong lưới là ảnh thu nhỏ ⇒ mở trang ảnh lấy bản gốc (như gallery-dl). Không đọc được bản gốc thì giữ
-   * ảnh lưới; bị chặn tạm / cần đăng nhập thì dừng, bỏ các ảnh chưa lấy được bản gốc. Trả các mục giữ lại.
+   * Facebook: một truy vấn GraphQL của trang (`SOCIAL_FB_QUERIES[query]`). Trả `{data, items, prefetch}`: dòng JSON đầu của
+   * câu trả lời, ảnh/video social-harvest.js đọc được trong mọi dòng, link ảnh `prefetch_uris_v2` (trang ảnh).
    */
-  async full(items) {
-    if (this.plan.platform !== "facebook") return items
-    const kept = []
-    for (const item of items) {
-      const side = Math.max(item.width ?? 0, item.height ?? 0)
-      const small = item.kind === "photo" && side < SOCIAL_FULL_SIZE && !(side > 0 && (item.fullWidth ?? 0) > 0 && item.fullWidth <= side)
-      if (small) {
-        if (this.stopped || !this.control.go) break
-        await this.pace()
-        const found = await this.run(socialFacebookPhoto, [item.id], null).catch(() => null)
-        if (found?.code) {
-          this.failure = found.code
-          this.stopped = true
-          break
-        }
-        if (found?.url) Object.assign(item, { url: found.url, width: found.width, height: found.height })
-      }
-      kept.push(item)
+  async facebook(query, variables) {
+    const { doc, name } = SOCIAL_FB_QUERIES[query]
+    await this.pace()
+    const reply = await this.run(socialFacebookCall, [doc, name, JSON.stringify(variables)]).catch(() => null)
+    if (!reply) throw new Error("social.changed")
+    const code = socialFacebookError(reply)
+    if (code) {
+      console.warn("UTD social", code, name, reply.status, reply.message ?? "")
+      throw new Error(code)
     }
-    return kept
+    return reply
   }
 
-  /** Instagram: một truy vấn GraphQL của trang (`SOCIAL_IG_QUERIES[query]`), đọc ảnh/video ngay trong trang. */
-  async instagram(query, variables) {
-    const { doc, name, v2 } = SOCIAL_IG_QUERIES[query]
+  /** Instagram / Threads: một truy vấn GraphQL của trang (`SOCIAL_IG_QUERIES` / `SOCIAL_TH_QUERIES`), đọc ảnh/video ngay trong trang. */
+  async graphql(query, variables) {
+    const threads = this.plan.platform === "threads"
+    const { doc, name, v2 } = (threads ? SOCIAL_TH_QUERIES : SOCIAL_IG_QUERIES)[query]
     await this.pace()
-    const reply = await this.run(socialInstagramCall, [v2 ? "/api/graphql" : "/graphql/query", doc, name, JSON.stringify(variables), SOCIAL_IG_APP_ID]).catch(() => null)
+    const appId = threads ? SOCIAL_TH_APP_ID : SOCIAL_IG_APP_ID
+    const reply = await this.run(socialInstagramCall, [v2 ? "/api/graphql" : "/graphql/query", doc, name, JSON.stringify(variables), appId]).catch(() => null)
     if (!reply) throw new Error("social.changed")
     const code = socialInstagramError(reply)
     if (code) {
@@ -371,6 +349,9 @@ function socialInstagramError(reply) {
   return null
 }
 
+/** Trang sau của một danh sách GraphQL (`page_info`); hết trang / không có ⇒ null. */
+const socialNext = (connection) => (connection?.page_info?.has_next_page && connection.page_info.end_cursor ? String(connection.page_info.end_cursor) : null)
+
 async function socialInstagram(job) {
   const { user } = job.plan
   // Mã hồ sơ từ HTML trang (`profile_id`, như Social Bulk Downloader); không có thì hỏi GraphQL theo tên.
@@ -379,7 +360,7 @@ async function socialInstagram(job) {
   if (found?.id) {
     job.head = { id: found.id, name: found.name || user, handle: user, avatar: found.avatar ?? null, followers: found.followers ?? null, private: false }
   } else {
-    const info = await job.instagram("user", { username: user })
+    const info = await job.graphql("user", { username: user })
     const profile = info.meta?.data?.xig_user_by_username
     if (!profile?.pk) throw new Error("social.not_found")
     job.head = {
@@ -394,27 +375,18 @@ async function socialInstagram(job) {
   const { id } = job.head
   await job.flush()
   const own = (item) => !item.owner || item.owner.toLowerCase() === user.toLowerCase()
-  // Một phần lỗi (Instagram trả 500…) thì bỏ phần đó, lấy tiếp phần sau; bị chặn / cần đăng nhập thì dừng hẳn.
-  const part = async (source, read) => {
-    if (!job.wants(source)) return
-    try {
-      await read()
-    } catch (reason) {
-      if (reason?.message === "social.rate_limited" || reason?.message === "social.login") throw reason
-      job.failure = job.failure ?? "social.partial"
-    }
-  }
-  // Trang sau của một danh sách GraphQL (`page_info`); hết trang / không có ⇒ null.
-  const next = (connection) => (connection?.page_info?.has_next_page && connection.page_info.end_cursor ? String(connection.page_info.end_cursor) : null)
+  // Một phần lỗi (Instagram trả 500…) thì bỏ phần đó, lấy tiếp phần sau.
+  const part = (source, read) => socialPart(job, source, read)
+  const next = socialNext
   const story = (item) => ({ ...item, page: null })
   // Tin hết hạn sau 24 giờ: lấy trước.
   await part("stories", async () => {
-    const reply = await job.instagram("stories", { reel_ids_arr: [id], __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true })
+    const reply = await job.graphql("stories", { reel_ids_arr: [id], __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: true })
     if (!reply.meta.data.xdt_api__v1__feed__reels_media) throw new Error("social.changed")
     await job.push(reply.items.map(story), "stories")
   })
   await part("highlights", async () => {
-    const tray = await job.instagram("highlights", { user_id: id })
+    const tray = await job.graphql("highlights", { user_id: id })
     const edges = tray.meta.data.highlights?.edges
     if (!Array.isArray(edges)) throw new Error("social.changed")
     const waiting = edges.map((edge) => edge?.node).filter((node) => /^highlight:\d+$/.test(node?.id ?? ""))
@@ -422,7 +394,7 @@ async function socialInstagram(job) {
     // (Instagram trả ít hơn thì cũng không chậm hơn hỏi từng cái).
     while (waiting.length > 0 && job.wants("highlights")) {
       const batch = waiting.slice(0, SOCIAL_IG_HIGHLIGHTS)
-      const reply = await job.instagram("highlight", {
+      const reply = await job.graphql("highlight", {
         first: batch.length,
         initial_reel_id: batch[0].id,
         reel_ids: batch.map((highlight) => highlight.id),
@@ -443,7 +415,7 @@ async function socialInstagram(job) {
   await part("reels", async () => {
     let cursor = null
     do {
-      const reply = await job.instagram("reels", {
+      const reply = await job.graphql("reels", {
         after: cursor,
         // Thử thật: Instagram trả tối đa 12 reel một lượt (web dùng 4).
         data: { include_feed_video: true, page_size: 12, target_user_id: id },
@@ -478,7 +450,7 @@ async function socialInstagram(job) {
       }
       let reply
       try {
-        reply = await job.instagram("posts", variables)
+        reply = await job.graphql("posts", variables)
       } catch (reason) {
         if (size === 12 || reason?.message !== "social.changed") throw reason
         size = 12
@@ -494,47 +466,261 @@ async function socialInstagram(job) {
 }
 
 async function socialThreads(job) {
-  const { user, base } = job.plan
-  if (!(await job.open(base))) throw new Error("social.changed")
-  const info = await job.run(socialPageInfo, [], null).catch(() => null)
-  job.head = { id: user, name: info?.name || user, handle: user, avatar: info?.image ?? null }
+  const { user } = job.plan
+  // Mã hồ sơ từ truy vấn thẻ tên (hovercard), như Social Bulk Downloader.
+  const info = await job.graphql("user", { username: user, ...SOCIAL_TH_USER_FLAGS })
+  const profile = info.meta?.data?.user
+  if (!profile?.id) throw new Error("social.not_found")
+  const pictures = Array.isArray(profile.hd_profile_pic_versions) ? profile.hd_profile_pic_versions : []
+  const avatar = [pictures.at(-1)?.url, profile.profile_pic_url].find((url) => typeof url === "string" && /^https:\/\//.test(url)) ?? null
+  job.head = { id: String(profile.id), name: profile.full_name || user, handle: user, avatar, followers: Number(profile.follower_count) || null, private: false }
   await job.flush()
-  // Bài đăng lại / trích dẫn của người khác cũng hiện ở hồ sơ: chỉ giữ bài của chính người này.
-  await job.scroll("posts", (item) => item.owner?.toLowerCase() === user.toLowerCase())
+  // Bài trích dẫn của người khác nằm trong bài: chỉ giữ bài của chính người này.
+  const own = (item) => item.owner?.toLowerCase() === user.toLowerCase()
+  let cursor = null
+  do {
+    const reply = await job.graphql("posts", {
+      userID: job.head.id,
+      after: cursor,
+      before: null,
+      first: SOCIAL_TH_POSTS,
+      last: null,
+      allow_page_info_for_lox_user: false,
+      ...SOCIAL_TH_POSTS_FLAGS,
+    })
+    const connection = reply.meta.data.mediaData
+    if (!connection) throw new Error("social.changed")
+    await job.push(reply.items.filter(own), "posts")
+    await job.pill()
+    cursor = socialNext(connection)
+  } while (cursor && job.wants("posts") && !job.past("posts"))
+}
+
+/**
+ * Lỗi của một câu trả lời GraphQL Facebook (mã cố định). Chỉ đọc trường báo lỗi ở cấp ngoài (`errors`, `error`): chú
+ * thích ảnh / bài có thể chứa chữ "rate limit"…
+ */
+function socialFacebookError(reply) {
+  const message = String(reply.message ?? "").toLowerCase()
+  const codes = Array.isArray(reply.codes) ? reply.codes : []
+  let path = ""
+  try {
+    path = new URL(reply.url).pathname
+  } catch {
+    // Không có địa chỉ (lỗi mạng).
+  }
+  // 1357001 / 1357004: chưa đăng nhập / phiên hết hạn.
+  if (/^\/(login|checkpoint)/.test(path) || codes.includes(1357001) || codes.includes(1357004) || /not logged in|log in to continue/.test(message)) return "social.login"
+  // 1675004: "Rate limit exceeded" (trả kèm HTTP 200).
+  if (reply.status === 429 || codes.includes(1675004) || /rate limit|temporarily blocked|too many requests/.test(message)) return "social.rate_limited"
+  if (reply.status === 404) return "social.not_found"
+  if (reply.status !== 200 || !reply.data?.data) return "social.changed"
+  return null
+}
+
+/** Một phần (nhóm `source`) lỗi thì bỏ phần đó, lấy tiếp phần sau; bị chặn / cần đăng nhập thì dừng hẳn. */
+async function socialPart(job, source, read) {
+  if (!job.wants(source)) return
+  try {
+    await read()
+  } catch (reason) {
+    if (reason?.message === "social.rate_limited" || reason?.message === "social.login") throw reason
+    job.failure = job.failure ?? "social.partial"
+  }
+}
+
+/** Facebook: mục của `id` social-harvest.js đọc được trong câu trả lời. */
+const socialFacebookItem = (reply, id) => reply.items.find((item) => item.id === String(id)) ?? null
+
+/**
+ * Facebook: video trong danh sách chỉ có mã ⇒ hỏi từng video lấy link file (như Social Bulk Downloader). Không có link
+ * thì vẫn giữ mục (UTD tải bằng yt-dlp từ trang video). Mỗi mục gửi ngay (bị chặn giữa chừng vẫn giữ phần đã có).
+ */
+async function socialFacebookVideos(job, ids, known, source) {
+  for (const id of ids) {
+    if (!job.wants(source)) break
+    let item = known.find((media) => media.id === id && media.url) ?? null
+    if (!item) {
+      const reply = await job.facebook("video", {
+        count: 1, initial_node_id: id, isAggregationProfileViewerOrShouldShowReelsForPage: false, page_id: "", scale: 1, should_use_stream: false,
+        shouldIncludeInitialNodeFetch: true, shouldShowReelsForPage: false, stream_initial_count: 1, useDefaultActor: false, ...SOCIAL_FB_VIDEO_FLAGS,
+      }).catch((reason) => {
+        if (reason?.message === "social.rate_limited" || reason?.message === "social.login") throw reason
+        return null
+      })
+      const story = reply?.data?.data?.video?.creation_story
+      item = (reply && socialFacebookItem(reply, id)) ?? { id, kind: "video", url: null, page: `https://www.facebook.com/watch/?v=${id}` }
+      item.timestamp = item.timestamp ?? (Number(story?.creation_time) || null)
+      item.title = item.title || (typeof story?.message?.text === "string" ? story.message.text.replace(/\s+/g, " ").trim().slice(0, 300) : "")
+    }
+    await job.push([item], source)
+  }
+}
+
+/** Facebook: ảnh nhóm chỉ có mã (hoặc ảnh nhỏ) ⇒ hỏi trang ảnh lấy bản lớn `prefetch_uris_v2` (như Social Bulk Downloader). */
+async function socialFacebookPhotos(job, ids, known, source) {
+  for (const id of ids) {
+    if (!job.wants(source)) break
+    const listed = known.find((media) => media.id === id && media.url) ?? null
+    if (listed && Math.max(listed.width ?? 0, listed.height ?? 0) >= 960) {
+      await job.push([listed], source)
+      continue
+    }
+    const reply = await job.facebook("photo", {
+      feedbackSource: 65, feedLocation: "COMET_MEDIA_VIEWER", focusCommentID: null, isMediaset: false, nodeID: id,
+      privacySelectorRenderLocation: "COMET_MEDIA_VIEWER", renderLocation: "comet_media_viewer", scale: 1, useDefaultActor: false, ...SOCIAL_FB_PHOTO_FLAGS,
+    }).catch((reason) => {
+      if (reason?.message === "social.rate_limited" || reason?.message === "social.login") throw reason
+      return null
+    })
+    const item = (reply && socialFacebookItem(reply, id)) ?? listed ?? (reply?.prefetch ? { id, kind: "photo", page: `https://www.facebook.com/photo/?fbid=${id}` } : null)
+    if (!item) continue
+    if (reply?.prefetch) item.url = reply.prefetch
+    await job.push([item], source)
+  }
+}
+
+/** Facebook: Tin của một bucket (Tin 24 giờ của người đó / một tin nổi bật). Trả bucket. */
+async function socialFacebookBucket(job, bucketID, source, album) {
+  const reply = await job.facebook("story", { bucketID, focusCommentID: null, scale: 1 })
+  const bucket = reply.data.data.bucket
+  if (!bucket) throw new Error("social.changed")
+  // Câu trả lời có thể kèm bucket khác (Tin kế tiếp): chỉ giữ thẻ của bucket đã hỏi.
+  const main = String(bucket.id ?? bucketID)
+  await job.push(reply.items.filter((item) => item.story && (!item.bucket || item.bucket === main)), source, album)
+  return bucket
 }
 
 async function socialFacebook(job) {
   const { plan } = job
-  const info = await job.run(socialPageInfo, [], null).catch(() => null)
-  job.head = { id: plan.id, name: info?.name || plan.id, handle: null, avatar: info?.image ?? null }
-  if (!(await job.inject())) throw new Error("social.changed")
-  await job.flush()
   if (plan.kind === "story") {
-    // Đang xem Tin / tin nổi bật: đọc bucket đang mở (dữ liệu có sẵn trong trang), không cuộn.
+    // Đang xem Tin / tin nổi bật: chỉ bucket đó.
     const source = plan.highlight ? "highlights" : "stories"
-    await job.scroll(source, (item) => item.story && (!item.bucket || item.bucket === plan.bucket), { rounds: 3 })
+    job.head = { id: plan.id, name: plan.id, handle: null, avatar: null }
+    const bucket = await socialFacebookBucket(job, plan.bucket, source, null)
+    const owner = bucket.story_bucket_owner ?? {}
+    const avatar = owner.profile_picture?.uri ?? owner.profilePicture?.uri
+    job.head = { id: plan.id, name: owner.name || plan.id, handle: null, avatar: typeof avatar === "string" && /^https:\/\//.test(avatar) ? avatar : null }
     return
   }
-  // Link Tin / tin nổi bật nằm ở trang chính của hồ sơ: đọc trước khi chuyển thẻ.
-  const stories = plan.kind === "profile" ? ((await job.run(socialStoryLinks).catch(() => null)) ?? []) : []
-  const steps = [
-    ["photos", plan.photos, (item) => item.kind === "photo" && !item.story],
-    ["videos", plan.videos, (item) => item.kind === "video" && !item.story],
-    ["reels", plan.reels, (item) => item.kind === "video" && !item.story],
-  ]
-  for (const [source, url, keep] of steps) {
-    if (!url || !job.wants(source)) continue
-    if (!(await job.open(url))) continue
-    await job.scroll(source, keep)
+  // Mã hồ sơ / nhóm và mã các thẻ (Ảnh, Reels) trong dữ liệu của trang hồ sơ.
+  const group = plan.kind === "group"
+  await job.pace()
+  const info = await job.run(socialFacebookProfile, [plan.base, group ? plan.group : plan.id, group]).catch(() => null)
+  if (info?.code) throw new Error(info.code)
+  if (!info?.id) throw new Error("social.changed")
+  job.head = { id: plan.id, name: info.name || plan.id, handle: null, avatar: info.avatar ?? null }
+  await job.flush()
+  const edges = (connection) => (Array.isArray(connection?.edges) ? connection.edges : [])
+  // Lần lượt từng trang của một danh sách; `read` đẩy mục rồi trả đối tượng danh sách (`edges` + `page_info`).
+  const pages = async (source, query, variables, read) => {
+    let cursor = null
+    do {
+      const reply = await job.facebook(query, variables(cursor))
+      const connection = await read(reply)
+      if (!connection) throw new Error("social.changed")
+      await job.pill()
+      cursor = socialNext(connection)
+    } while (cursor && job.wants(source) && !job.past(source))
   }
-  for (const link of stories) {
-    const source = link.highlight ? "highlights" : "stories"
-    if (!job.wants(source)) continue
-    if (!(await job.open(link.url))) continue
-    await job.scroll(source, (item) => item.story && (!item.bucket || item.bucket === link.bucket), { rounds: 3, album: link.highlight ? link.title : null })
+  const page = { count: 8, scale: 1, id: info.id }
+  if (group) {
+    await socialPart(job, "photos", () =>
+      pages("photos", "groupPhotos", (cursor) => ({ ...page, cursor: cursor ?? "" }), async (reply) => {
+        const media = reply.data.data.node?.group_mediaset?.media
+        const ids = edges(media).map((edge) => String(edge?.node?.id ?? "")).filter((id) => /^\d+$/.test(id))
+        await socialFacebookPhotos(job, ids, reply.items, "photos")
+        return media
+      }),
+    )
+    await socialPart(job, "videos", () =>
+      pages("videos", "groupVideos", (cursor) => ({ ...page, cursor: cursor ?? "" }), async (reply) => {
+        const media = reply.data.data.node?.group_mediaset?.media
+        const ids = edges(media).map((edge) => String(edge?.node?.id ?? "")).filter((id) => /^\d+$/.test(id))
+        await socialFacebookVideos(job, ids, reply.items, "videos")
+        return media
+      }),
+    )
+    return
   }
-  // Trả tab về trang người dùng đã mở.
-  if (job.pageUrl !== (await api.tabs.get(job.tabId)).url) await api.tabs.update(job.tabId, { url: job.pageUrl }).catch(() => undefined)
+  // Tin hết hạn sau 24 giờ: lấy trước.
+  if (info.story) await socialPart(job, "stories", () => socialFacebookBucket(job, info.story, "stories", null))
+  await socialPart(job, "highlights", () =>
+    pages(
+      "highlights",
+      "highlights",
+      (cursor) => ({
+        scale: 1,
+        id: btoa(`profile_tile_view:${info.id}:featured_highlights:intro_featured_highlights_content:hscroll_cards:profile_timeline:3:7`),
+        count: 9,
+        cursor: cursor ?? "",
+      }),
+      async (reply) => {
+        const tiles = reply.data.data.node?.profile_tile_items
+        for (const edge of edges(tiles)) {
+          const tile = edge?.node?.node
+          if (!tile?.id || !job.wants("highlights")) continue
+          const title = [tile.title?.text, tile.title, tile.name, edge.node.title?.text].find((value) => typeof value === "string" && value.trim())
+          await socialFacebookBucket(job, String(tile.id), "highlights", title ? title.trim().slice(0, 100) : null)
+        }
+        return tiles
+      },
+    ),
+  )
+  if (info.photos) {
+    await socialPart(job, "photos", () =>
+      pages("photos", "photos", (cursor) => ({ scale: 1, id: info.photos, count: 8, cursor: cursor ?? "" }), async (reply) => {
+        const items = reply.data.data.node?.pageItems
+        const photos = edges(items).map((edge) => {
+          const node = edge?.node?.node
+          if (!node?.id) return null
+          const known = socialFacebookItem(reply, node.id)
+          if (known?.url) return known
+          const image = node.viewer_image ?? node.image
+          if (typeof image?.uri !== "string") return null
+          const link = typeof node.url === "string" && /^https:\/\/(www|web|m)\.facebook\.com\//.test(node.url) ? node.url : `https://www.facebook.com/photo/?fbid=${node.id}`
+          return { id: String(node.id), kind: "photo", url: image.uri, width: Number(image.width) || 0, height: Number(image.height) || 0, page: link }
+        })
+        await job.push(photos.filter(Boolean), "photos")
+        return items
+      }),
+    )
+  }
+  if (info.reels) {
+    await socialPart(job, "reels", () =>
+      pages("reels", "reels", (cursor) => ({ count: 10, cursor: cursor ?? "", renderLocation: null, scale: 1, useDefaultActor: false, id: info.reels, ...SOCIAL_FB_REELS_FLAGS }), async (reply) => {
+        const shorts = reply.data.data.node?.aggregated_fb_shorts
+        const reels = edges(shorts).map((edge) => {
+          const story = edge?.profile_reel_node?.node
+          const media = story?.attachments?.[0]?.media
+          if (!media?.id) return null
+          const id = String(media.id)
+          const item = socialFacebookItem(reply, id) ?? { id, kind: "video", url: null, page: `https://www.facebook.com/reel/${id}` }
+          item.timestamp = item.timestamp ?? (Number(story.creation_time) || null)
+          item.title = item.title || (typeof story.message?.text === "string" ? story.message.text.replace(/\s+/g, " ").trim().slice(0, 300) : "")
+          return item
+        })
+        await job.push(reels.filter(Boolean), "reels")
+        return shorts
+      }),
+    )
+  }
+  // Thẻ Video của fanpage (trang gắn với hồ sơ).
+  if (info.page) {
+    await socialPart(job, "videos", () =>
+      pages(
+        "videos",
+        "videos",
+        (cursor) => ({ alwaysIncludeAudioRooms: true, count: 6, ...(cursor ? { cursor } : {}), pageID: info.page, scale: 4, showReactions: true, useDefaultActor: false, id: info.page }),
+        async (reply) => {
+          const videos = reply.data.data.node?.all_videos
+          const ids = edges(videos).map((edge) => String(edge?.node?.id ?? "")).filter((id) => /^\d+$/.test(id))
+          await socialFacebookVideos(job, ids, reply.items, "videos")
+          return videos
+        },
+      ),
+    )
+  }
 }
 
 /** Bấm "Tải bằng UTD" lên chính trang hồ sơ: trang không phải một file/video, nhắc mục Tải hàng loạt. */
@@ -561,8 +747,8 @@ async function socialStart(tab) {
   let error = null
   try {
     await job.pill()
+    if (!(await job.inject())) throw new Error("social.changed")
     if (plan.platform === "instagram") {
-      if (!(await job.inject())) throw new Error("social.changed")
       await socialInstagram(job)
     } else if (plan.platform === "threads") {
       await socialThreads(job)
@@ -584,33 +770,156 @@ async function socialStart(tab) {
 
 // --- Các hàm chạy trong tab (scripting.executeScript): phải tự đủ, không dùng biến ngoài. ---
 
-/** Mục mới mà social-harvest.js gom được từ lần trước. */
-function socialTake() {
+/**
+ * Facebook: mã hồ sơ / nhóm, tên, ảnh đại diện, mã thẻ Ảnh / Reels, fanpage gắn kèm, bucket Tin — trong đối tượng
+ * `"profile_header_renderer"` của dữ liệu trang hồ sơ (như Social Bulk Downloader). Đọc dữ liệu đang có trong tab trước;
+ * không thấy (hoặc là của hồ sơ khác vì đã chuyển trang trong Facebook) thì tải lại HTML trang `base`. `expect` = tên /
+ * mã trong địa chỉ để kiểm đúng hồ sơ. Không thấy ⇒ null; bị chuyển sang trang đăng nhập ⇒ `{code}`.
+ */
+async function socialFacebookProfile(base, expect, group) {
+  // Đối tượng JSON bắt đầu ở `from` (đếm ngoặc, bỏ qua chuỗi).
+  const object = (text, from) => {
+    let depth = 0
+    let quote = false
+    for (let at = from; at < text.length && at - from < 2_000_000; at += 1) {
+      const char = text[at]
+      if (quote) {
+        if (char === "\\") at += 1
+        else if (char === '"') quote = false
+      } else if (char === '"') quote = true
+      else if (char === "{") depth += 1
+      else if (char === "}" && --depth === 0) return text.slice(from, at + 1)
+    }
+    return null
+  }
+  // Mã thẻ: đối tượng có `tab_key` (photos_by, owner_reels) và `id`.
+  const tab = (root, key) => {
+    const stack = [root]
+    for (let budget = 50000; stack.length > 0 && budget > 0; budget -= 1) {
+      const node = stack.pop()
+      if (!node || typeof node !== "object") continue
+      if (node.tab_key === key && typeof node.id === "string") return node.id
+      for (const child of Object.values(node)) if (child && typeof child === "object") stack.push(child)
+    }
+    return null
+  }
+  const wanted = String(expect).toLowerCase()
+  const read = (text) => {
+    for (let at = text.indexOf('"profile_header_renderer"'); at >= 0; at = text.indexOf('"profile_header_renderer"', at + 1)) {
+      const raw = object(text, text.indexOf("{", at))
+      let header = null
+      try {
+        header = raw ? JSON.parse(raw) : null
+      } catch {
+        continue
+      }
+      const owner = group ? header?.group : header?.user
+      if (!owner?.id) continue
+      const url = String(owner.url ?? "").toLowerCase()
+      const same = String(owner.id) === String(expect) || url.includes(group ? `/groups/${wanted}` : `/${wanted}`) || url.includes(`id=${wanted}`)
+      if (!same) continue
+      const avatar = owner.profilePicLarge?.uri ?? owner.profilePicture?.uri ?? owner.profile_picture?.uri
+      return {
+        id: String(owner.id),
+        name: typeof owner.name === "string" ? owner.name.slice(0, 200) : null,
+        avatar: typeof avatar === "string" && /^https:\/\//.test(avatar) ? avatar : null,
+        photos: group ? null : tab(owner, "photos_by"),
+        reels: group ? null : tab(owner, "owner_reels"),
+        page: group ? null : (owner.delegate_page?.id ? String(owner.delegate_page.id) : null),
+        story: group ? null : (owner.story_bucket?.nodes?.[0]?.id ? String(owner.story_bucket.nodes[0].id) : null),
+      }
+    }
+    return null
+  }
+  const here = read(Array.from(document.scripts, (script) => script.textContent ?? "").join("\n"))
+  if (here) return here
+  const request = typeof browser === "object" && typeof content === "object" && content?.fetch ? content.fetch.bind(content) : fetch
+  try {
+    const response = await request(base, { credentials: "include" })
+    if (/^\/(login|checkpoint)/.test(new URL(response.url).pathname)) return { code: "social.login" }
+    if (response.status === 404) return { code: "social.not_found" }
+    return response.ok ? read(await response.text()) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Facebook: gửi một truy vấn GraphQL bằng phiên của chính trang (cùng nguồn, như web Facebook): `doc_id` + `variables`,
+ * mã `fb_dtsg` / `lsd` / tài khoản của trang. Câu trả lời có thể nhiều dòng JSON (dòng sau có `label`): social-harvest.js
+ * đọc ảnh/video ở mọi dòng; trả dòng đầu, mã lỗi Facebook, link ảnh `prefetch_uris_v2`.
+ */
+async function socialFacebookCall(doc, name, variables) {
   const harvest = window[Symbol.for("utd.social-harvest")]
-  return harvest ? harvest.take() : null
-}
-
-function socialStoryLinks() {
-  const harvest = window[Symbol.for("utd.social-harvest")]
-  return harvest ? harvest.storyLinks() : []
-}
-
-/** Cuộn xuống cuối trang để trang tự nạp thêm. */
-function socialScroll() {
-  const root = document.scrollingElement ?? document.documentElement
-  window.scrollTo(0, root.scrollHeight)
-  return root.scrollHeight
-}
-
-/** Tên + ảnh đại diện của trang đang mở (thẻ meta Open Graph, tiêu đề tab). */
-function socialPageInfo() {
-  const meta = (name) => document.querySelector(`meta[property="${name}"]`)?.getAttribute("content") ?? null
-  const title = (meta("og:title") ?? document.title ?? "")
-    .replace(/^\(\d+\+?\)\s*/, "")
-    .replace(/\s*[|•·-]\s*(Facebook|Threads|Instagram)\s*$/i, "")
-    .trim()
-  const image = meta("og:image")
-  return { name: title.slice(0, 200) || null, image: image && /^https:\/\//.test(image) ? image : null }
+  const TOKENS = Symbol.for("utd.social-fb-tokens")
+  if (!window[TOKENS]) {
+    const module = (key, field) => {
+      try {
+        return typeof window.require === "function" ? String(window.require(key)?.[field] ?? "") : ""
+      } catch {
+        return ""
+      }
+    }
+    const scripts = Array.from(document.scripts, (script) => script.textContent ?? "").join("\n")
+    const embedded = (key) => scripts.match(new RegExp(`"${key}",\\[\\],\\{"token":"([^"]{1,300})"`))?.[1] ?? ""
+    const cookie = document.cookie.split("; ").find((item) => item.startsWith("c_user="))?.slice(7) ?? ""
+    const user = /^\d+$/.test(cookie) ? cookie : module("CurrentUserInitialData", "USER_ID") || (scripts.match(/"USER_ID":"(\d{1,25})"/)?.[1] ?? "")
+    window[TOKENS] = { dtsg: module("DTSGInitialData", "token") || embedded("DTSGInitialData"), lsd: module("LSD", "token") || embedded("LSD"), user }
+  }
+  const { dtsg, lsd, user } = window[TOKENS]
+  const body = new URLSearchParams({
+    av: user || "0",
+    __user: user || "0",
+    __a: "1",
+    __comet_req: "15",
+    fb_api_caller_class: "RelayModern",
+    fb_api_req_friendly_name: name,
+    server_timestamps: "true",
+    doc_id: doc,
+    variables,
+  })
+  if (dtsg) body.set("fb_dtsg", dtsg)
+  if (lsd) body.set("lsd", lsd)
+  const headers = { "X-FB-Friendly-Name": name }
+  if (lsd) headers["X-FB-LSD"] = lsd
+  const request = typeof browser === "object" && typeof content === "object" && content?.fetch ? content.fetch.bind(content) : fetch
+  try {
+    const response = await request(new URL("/api/graphql/", location.origin).href, { method: "POST", credentials: "include", headers, body })
+    const text = (await response.text()).trim().replace(/^for ?\(;;\);/, "")
+    const lines = []
+    for (const line of text.split("\n")) {
+      try {
+        lines.push(JSON.parse(line))
+      } catch {
+        // Dòng không phải JSON: bỏ qua.
+      }
+    }
+    harvest?.take()
+    if (harvest) for (const line of lines) harvest.read(line)
+    const items = harvest ? harvest.take().items : []
+    const codes = []
+    const messages = []
+    for (const line of lines) {
+      if (Number.isFinite(line?.error)) {
+        codes.push(line.error)
+        messages.push(String(line.errorSummary ?? ""), String(line.errorDescription ?? ""))
+      }
+      for (const error of Array.isArray(line?.errors) ? line.errors : []) {
+        if (Number.isFinite(error?.code)) codes.push(error.code)
+        messages.push(String(error?.message ?? ""), String(error?.summary ?? ""))
+      }
+    }
+    const raw = text.match(/"prefetch_uris_v2":\[\{"uri":"((?:[^"\\]|\\.){10,4000})"/)?.[1]
+    let prefetch = null
+    try {
+      prefetch = raw ? JSON.parse(`"${raw}"`) : null
+    } catch {
+      // Link hỏng: không dùng.
+    }
+    return { status: response.status, url: response.url, data: lines[0] ?? null, codes, message: messages.join(" ").trim().slice(0, 300), items, prefetch }
+  } catch {
+    return { status: 0, url: "", data: null, codes: [], message: "", items: [], prefetch: null }
+  }
 }
 
 /**
@@ -739,34 +1048,6 @@ async function socialInstagramCall(path, doc, name, variables, appId) {
     return { status: response.status, url: response.url, meta, items, reels }
   } catch {
     return { status: 0, url: "", meta: null, items: [] }
-  }
-}
-
-/** Facebook: bản gốc của một ảnh từ trang ảnh `/photo/?fbid=` (như gallery-dl), cùng nguồn với trang đang mở. */
-async function socialFacebookPhoto(id) {
-  const request = typeof browser === "object" && typeof content === "object" && content?.fetch ? content.fetch.bind(content) : fetch
-  try {
-    const response = await request(`${location.origin}/photo/?fbid=${encodeURIComponent(id)}`, { credentials: "include" })
-    if (/\/login/.test(new URL(response.url).pathname)) return { code: "social.login" }
-    const html = await response.text()
-    if (html.includes("CometErrorRoot.react")) return { code: "social.rate_limited" }
-    if (!response.ok) return null
-    const pattern = /"image":\{"uri":"((?:[^"\\]|\\.){10,4000})","(width|height)":(\d+),"(width|height)":(\d+)\}/g
-    let best = null
-    for (let at = html.indexOf(`"${id}"`); at >= 0 && at < html.length; at = html.indexOf(`"${id}"`, at + 1)) {
-      const window = html.slice(Math.max(0, at - 3000), at + 12000)
-      for (const match of window.matchAll(pattern)) {
-        const width = Number(match[2] === "width" ? match[3] : match[5])
-        const height = Number(match[2] === "height" ? match[3] : match[5])
-        if (!best || width * height > best.width * best.height) best = { raw: match[1], width, height }
-      }
-      if (best) break
-    }
-    if (!best) return null
-    const url = JSON.parse(`"${best.raw}"`)
-    return /^https:\/\/[^/]*fbcdn\.net\//.test(url) ? { url, width: best.width, height: best.height } : null
-  } catch {
-    return null
   }
 }
 

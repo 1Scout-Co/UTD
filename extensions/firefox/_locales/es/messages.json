@@ -48,7 +48,7 @@
   "menuSocial": { "message": "Descarga masiva con UTD" },
   "socialCollecting": { "message": "Recopilando $COUNT$ fotos/vídeos", "placeholders": { "count": { "content": "$1" } } },
   "socialStop": { "message": "Detener" },
-  "socialHint": { "message": "Mantén esta pestaña abierta; puede cambiar de página sola." },
+  "socialHint": { "message": "Mantén esta pestaña abierta hasta que termine." },
   "socialDone": { "message": "$COUNT$ fotos/vídeos enviados a UTD", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "Abre un perfil, página, grupo o historia y vuelve a intentarlo." },
   "socialFailed": { "message": "No se pudieron recopilar fotos/vídeos en esta página." },

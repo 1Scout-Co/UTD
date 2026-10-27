@@ -48,7 +48,7 @@
   "menuSocial": { "message": "UTD से एक साथ डाउनलोड करें" },
   "socialCollecting": { "message": "$COUNT$ फ़ोटो/वीडियो इकट्ठा हो रहे हैं", "placeholders": { "count": { "content": "$1" } } },
   "socialStop": { "message": "रोकें" },
-  "socialHint": { "message": "यह टैब खुला रखें; यह अपने आप पेज बदल सकता है।" },
+  "socialHint": { "message": "पूरा होने तक यह टैब खुला रखें।" },
   "socialDone": { "message": "$COUNT$ फ़ोटो/वीडियो UTD को भेजे गए", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "कोई प्रोफ़ाइल, पेज, ग्रुप या स्टोरी खोलें, फिर दोबारा कोशिश करें।" },
   "socialFailed": { "message": "इस पेज पर फ़ोटो/वीडियो इकट्ठा नहीं हो सके।" },

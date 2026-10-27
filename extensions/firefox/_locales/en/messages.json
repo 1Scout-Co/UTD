@@ -48,7 +48,7 @@
   "menuSocial": { "message": "Bulk download with UTD" },
   "socialCollecting": { "message": "Collecting $COUNT$ photos/videos", "placeholders": { "count": { "content": "$1" } } },
   "socialStop": { "message": "Stop" },
-  "socialHint": { "message": "Keep this tab open; it may switch pages by itself." },
+  "socialHint": { "message": "Keep this tab open until it finishes." },
   "socialDone": { "message": "Sent $COUNT$ photos/videos to UTD", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "Open a profile, page, group or story, then try again." },
   "socialFailed": { "message": "Couldn't collect photos/videos on this page." },

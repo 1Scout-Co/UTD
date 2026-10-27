@@ -48,7 +48,7 @@
   "menuSocial": { "message": "UTD ile toplu indir" },
   "socialCollecting": { "message": "$COUNT$ fotoğraf/video toplanıyor", "placeholders": { "count": { "content": "$1" } } },
   "socialStop": { "message": "Durdur" },
-  "socialHint": { "message": "Bu sekmeyi açık tutun; sekme kendi kendine sayfa değiştirebilir." },
+  "socialHint": { "message": "Bu sekmeyi bitene kadar açık tutun." },
   "socialDone": { "message": "$COUNT$ fotoğraf/video UTD'ye gönderildi", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "Bir profil, sayfa, grup veya hikâye açıp tekrar deneyin." },
   "socialFailed": { "message": "Bu sayfada fotoğraf/video toplanamadı." },

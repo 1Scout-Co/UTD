@@ -48,7 +48,7 @@
   "menuSocial": { "message": "Unduh massal dengan UTD" },
   "socialCollecting": { "message": "Mengumpulkan $COUNT$ foto/video", "placeholders": { "count": { "content": "$1" } } },
   "socialStop": { "message": "Berhenti" },
-  "socialHint": { "message": "Biarkan tab ini terbuka; tab bisa berpindah halaman sendiri." },
+  "socialHint": { "message": "Biarkan tab ini terbuka sampai selesai." },
   "socialDone": { "message": "$COUNT$ foto/video dikirim ke UTD", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "Buka profil, halaman, grup, atau story, lalu coba lagi." },
   "socialFailed": { "message": "Tidak dapat mengumpulkan foto/video di halaman ini." },

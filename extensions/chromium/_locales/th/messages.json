@@ -48,7 +48,7 @@
   "menuSocial": { "message": "ดาวน์โหลดจำนวนมากด้วย UTD" },
   "socialCollecting": { "message": "กำลังรวบรวมรูป/วิดีโอ $COUNT$ รายการ", "placeholders": { "count": { "content": "$1" } } },
   "socialStop": { "message": "หยุด" },
-  "socialHint": { "message": "เปิดแท็บนี้ไว้ แท็บอาจเปลี่ยนหน้าเอง" },
+  "socialHint": { "message": "เปิดแท็บนี้ไว้จนกว่าจะเสร็จ" },
   "socialDone": { "message": "ส่งรูป/วิดีโอ $COUNT$ รายการไปยัง UTD แล้ว", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "เปิดโปรไฟล์ เพจ กลุ่ม หรือสตอรี่ แล้วลองอีกครั้ง" },
   "socialFailed": { "message": "รวบรวมรูป/วิดีโอในหน้านี้ไม่ได้" },

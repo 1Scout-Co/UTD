@@ -19,8 +19,10 @@ Nhánh `claude/social-bulk-e821de` (cắt từ main `93ed9a3`). Chủ dự án y
   trên trang ⇒ thôi thu, giữ phần đã có.
 - Mỗi ảnh/video có link file trên CDN (đã có chữ ký của Facebook/Instagram) ⇒ task HTTP thường trong hàng đợi chung, tên
   `<YYYY-MM-DD> <chú thích ngắn> <id>.<đuôi>`. Video Facebook không có link file ⇒ task media (yt-dlp) từ trang video.
-- Nhịp gọi: nghỉ ngẫu nhiên **2–4 s** giữa hai yêu cầu, **≤ 70 yêu cầu / 10 phút** (mỗi lần cuộn trang tính một yêu cầu);
-  bị chặn tạm / cần đăng nhập ⇒ dừng ngay, báo rõ, phần đã thu vẫn tải được.
+- Cả ba mạng hỏi thẳng GraphQL của trang ngay trong tab (doc_id + biến như Social Bulk Downloader 1.8.8), không cuộn,
+  không chuyển trang (chủ dự án chốt 2026-10-27, sổ chốt [tig8]).
+- Nhịp gọi: nghỉ ngẫu nhiên **1–2 s** giữa hai yêu cầu, **≤ 200 yêu cầu / 10 phút** (instaloader tự giới hạn 275 truy vấn
+  GraphQL / 10 phút); bị chặn tạm / cần đăng nhập ⇒ dừng ngay, báo rõ, phần đã thu vẫn tải được.
 
 ## Cách lấy danh sách — các dự án khác (đọc mã, 2026-10-26)
 
@@ -54,18 +56,24 @@ Nghiên cứu đầy đủ (từng dòng, header, đường dẫn JSON): phụ l
 | Instagram — Tin | GraphQL `PolarisStoriesV3ReelPageStandaloneQuery` | lấy trước (hết hạn sau 24 giờ) |
 | Instagram — Tin nổi bật | GraphQL `PolarisProfileStoryHighlightsTrayContentQuery` rồi `PolarisStoriesV3HighlightsPageQuery` từng cái | tên tin nổi bật ⇒ album (tên file, nhãn) |
 | Instagram — người dùng | `"profile_id"` trong HTML mới tải của `/<tên>/` + thẻ OG; dự phòng GraphQL `ProfileRootContentQuery` | tên, ảnh đại diện |
-| Threads — bài viết | dữ liệu nhúng của trang hồ sơ + **tự cuộn**, đọc JSON trang tự nạp | bỏ bài đăng lại / trích dẫn của người khác |
-| Facebook — ảnh | mở thẻ `photos_by` (`&sk=photos_by`) + tự cuộn; ảnh lưới nhỏ (< 900 px) ⇒ mở `/photo/?fbid=` lấy bản gốc | như gallery-dl; không lấy được bản gốc thì giữ ảnh lưới |
-| Facebook — video | thẻ `videos` + tự cuộn; `progressive_urls` (HD trước) / `playable_url*` / `browser_native_*` | không có link file ⇒ yt-dlp tải từ `/watch/?v=` |
-| Facebook — reels | thẻ `reels` (`&sk=reels_tab`) + tự cuộn | |
-| Facebook — Tin, Tin nổi bật | link `/stories/<bucket>/` trên trang hồ sơ (vòng tròn); mở từng cái, đọc bucket trong JSON | đang xem Tin (`/stories/…`) ⇒ chỉ bucket đó; bucket của người khác bị bỏ |
-| Facebook — nhóm (ảnh, video) | `/groups/<id>/media/photos`, `/media/videos` + tự cuộn | |
+| Threads — người dùng | GraphQL `BarcelonaUsernameHovercardImplDirectQuery` (`25954331127572347`) ⇒ `data.user.id` | `x-ig-app-id 238260118697367`, CSRF từ cookie trang |
+| Threads — bài viết | GraphQL `BarcelonaProfileThreadsTabRefetchableDirectQuery` (`33544334045182488`), 10 bài/lượt, `data.mediaData` | bỏ bài của người khác |
+| Facebook — hồ sơ / nhóm | đối tượng `"profile_header_renderer"` trong dữ liệu trang (tab trước, không thấy thì tải HTML trang): `user.id`, mã thẻ (`tab_key` `photos_by` / `owner_reels`), `delegate_page.id`, `story_bucket`; nhóm `group.id` | |
+| Facebook — ảnh | `ProfileCometAppCollectionPhotosRendererPaginationQuery` (`24168515422830962`), 8/lượt, `viewer_image` | |
+| Facebook — reels | `ProfileCometAppCollectionReelsRendererPaginationQuery` (`25443625298595118`), 10/lượt; câu trả lời nhiều dòng JSON | |
+| Facebook — video fanpage | `PagesCometChannelTabAllVideosCardImplPaginationQuery` (`26070921649175153`) chỉ có mã ⇒ từng video `FBUnifiedVideoRootWithEntrypointQuery` (`25333743559590947`), `progressive_urls` HD trước | không có link file ⇒ yt-dlp tải từ `/watch/?v=`; hồ sơ không gắn fanpage ⇒ bỏ thẻ Video |
+| Facebook — Tin, Tin nổi bật | `StoriesSuspenseContentPaneRootWithEntryPointQuery` (`25170215872629838`) theo bucket; tin nổi bật: `ProfileCometFeaturedHighlightsViewPaginationQuery` (`29865722229740235`) với mã `btoa("profile_tile_view:<user>:featured_highlights:…:3:7")` | đang xem Tin (`/stories/…`) ⇒ chỉ bucket đó; bucket khác trong câu trả lời bị bỏ |
+| Facebook — nhóm (ảnh, video) | `GroupsCometMediaPhotosTabGridQuery` (`30127100086888552`) / `…VideosTabGridQuery` (`9352040021563569`), 8/lượt, chỉ có mã ⇒ từng ảnh `CometPhotoRootContentQuery` (`26823688820652915`, link `prefetch_uris_v2`) / từng video như trên | |
 
-Vì sao không gọi GraphQL bằng `doc_id` cho Facebook/Threads: `doc_id` và biến `__relay_internal__pv__*` đổi thường xuyên
-(go-threads, facebook-cli, instaloader đều ghi). Để trang tự gọi (bằng mã đang dùng) rồi đọc theo `JSON.parse` thì không
-phụ thuộc chúng — chỉ phụ thuộc hình dạng object media (`Photo`/`Video`, `image_versions2`/`video_versions`), ổn định hơn
-nhiều. Instagram gọi thẳng GraphQL như Social Bulk Downloader (nhanh, đủ hơn cuộn); `doc_id` để một chỗ
-(`SOCIAL_IG_QUERIES` trong social-bulk.js), Instagram đổi thì phần đó báo `social.changed` và sửa mã ở đó.
+Facebook gửi như web: `av`/`__user` (cookie `c_user`), `__a=1`, `__comet_req=15`, `fb_dtsg`, `lsd` (của trang), `doc_id`,
+`variables`, header `X-FB-Friendly-Name`; câu trả lời bóc `for (;;);`, tách từng dòng JSON. Lỗi: `1357001`/`1357004`/trang
+đăng nhập ⇒ `social.login`; `1675004` / "Rate limit" / 429 ⇒ `social.rate_limited`; thiếu `data` ⇒ `social.changed`.
+`doc_id` và cờ `__relay_internal__pv__*` đổi theo đợt phát hành của Meta: để một chỗ (`SOCIAL_IG_QUERIES`,
+`SOCIAL_TH_QUERIES`, `SOCIAL_FB_QUERIES` trong social-bulk.js), phần nào hỏng thì phần đó báo `social.changed` (các phần
+khác vẫn lấy) và cập nhật mã ở đó theo bản Social Bulk Downloader mới.
+
+Cách cũ (2026-10-26, đã bỏ 2026-10-27): Facebook/Threads tự chuyển thẻ + cuộn trang + bọc `JSON.parse` — chậm (Facebook
+~7 ảnh/phút vì mở từng trang ảnh), chiếm tab, phải để tab trên màn hình, chưa thử thật.
 
 Thử thật với chủ dự án (2026-10-26, đã đăng nhập): `GET /api/v1/users/web_profile_info/` trả **429** ngay lần đầu;
 `/api/v1/feed/user/…`, `/api/v1/clips/user/`, `highlights_tray` gọi từ tiện ích trả **200 kèm trang HTML** của web
@@ -90,11 +98,10 @@ bật hỏi 5 cái/lượt, cái nào câu trả lời thiếu thì hỏi lại 
   - `SocialJob`: nhịp gọi (`pace`), cửa sổ 70 yêu cầu / 10 phút, gửi UTD từng đợt ≤ 150 mục / ≤ 600 KB (tin native ≤ 1 MiB),
     ít nhất mỗi ~9 s một đợt khi đang nghỉ để biết người dùng có Dừng không. Bấm menu lần nữa khi đang chạy = Dừng.
   - Mọi yêu cầu chạy trong tab bằng `scripting.executeScript` (thế giới MAIN; trình duyệt không cho thì content script, Firefox
-    dùng `content.fetch` để mang nguồn của trang). Facebook/Threads: `tabs.update` chuyển thẻ, chờ `complete`, xong thì trả
-    tab về trang ban đầu.
-- `social-harvest.js` (nạp vào trang lúc bấm, thế giới MAIN): bọc `JSON.parse` + đọc lại khối `data-sjs` có sẵn, gom
-  Facebook `Photo`/`Video`/bucket Tin, Instagram/Threads bài dạng REST; ảnh lớn nhất, ảnh nhỏ ~320 px; giữ thứ tự trong
-  trang; tối đa 25 000 mục. Không gửi gì, không đổi kết quả của trang. Chỉ nạp khi người dùng bấm (khác `fb-media.js`).
+    dùng `content.fetch` để mang nguồn của trang). Tab không chuyển trang.
+- `social-harvest.js` (nạp vào trang lúc bấm, thế giới MAIN): đọc câu trả lời GraphQL tiện ích vừa lấy (`read`), gom
+  Facebook `Photo`/`Video`/bucket Tin, Instagram/Threads bài dạng REST; ảnh lớn nhất, ảnh nhỏ ~320 px; giữ thứ tự; tối đa
+  25 000 mục. Không đụng dữ liệu của trang, không gửi gì. Chỉ nạp khi người dùng bấm (khác `fb-media.js`).
 - `background.js`: thêm 1 mục menu (chỉ hiện trên 4 tên miền, `documentUrlPatterns`) + 1 dòng điều phối + `importScripts`.
 - 7 khoá chữ mới × 16 ngôn ngữ (`menuSocial`, `socialCollecting`, `socialStop`, `socialHint`, `socialDone`,
   `socialUnsupported`, `socialFailed`).
@@ -147,16 +154,17 @@ không bao giờ hiện chữ do trang gửi.
 - **Cần đăng nhập** trên trình duyệt cho Tin, tin nổi bật, tài khoản riêng tư, phần lớn Facebook. Tiện ích không đăng nhập hộ.
 - **Instagram đổi `doc_id`**: phần đó báo "danh sách có thể chưa đủ", các phần khác vẫn lấy; cập nhật `SOCIAL_IG_QUERIES`.
 - **Bị khoá tạm vì gọi nhiều**: Instagram 429 / `checkpoint_required` / `challenge_required` / "Please wait a few minutes";
-  Facebook `CometErrorRoot.react`. UTD dừng ngay, không thử lại; nhịp mặc định chậm (2–4 s, ≤ 70/10 phút) — hồ sơ rất lớn
-  sẽ lâu (Facebook: mỗi ảnh lưới nhỏ thêm 1 yêu cầu ⇒ ~7 ảnh/phút). Có thể bấm Dừng bất cứ lúc nào và tải phần đã có.
-- **Facebook / Threads đổi giao diện**: tên thẻ (`photos_by`, `reels`, `media/photos`) hoặc hình dạng JSON đổi ⇒ thiếu mục
-  hoặc báo `social.changed`. Phụ thuộc ít nhất có thể (không `doc_id`), nhưng chưa thử thật — chủ dự án thử trên Chrome.
-- Ảnh lưới Facebook có thể đã đủ lớn (khi đó không mở trang ảnh). Mẫu `"image":{"uri":…,"width":…,"height":…}` của trang
-  ảnh lấy theo gallery-dl; trang đổi thì giữ ảnh lưới.
-- **Tab phải mở và đang hiện** khi thu Facebook/Threads (trang chỉ nạp thêm khi thấy cuộn). Nhãn trên trang nhắc việc này.
+  Facebook `1675004`. UTD dừng ngay, không thử lại; nhịp 1–2 s, ≤ 200/10 phút. Video fanpage, ảnh/video nhóm cần thêm 1
+  yêu cầu mỗi mục ⇒ ~20–40 mục/phút; ảnh hồ sơ, reels, bài Instagram/Threads 8–50 mục mỗi yêu cầu. Có thể bấm Dừng bất cứ
+  lúc nào và tải phần đã có.
+- **Meta đổi `doc_id` / cờ**: phần đó báo "danh sách có thể chưa đủ" (`social.partial`) hoặc `social.changed`; cập nhật
+  bảng mã theo bản Social Bulk Downloader mới. Facebook, Threads chưa thử thật — chủ dự án thử trên Chrome.
+- Mã thẻ Ảnh / Reels Facebook tìm theo `tab_key` trong `profile_header_renderer` (như tiện ích mẫu, không có đường dẫn
+  cố định); không thấy thì bỏ thẻ đó. `viewer_image` là ảnh xem (tiện ích mẫu tải thẳng ảnh này).
+- Tab chỉ cần **mở** (không cần đang hiện) tới khi xong.
 - Link CDN hết hạn sau vài ngày (`oe=`): nên tải ngay sau khi thu.
-- Firefox < 128 không có thế giới MAIN: Instagram vẫn chạy; Facebook/Threads chỉ thấy phần nhúng sẵn của trang đầu.
-- Tin Facebook: lấy cả bucket qua JSON của trang Tin; nếu Facebook chỉ nạp thẻ khi xem tới thì chỉ được các thẻ đã nạp.
+- Firefox < 128 không có thế giới MAIN: chạy bằng content script (`content.fetch` mang nguồn của trang); không đọc được
+  `require(...)` của trang ⇒ lấy `fb_dtsg` / `lsd` trong dữ liệu nhúng.
 
 ## Bài thử
 
@@ -166,8 +174,10 @@ không bao giờ hiện chữ do trang gửi.
   UTD lên trước), tên file theo ngày UTC, `ipc` (route), `native_host` (bản 2, không chuyển cookie).
 - Playwright `e2e/social-bulk.spec.ts` (9): Instagram đủ 4 loại qua API giả (đúng header, CSRF từ cookie trang, carousel,
   reel người khác bị bỏ, tin nổi bật có tên); UTD bỏ nhóm ⇒ không gọi + 429 ⇒ dừng giữ phần đã có; UTD Dừng ⇒ thôi gọi;
-  trang không hỗ trợ + bảng `socialPlan`; Threads (nhúng + cuộn, bỏ bài người khác); Facebook đủ thẻ (ảnh lưới nhỏ ⇒ bản gốc,
-  video có/không link, reels, tin nổi bật, bucket lạ bị bỏ, tab trở về); Facebook bị chặn tạm; hộp S-61 (chip, Ảnh/Video,
+  trang không hỗ trợ + bảng `socialPlan`; Threads (hovercard + 2 trang bài, đúng doc_id/cờ/header, bỏ bài người khác);
+  Facebook hồ sơ (Tin, tin nổi bật có tên, ảnh 2 trang, reels nhiều dòng JSON + `for (;;);`, video fanpage có/không link,
+  bucket lạ bị bỏ, đúng doc_id/biến/av/fb_dtsg/lsd, không chuyển trang); nhóm (ảnh qua `prefetch_uris_v2`, `1675004` ⇒
+  dừng, giữ phần đã có); hộp S-61 (chip, Ảnh/Video,
   báo tiện ích, Dừng, gửi đúng id, đóng ⇒ `social_close`); S-63 (lỗi rõ, không Thử lại, axe).
 
 ## Phụ lục — ghi chép nghiên cứu chi tiết

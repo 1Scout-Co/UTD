@@ -48,7 +48,7 @@
   "menuSocial": { "message": "UTDで一括ダウンロード" },
   "socialCollecting": { "message": "写真/動画を収集中: $COUNT$", "placeholders": { "count": { "content": "$1" } } },
   "socialStop": { "message": "停止" },
-  "socialHint": { "message": "このタブは開いたままにしてください。ページが自動で切り替わることがあります。" },
+  "socialHint": { "message": "完了するまで、このタブは開いたままにしてください。" },
   "socialDone": { "message": "$COUNT$ 件の写真/動画をUTDに送信しました", "placeholders": { "count": { "content": "$1" } } },
   "socialUnsupported": { "message": "プロフィール、ページ、グループ、またはストーリーを開いてからもう一度お試しください。" },
   "socialFailed": { "message": "このページでは写真/動画を収集できませんでした。" },

@@ -398,16 +398,16 @@ test('trang không hỗ trợ (bài viết lẻ, trang chủ) ⇒ báo trên tra
       'https://www.instagram.com/explore/',
     ].map((url) => {
       const found = plan(url)
-      return found ? { platform: found.platform, kind: found.kind ?? null, photos: found.photos ?? null, reels: found.reels ?? null, base: found.base ?? null } : null
+      return found ? { platform: found.platform, kind: found.kind ?? null, id: found.id, base: found.base ?? null } : null
     })
   })
   expect(plans).toEqual([
-    { platform: 'facebook', kind: 'profile', photos: 'https://www.facebook.com/trangthu/photos_by', reels: 'https://www.facebook.com/trangthu/reels', base: 'https://www.facebook.com/trangthu' },
-    { platform: 'facebook', kind: 'profile', photos: 'https://www.facebook.com/profile.php?id=1000123&sk=photos_by', reels: 'https://www.facebook.com/profile.php?id=1000123&sk=reels_tab', base: 'https://www.facebook.com/profile.php?id=1000123' },
-    { platform: 'facebook', kind: 'group', photos: 'https://www.facebook.com/groups/12345/media/photos', reels: null, base: 'https://www.facebook.com/groups/12345' },
-    { platform: 'facebook', kind: 'story', photos: null, reels: null, base: null },
+    { platform: 'facebook', kind: 'profile', id: 'trangthu', base: 'https://www.facebook.com/trangthu' },
+    { platform: 'facebook', kind: 'profile', id: '1000123', base: 'https://www.facebook.com/profile.php?id=1000123' },
+    { platform: 'facebook', kind: 'group', id: 'groups.12345', base: 'https://www.facebook.com/groups/12345' },
+    { platform: 'facebook', kind: 'story', id: '555', base: null },
     null,
-    { platform: 'threads', kind: null, photos: null, reels: null, base: 'https://www.threads.net/@zuck' },
+    { platform: 'threads', kind: null, id: 'zuck', base: 'https://www.threads.net/@zuck' },
     null,
   ])
 })
@@ -482,167 +482,223 @@ test('tiện ích: "Tải bằng UTD" lên chính trang hồ sơ ⇒ nhắc Tả
   expect(await sent(page)).toEqual([])
 })
 
-// --- Threads: dữ liệu nhúng trong trang + tự cuộn (trang tự nạp thêm bằng GraphQL) ---
+// --- Threads: truy vấn GraphQL của trang (`/graphql/query` của threads.com, doc_id như Social Bulk Downloader) ---
 
 const threadPost = (pk: string, username: string, extra: Record<string, unknown>) => ({
   thread_items: [{ post: { pk, id: `${pk}_1`, code: `C${pk}`, taken_at: 1785000000, user: { username }, caption: { text: `Bài ${pk}` }, ...extra } }],
 })
 
-test('Threads: bài của chính người đó (ảnh, carousel ảnh + video), tự cuộn tới hết; bài đăng lại của người khác bị bỏ', async ({ page }) => {
-  const first = {
-    require: [['ScheduledServerJS', 'handle', null, [{ __bbox: { result: { data: { mediaData: { edges: [
-      { node: threadPost('501', 'zuck', { image_versions2: igImage('t501') }) },
-      { node: threadPost('502', 'someone', { image_versions2: igImage('t502') }) },
-    ] } } } } }]]],
-  }
-  const next = { data: { mediaData: { edges: [{ node: threadPost('503', 'zuck', { carousel_media: [{ pk: '503001', image_versions2: igImage('t503a') }, { pk: '503002', video_versions: igVideo('t503b') }] }) }] } } }
-  await page.route('https://www.threads.com/**', (route) =>
-    route.fulfill({
-      contentType: 'text/html; charset=utf-8',
-      body: `<!doctype html><html><head><meta property="og:title" content="Mark Zuckerberg (@zuck) • Threads"></head><body style="height:3000px">
-        <script type="application/json" data-sjs>${JSON.stringify(first)}</script></body></html>`,
-    }),
-  )
+test('Threads: hồ sơ qua hovercard, bài viết từng trang 10 bài (ảnh, carousel ảnh + video); bài của người khác bị bỏ; không cuộn, không chuyển trang', async ({ page, context }) => {
+  await context.addCookies([{ name: 'csrftoken', value: 'th-tok', domain: '.threads.com', path: '/', secure: true }])
+  const requests: IgRequest[] = []
+  await page.route('https://www.threads.com/**', (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (url.pathname !== '/graphql/query') {
+      return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><html><body><p>zuck</p><script type="application/json">${IG_TOKENS}</script></body></html>` })
+    }
+    const body = new URLSearchParams(request.postData() ?? '')
+    const name = request.headers()['x-fb-friendly-name'] ?? ''
+    const variables = JSON.parse(body.get('variables') ?? '{}') as Record<string, unknown>
+    requests.push({ path: url.pathname, name, doc: body.get('doc_id') ?? '', variables, body, headers: request.headers() })
+    const json = (value: unknown) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(value) })
+    if (name === 'BarcelonaUsernameHovercardImplDirectQuery') {
+      return json({ data: { user: { id: '314216', username: 'zuck', full_name: 'Mark Zuckerberg', follower_count: 5000000, hd_profile_pic_versions: [{ url: `${IG_CDN}/v/zuck_320.jpg` }, { url: `${IG_CDN}/v/zuck_1080.jpg` }] } } })
+    }
+    if (name === 'BarcelonaProfileThreadsTabRefetchableDirectQuery') {
+      if (!variables.after) {
+        return json({ data: { mediaData: {
+          edges: [{ node: threadPost('501', 'zuck', { image_versions2: igImage('t501') }) }, { node: threadPost('502', 'someone', { image_versions2: igImage('t502') }) }],
+          page_info: { has_next_page: true, end_cursor: 'th-2' },
+        } } })
+      }
+      return json({ data: { mediaData: {
+        edges: [{ node: threadPost('503', 'zuck', { carousel_media: [{ pk: '503001', image_versions2: igImage('t503a') }, { pk: '503002', video_versions: igVideo('t503b') }] }) }],
+        page_info: { has_next_page: false, end_cursor: null },
+      } } })
+    }
+    return json({ errors: [{ message: 'unknown doc_id' }], data: null })
+  })
   await loadExtension(page, 'https://www.threads.com/@zuck')
-  // Trang tự nạp thêm khi cuộn tới cuối (một lần): câu trả lời GraphQL đi qua JSON.parse như trang thật.
-  await page.evaluate((text) => {
-    let loaded = false
-    window.scrollTo = (() => {
-      if (!loaded) JSON.parse(text)
-      loaded = true
-    }) as typeof window.scrollTo
-  }, JSON.stringify(next))
   const messages = await runBulk(page)
-  expect(messages[0].social.head).toMatchObject({ id: 'zuck', name: 'Mark Zuckerberg (@zuck)', handle: 'zuck' })
+  expect(messages[0].social.head).toEqual({ id: '314216', name: 'Mark Zuckerberg', handle: 'zuck', avatar: `${IG_CDN}/v/zuck_1080.jpg`, followers: 5000000, private: false })
   const entries = entriesOf(messages)
   expect(entries.map((entry) => [entry.source, entry.id, entry.kind])).toEqual([
     ['posts', '501', 'photo'],
     ['posts', '503001', 'photo'],
     ['posts', '503002', 'video'],
   ])
-  expect(entries[0].page).toBe('https://www.threads.com/@zuck/post/C501')
+  expect(entries[0]).toMatchObject({ page: 'https://www.threads.com/@zuck/post/C501', url: `${IG_CDN}/v/t51/t501_1080.jpg?stp=dst-jpg&oh=1` })
   expect(messages.at(-1)?.social.done).toEqual({ complete: true, error: null })
-  const executed = await page.evaluate(() => (window as unknown as { __bg: { executed: { world: string | null; file?: string }[] } }).__bg.executed)
-  expect(executed).toContainEqual({ world: 'MAIN', file: 'social-harvest.js' })
+  expect(requests.map((request) => [request.name, request.doc])).toEqual([
+    ['BarcelonaUsernameHovercardImplDirectQuery', '25954331127572347'],
+    ['BarcelonaProfileThreadsTabRefetchableDirectQuery', '33544334045182488'],
+    ['BarcelonaProfileThreadsTabRefetchableDirectQuery', '33544334045182488'],
+  ])
+  expect(requests[0].variables).toMatchObject({ username: 'zuck', __relay_internal__pv__BarcelonaIsLoggedInrelayprovider: true })
+  expect(requests[1].variables).toMatchObject({ userID: '314216', after: null, first: 10, __relay_internal__pv__IsTagIndicatorEnabledrelayprovider: true })
+  expect(requests[2].variables).toMatchObject({ userID: '314216', after: 'th-2' })
+  expect(requests[0].headers).toMatchObject({ 'x-ig-app-id': '238260118697367', 'x-csrftoken': 'th-tok' })
+  // Không cuộn, không chuyển trang.
+  expect(page.url()).toBe('https://www.threads.com/@zuck')
 })
 
-// --- Facebook: lần lượt thẻ Ảnh / Video / Reels / tin nổi bật, đọc JSON trang nạp ---
+// --- Facebook: truy vấn GraphQL của trang (`/api/graphql/`, doc_id như Social Bulk Downloader) ---
 
-const fbPhoto = (id: string, width: number) => ({
-  __typename: 'Photo',
+const FB_TOKENS = '{"define":[["DTSGInitialData",[],{"token":"dtsg-fb"},258],["LSD",[],{"token":"lsd-fb"},323]]}'
+const fbVideo = (id: string) => ({
+  __typename: 'Video',
   id,
-  image: { uri: `${FB_CDN}/v/t39/${id}_${width}.jpg?oh=1`, width, height: width },
-  viewer_image: { width: 2048, height: 2048 },
-  created_time: 1700000000,
-  url: `https://www.facebook.com/photo/?fbid=${id}&set=a.1`,
+  videoDeliveryResponseFragment: { videoDeliveryResponseResult: { progressive_urls: [
+    { progressive_url: `${FB_CDN}/o1/${id}-sd.mp4`, failure_reason: null, metadata: { quality: 'SD' } },
+    { progressive_url: `${FB_CDN}/o1/${id}-hd.mp4`, failure_reason: null, metadata: { quality: 'HD' } },
+  ] } },
 })
+const fbStoryPhoto = (id: string) => ({ __typename: 'Photo', id, image: { uri: `${FB_CDN}/s/${id}.jpg`, width: 1080, height: 1920 } })
+const fbBucket = (id: string, media: unknown[]) => ({
+  id,
+  story_bucket_owner: { name: 'Trang Thử' },
+  unified_stories_with_notes: { edges: media.map((item, index) => ({ node: { id: `card-${id}-${index}`, creation_time: 1720000000, attachments: [{ media: item }] } })) },
+})
+type FbRequest = { name: string; doc: string; variables: Record<string, unknown>; body: URLSearchParams; headers: Record<string, string> }
 
-test('Facebook: ảnh (lưới nhỏ ⇒ mở trang ảnh lấy bản gốc), video (có link / chỉ có trang), reels, tin nổi bật; tab tự chuyển rồi trở về', async ({ page }) => {
-  const tabs: Record<string, unknown[]> = {
-    '/trangthu/photos_by': [{ data: { node: { pageItems: { edges: [{ node: fbPhoto('1001', 206) }, { node: { __typename: 'Video', id: '2999', playable_url: `${FB_CDN}/x.mp4` } }] } } } }, { data: { page_info: {}, edges: [{ node: fbPhoto('1002', 1080) }] } }],
-    '/trangthu/videos': [
-      {
-        data: {
-          edges: [
-            {
-              node: {
-                __typename: 'Video', id: '2001', publish_time: 1710000000, title: { text: 'Clip 1' },
-                videoDeliveryResponseFragment: { videoDeliveryResponseResult: { progressive_urls: [{ progressive_url: `${FB_CDN}/o1/2001-sd.mp4`, failure_reason: null, metadata: { quality: 'SD' } }, { progressive_url: `${FB_CDN}/o1/2001-hd.mp4`, failure_reason: null, metadata: { quality: 'HD' } }] } },
-              },
-            },
-            { node: { __typename: 'Video', id: '2002', preferred_thumbnail: { image: { uri: `${FB_CDN}/t/2002.jpg` } } } },
-          ],
-        },
-      },
-    ],
-    '/trangthu/reels': [{ data: { node: { short_form_video_context: { video_owner: { __typename: 'User', id: '100044', name: 'Trang Thử' }, playback_video: { __typename: 'Video', id: '3001', length_in_second: 12.5, playable_url_quality_hd: `${FB_CDN}/o1/3001.mp4` } } } } }],
-    '/stories/555/UzpfSVNDOjE=/': [
-      {
-        data: {
-          bucket: { id: '555', story_bucket_owner: { name: 'Trang Thử' }, unified_stories: { edges: [{ node: { id: 'UzpfSVNDOjE=', creation_time: 1720000000, attachments: [{ media: { __typename: 'Photo', id: '4001', image: { uri: `${FB_CDN}/s/4001.jpg`, width: 1080, height: 1920 } } }] } }] } },
-          // Bucket của người khác tải sẵn cạnh đó: không lẫn vào.
-          other: { id: '777', unified_stories: { edges: [{ node: { id: 'x', attachments: [{ media: { __typename: 'Photo', id: '4999', image: { uri: `${FB_CDN}/s/4999.jpg`, width: 1080, height: 1920 } } }] } }] } },
-        },
-      },
-    ],
-  }
-  const photoPages: string[] = []
-  await page.route('https://www.facebook.com/**', (route) => {
-    const url = new URL(route.request().url())
-    if (url.pathname === '/photo/') {
-      const id = url.searchParams.get('fbid') ?? ''
-      photoPages.push(id)
-      const full = JSON.stringify(`${FB_CDN}/v/t39/${id}_full.jpg?oh=2`).slice(1, -1).replace(/\//g, '\\/')
-      return route.fulfill({
-        contentType: 'text/html; charset=utf-8',
-        body: `<script type="application/json">{"x":{"__isNode":"Photo","id":"${id}","image":{"uri":"${full}","width":2048,"height":2048},"owner":{"profile_picture":{"image":{"uri":"${FB_CDN}/p.jpg","width":40,"height":40}}}}}</script>`,
-      })
+/** Facebook giả: trang hồ sơ / nhóm (HTML có `profile_header_renderer`) + `/api/graphql/` theo tên truy vấn. */
+function fbRoutes(page: Page, header: unknown, answer: (name: string, variables: Record<string, unknown>) => string) {
+  const requests: FbRequest[] = []
+  const fetched: string[] = []
+  page.route('https://www.facebook.com/**', (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (url.pathname !== '/api/graphql/') {
+      // Mở trang bằng trình duyệt: chưa có dữ liệu hồ sơ (như đã chuyển trang trong Facebook); tiện ích tự tải HTML.
+      const document = request.resourceType() === 'document'
+      if (!document) fetched.push(url.pathname)
+      const data = document ? '' : `<script type="application/json">${JSON.stringify({ require: [['x', { profile_header_renderer: header }]] })}</script>`
+      return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><html><head><title>Trang Thử | Facebook</title></head><body><script type="application/json">${FB_TOKENS}</script>${data}</body></html>` })
     }
-    return route.fulfill({
-      contentType: 'text/html; charset=utf-8',
-      body: `<!doctype html><html><head><title>(3) Trang Thử | Facebook</title></head><body style="height:3000px">
-        <a href="/stories/555/UzpfSVNDOjE=/?source=profile_highlight" aria-label="Đà Lạt">Đà Lạt</a></body></html>`,
-    })
+    const body = new URLSearchParams(request.postData() ?? '')
+    const name = request.headers()['x-fb-friendly-name'] ?? ''
+    const variables = JSON.parse(body.get('variables') ?? '{}') as Record<string, unknown>
+    requests.push({ name, doc: body.get('doc_id') ?? '', variables, body, headers: request.headers() })
+    return route.fulfill({ contentType: 'text/html; charset=utf-8', body: answer(name, variables) })
+  })
+  return { requests, fetched }
+}
+
+test('Facebook: Tin, tin nổi bật, ảnh, reels, video fanpage qua GraphQL của trang (đúng doc_id, mã trang, tài khoản); không cuộn, không chuyển trang', async ({ page, context }) => {
+  await context.addCookies([{ name: 'c_user', value: '100099', domain: '.facebook.com', path: '/', secure: true }])
+  const header = {
+    user: {
+      id: '100044', name: 'Trang Thử', url: 'https://www.facebook.com/trangthu', profilePicLarge: { uri: `${FB_CDN}/p/avatar.jpg` },
+      delegate_page: { id: '200055' }, story_bucket: { nodes: [{ id: '555' }] },
+      profile_tabs: { tabs: [{ tab_key: 'photos_by', id: 'cGhvdG9zX2J5' }, { tab_key: 'owner_reels', id: 'cmVlbHM=' }, { tab_key: 'about', id: 'YWJvdXQ=' }] },
+    },
+  }
+  const highlightId = Buffer.from('profile_tile_view:100044:featured_highlights:intro_featured_highlights_content:hscroll_cards:profile_timeline:3:7').toString('base64')
+  const { requests, fetched } = fbRoutes(page, header, (name, variables) => {
+    const json = (value: unknown) => JSON.stringify(value)
+    if (name === 'StoriesSuspenseContentPaneRootWithEntryPointQuery') {
+      if (variables.bucketID === '555') {
+        // Bucket Tin kế tiếp (của người khác) tải sẵn cạnh đó: không lẫn vào.
+        return json({ data: { bucket: fbBucket('555', [fbStoryPhoto('4001')]), next: fbBucket('777', [fbStoryPhoto('4999')]) } })
+      }
+      return json({ data: { bucket: fbBucket(String(variables.bucketID), [fbVideo('4101')]) } })
+    }
+    if (name === 'ProfileCometFeaturedHighlightsViewPaginationQuery') {
+      return json({ data: { node: { profile_tile_items: { edges: [{ node: { node: { id: '666', title: { text: 'Đà Lạt' } } } }], page_info: { has_next_page: false, end_cursor: null } } } } })
+    }
+    if (name === 'ProfileCometAppCollectionPhotosRendererPaginationQuery') {
+      if (!variables.cursor) {
+        const photo = { __typename: 'Photo', id: '1001', image: { uri: `${FB_CDN}/v/1001_206.jpg`, width: 206, height: 206 }, viewer_image: { uri: `${FB_CDN}/v/1001_2048.jpg`, width: 2048, height: 2048 }, url: 'https://www.facebook.com/photo/?fbid=1001&set=a.1' }
+        return json({ data: { node: { pageItems: { edges: [{ node: { node: photo } }], page_info: { has_next_page: true, end_cursor: 'ph-2' } } } } })
+      }
+      // Không có `__typename`: vẫn đọc theo `viewer_image` như tiện ích mẫu.
+      return json({ data: { node: { pageItems: { edges: [{ node: { node: { id: '1002', viewer_image: { uri: `${FB_CDN}/v/1002_1440.jpg`, width: 1440, height: 1080 } } } }], page_info: { has_next_page: false } } } } })
+    }
+    if (name === 'ProfileCometAppCollectionReelsRendererPaginationQuery') {
+      // Nhiều dòng JSON (dòng sau có `label`), mở đầu bằng `for (;;);`.
+      const first = { data: { node: { aggregated_fb_shorts: { edges: [{ profile_reel_node: { node: { creation_time: 1730000000, message: { text: 'Reel\n1' }, attachments: [{ media: fbVideo('3001') }] } } }], page_info: { has_next_page: false } } } } }
+      return `for (;;);${json(first)}\n${json({ label: 'FBUnifiedVideoFeedbackBar_feedback', data: { feedback: { total_comment_count: 3 } } })}`
+    }
+    if (name === 'PagesCometChannelTabAllVideosCardImplPaginationQuery') {
+      return json({ data: { node: { all_videos: { edges: [{ node: { id: '2001' } }, { node: { id: '2002' } }], page_info: { has_next_page: false } } } } })
+    }
+    if (name === 'FBUnifiedVideoRootWithEntrypointQuery') {
+      const id = String(variables.initial_node_id)
+      const video = id === '2001' ? fbVideo('2001') : { __typename: 'Video', id }
+      return json({ data: { video: { creation_story: { creation_time: 1710000000, message: { text: `Clip ${id}` }, attachments: [{ media: video }] } } } })
+    }
+    return json({ errors: [{ message: 'GraphQL document with ID was not found', code: 1675012 }], data: null })
   })
   await loadExtension(page, 'https://www.facebook.com/trangthu')
-  // Chuyển thẻ: trang "mới" nạp phần đầu; cuộn: nạp tiếp từng phần còn lại của thẻ đó.
-  await page.evaluate((data) => {
-    const pending: Record<string, string[]> = {}
-    const host = window as unknown as Record<string, unknown>
-    host.__navigate = (url: string) => {
-      const target = new URL(url)
-      history.pushState({}, '', target.pathname + target.search)
-      const key = decodeURIComponent(target.pathname)
-      pending[key] = (data[key] ?? []).map((block) => JSON.stringify(block))
-      const head = pending[key].shift()
-      if (head) setTimeout(() => JSON.parse(head), 5)
-    }
-    window.scrollTo = (() => {
-      const next = pending[decodeURIComponent(location.pathname)]?.shift()
-      if (next) JSON.parse(next)
-    }) as typeof window.scrollTo
-  }, tabs)
   const messages = await runBulk(page)
 
-  expect(messages[0].social.head).toMatchObject({ id: 'trangthu', name: 'Trang Thử' })
+  expect(messages[0].social.head).toMatchObject({ id: 'trangthu', name: 'Trang Thử', avatar: `${FB_CDN}/p/avatar.jpg` })
   const entries = entriesOf(messages)
   expect(entries.map((entry) => [entry.source, entry.id, entry.kind])).toEqual([
+    ['stories', '4001', 'photo'],
+    ['highlights', '4101', 'video'],
     ['photos', '1001', 'photo'],
     ['photos', '1002', 'photo'],
+    ['reels', '3001', 'video'],
     ['videos', '2001', 'video'],
     ['videos', '2002', 'video'],
-    ['reels', '3001', 'video'],
-    ['highlights', '4001', 'photo'],
   ])
   const byId = Object.fromEntries(entries.map((entry) => [entry.id, entry]))
-  expect(photoPages, 'chỉ mở trang ảnh cho ảnh lưới nhỏ').toEqual(['1001'])
-  expect(byId['1001'].url).toBe(`${FB_CDN}/v/t39/1001_full.jpg?oh=2`)
-  expect(byId['1002'].url).toBe(`${FB_CDN}/v/t39/1002_1080.jpg?oh=1`)
-  expect(byId['2001'].url).toBe(`${FB_CDN}/o1/2001-hd.mp4`)
+  expect(byId['4101']).toMatchObject({ album: 'Đà Lạt', url: `${FB_CDN}/o1/4101-hd.mp4` })
+  expect(byId['1001'].url).toBe(`${FB_CDN}/v/1001_2048.jpg`)
+  expect(byId['1002']).toMatchObject({ url: `${FB_CDN}/v/1002_1440.jpg`, page: 'https://www.facebook.com/photo/?fbid=1002' })
+  expect(byId['3001']).toMatchObject({ url: `${FB_CDN}/o1/3001-hd.mp4`, timestamp: 1730000000, title: 'Reel 1' })
+  expect(byId['2001']).toMatchObject({ url: `${FB_CDN}/o1/2001-hd.mp4`, timestamp: 1710000000, title: 'Clip 2001' })
   expect(byId['2002']).toMatchObject({ url: null, page: 'https://www.facebook.com/watch/?v=2002' })
-  expect(byId['4001']).toMatchObject({ album: 'Đà Lạt', url: `${FB_CDN}/s/4001.jpg` })
   expect(messages.at(-1)?.social.done).toEqual({ complete: true, error: null })
+
+  expect(fetched, 'dữ liệu hồ sơ không có trong tab ⇒ tải HTML trang hồ sơ một lần').toEqual(['/trangthu'])
+  expect(requests.map((request) => [request.name, request.doc])).toEqual([
+    ['StoriesSuspenseContentPaneRootWithEntryPointQuery', '25170215872629838'],
+    ['ProfileCometFeaturedHighlightsViewPaginationQuery', '29865722229740235'],
+    ['StoriesSuspenseContentPaneRootWithEntryPointQuery', '25170215872629838'],
+    ['ProfileCometAppCollectionPhotosRendererPaginationQuery', '24168515422830962'],
+    ['ProfileCometAppCollectionPhotosRendererPaginationQuery', '24168515422830962'],
+    ['ProfileCometAppCollectionReelsRendererPaginationQuery', '25443625298595118'],
+    ['PagesCometChannelTabAllVideosCardImplPaginationQuery', '26070921649175153'],
+    ['FBUnifiedVideoRootWithEntrypointQuery', '25333743559590947'],
+    ['FBUnifiedVideoRootWithEntrypointQuery', '25333743559590947'],
+  ])
+  expect(requests[0].variables).toEqual({ bucketID: '555', focusCommentID: null, scale: 1 })
+  expect(requests[1].variables).toEqual({ scale: 1, id: highlightId, count: 9, cursor: '' })
+  expect(requests[2].variables).toMatchObject({ bucketID: '666' })
+  expect(requests[3].variables).toEqual({ scale: 1, id: 'cGhvdG9zX2J5', count: 8, cursor: '' })
+  expect(requests[4].variables).toMatchObject({ cursor: 'ph-2' })
+  expect(requests[5].variables).toMatchObject({ id: 'cmVlbHM=', count: 10, cursor: '' })
+  expect(requests[6].variables).toMatchObject({ pageID: '200055', id: '200055', count: 6 })
+  expect(requests[6].variables).not.toHaveProperty('cursor')
+  expect(requests[7].variables).toMatchObject({ initial_node_id: '2001', count: 1 })
+  // Như web Facebook: tài khoản (cookie `c_user`), mã fb_dtsg / lsd của trang, tên truy vấn.
+  expect([requests[0].body.get('av'), requests[0].body.get('__user'), requests[0].body.get('fb_dtsg'), requests[0].body.get('lsd'), requests[0].body.get('__a'), requests[0].body.get('__comet_req')]).toEqual(['100099', '100099', 'dtsg-fb', 'lsd-fb', '1', '15'])
+  expect(requests[0].headers).toMatchObject({ 'x-fb-friendly-name': 'StoriesSuspenseContentPaneRootWithEntryPointQuery', 'x-fb-lsd': 'lsd-fb' })
   expect(page.url()).toBe('https://www.facebook.com/trangthu')
 })
 
-test('Facebook: trang ảnh báo bị chặn tạm (CometErrorRoot) ⇒ dừng, báo mã social.rate_limited', async ({ page }) => {
-  await page.route('https://www.facebook.com/**', (route) => {
-    const url = new URL(route.request().url())
-    if (url.pathname === '/photo/') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<script>{"__dr":"CometErrorRoot.react"}</script>' })
-    return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>Nhóm Ảnh | Facebook</title><body></body>' })
+test('Facebook nhóm: ảnh chỉ có mã ⇒ hỏi trang ảnh lấy bản lớn; bị chặn tạm (1675004) ⇒ dừng, báo mã, giữ phần đã có', async ({ page }) => {
+  const header = { group: { id: '12345', name: 'Nhóm Ảnh', url: 'https://www.facebook.com/groups/12345/' } }
+  const { requests } = fbRoutes(page, header, (name, variables) => {
+    if (name === 'GroupsCometMediaPhotosTabGridQuery') {
+      return JSON.stringify({ data: { node: { group_mediaset: { media: { edges: [{ node: { id: '5001' } }, { node: { id: '5002' } }], page_info: { has_next_page: false } } } } } })
+    }
+    if (name === 'CometPhotoRootContentQuery' && variables.nodeID === '5001') {
+      const uri = JSON.stringify(`${FB_CDN}/v/5001_full.jpg?oh=2`).slice(1, -1).replace(/\//g, '\\/')
+      return `{"data":{"currMedia":{"id":"5001","prefetch_uris_v2":[{"uri":"${uri}"}]}}}`
+    }
+    return JSON.stringify({ errors: [{ code: 1675004, summary: 'Rate limit exceeded', message: 'Rate limit exceeded' }], data: null })
   })
   await loadExtension(page, 'https://www.facebook.com/groups/12345/')
-  await page.evaluate((block) => {
-    const host = window as unknown as Record<string, unknown>
-    host.__navigate = (url: string) => {
-      history.pushState({}, '', new URL(url).pathname)
-      if (location.pathname.endsWith('/media/photos')) setTimeout(() => JSON.parse(block), 5)
-    }
-    window.scrollTo = (() => undefined) as typeof window.scrollTo
-  }, JSON.stringify({ data: { edges: [{ node: fbPhoto('5001', 206) }] } }))
   const messages = await runBulk(page)
+  expect(messages[0].social.head).toMatchObject({ id: 'groups.12345', name: 'Nhóm Ảnh' })
+  expect(requests.map((request) => request.name)).toEqual(['GroupsCometMediaPhotosTabGridQuery', 'CometPhotoRootContentQuery', 'CometPhotoRootContentQuery'])
+  expect(requests[0].variables).toEqual({ count: 8, scale: 1, id: '12345', cursor: '' })
+  expect(entriesOf(messages).map((entry) => [entry.source, entry.id, entry.url])).toEqual([['photos', '5001', `${FB_CDN}/v/5001_full.jpg?oh=2`]])
   expect(messages.at(-1)?.social.done).toEqual({ complete: false, error: 'social.rate_limited' })
-  expect(entriesOf(messages)).toEqual([])
 })
 
 // --- App: hộp Tải cả kênh ở chế độ hàng loạt ---

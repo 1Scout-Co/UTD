@@ -1,13 +1,9 @@
-// Tải hàng loạt Facebook / Threads (notes/social-bulk.md): gom ảnh/video có trong dữ liệu JSON của trang trong lúc
-// tiện ích tự cuộn. Nền chạy file này trong thế giới của trang (MAIN) khi người dùng bấm "Tải hàng loạt bằng UTD".
-// Dữ liệu tới bằng JSON: khối `<script type="application/json" data-sjs>` lúc mở trang và câu trả lời `/api/graphql/`
-// khi trang nạp thêm — cả hai đều qua `JSON.parse` (như fb-media.js). Không phụ thuộc mã truy vấn (doc_id) hay đổi:
-// trang tự gọi bằng mã đang dùng, ở đây chỉ đọc theo. Không đổi kết quả, không gửi gì đi.
+// Tải hàng loạt Facebook / Instagram / Threads (notes/social-bulk.md): đọc ảnh/video trong câu trả lời GraphQL mà
+// social-bulk.js lấy ngay trong trang (`read`), giao cho nền (`take`). Nền nạp file này vào trang khi người dùng bấm
+// "Tải hàng loạt bằng UTD". Không đụng dữ liệu của trang, không gửi gì đi.
 ;(() => {
   const KEY = Symbol.for("utd.social-harvest")
   if (window[KEY]) return
-  // Lọc rẻ trước khi duyệt: chỉ chuỗi JSON có dữ liệu ảnh/video.
-  const MARKERS = /image_versions2|video_versions|"Photo"|"Video"|progressive_url|playable_url|unified_stories/
   const MAX_ITEMS = 25000
   const MAX_URL = 4096
   const CDN = /^https:\/\/[^/]*(fbcdn\.net|cdninstagram\.com|fbsbx\.com)\//i
@@ -113,8 +109,6 @@
       url: best.url,
       width: best.width,
       height: best.height,
-      // Kích thước thật của ảnh (ảnh trong lưới thường là ảnh thu nhỏ): nền mở trang ảnh để lấy bản gốc.
-      fullWidth: Number(node.viewer_image?.width) || Number(node.width) || 0,
       thumb: small.url,
       timestamp: seconds(node.created_time ?? node.publish_time ?? node.creation_story?.creation_time),
       title: text(node.message?.text ?? node.title?.text, 300),
@@ -212,65 +206,17 @@
     }
   }
 
-  const parse = JSON.parse
-  const wrapped = {
-    parse(raw, reviver) {
-      const value = parse.call(this, raw, reviver)
-      if (typeof raw === "string" && raw.length > 200 && MARKERS.test(raw)) {
-        setTimeout(() => {
-          try {
-            index(value)
-          } catch {
-            // Hỏng thì thôi, trang vẫn chạy như thường.
-          }
-        }, 0)
-      }
-      return value
-    },
-  }.parse
-  Object.defineProperty(wrapped, "toString", { value: () => parse.toString() })
-  JSON.parse = wrapped
-
-  /** Đọc các khối JSON có sẵn trong trang (dữ liệu lúc mở trang). */
-  function scan() {
-    for (const script of document.querySelectorAll('script[type="application/json"]')) {
-      const raw = script.textContent ?? ""
-      if (!MARKERS.test(raw)) continue
-      try {
-        index(parse(raw))
-      } catch {
-        // Khối hỏng: bỏ qua.
-      }
-    }
-  }
-  scan()
-
   Object.defineProperty(window, KEY, {
     value: Object.freeze({
-      /** Mục mới (hoặc vừa có link tốt hơn) từ lần gọi trước; `parsed` = số khối JSON đã đọc (trang còn nạp không). */
+      /** Mục mới (hoặc vừa có link tốt hơn) từ lần gọi trước; `parsed` = số câu trả lời đã đọc. */
       take() {
         const ids = [...fresh]
         fresh = new Set()
         return { items: ids.map((id) => ({ ...items.get(id) })), parsed, total: items.size }
       },
-      /** Đọc ngay một kết quả JSON tiện ích tự lấy (API Instagram). */
+      /** Đọc một câu trả lời JSON tiện ích vừa lấy. */
       read(value) {
         index(value)
-      },
-      /** Link Tin / tin nổi bật trên trang hồ sơ (vòng tròn ảnh): `{url, title}`. */
-      storyLinks() {
-        const seen = new Set()
-        const links = []
-        for (const anchor of document.querySelectorAll('a[href*="/stories/"]')) {
-          const url = new URL(anchor.href, location.href)
-          const match = /^\/stories\/(\d+)\/?/.exec(url.pathname)
-          if (url.hostname !== location.hostname || !match || seen.has(match[1])) continue
-          seen.add(match[1])
-          const title = text(anchor.getAttribute("aria-label") ?? anchor.textContent, 100)
-          links.push({ url: url.href, bucket: match[1], title, highlight: /highlight/i.test(url.search) })
-          if (links.length >= 100) break
-        }
-        return links
       },
     }),
   })
