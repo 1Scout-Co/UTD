@@ -158,10 +158,12 @@
   /**
    * Link cho yt-dlp: link riêng của `video` nếu module của trang tìm được (tiktok.js: feed, lưới hồ sơ — địa chỉ trang
    * không phải link video), không thì trang đang xem (yt-dlp đọc được trang video quen và nhiều trang nhúng video).
+   * Trang có module mà module không tìm được (thẻ quảng cáo, ô không rõ bài) ⇒ `null`: địa chỉ trang là feed/lưới,
+   * gửi cho yt-dlp chỉ tốn một lượt rồi báo lỗi chung.
    */
   function analysisUrl(video) {
     for (const site of globalThis.__utdVideoSites ?? []) {
-      if (site.hosts.test(location.hostname)) return (video && site.videoUrl(video)) || location.href
+      if (site.hosts.test(location.hostname)) return video ? site.videoUrl(video) || null : location.href
     }
     return location.href
   }
@@ -320,8 +322,10 @@
       anchor = at
     }
     panel.hidden = false
-    render(header(null), status(t("videoReading"), null, true))
+    // Không có link của video này (`analysisUrl` null): báo luôn, không hỏi nền.
+    render(header(null), url ? status(t("videoReading"), null, true) : status(t("videoFailed"), "error"))
     if (!frame) frame = requestAnimationFrame(follow)
+    if (!url) return
     // Chỉ đọc trong trang khi bảng là của chính trang đang mở (không phải link chuột phải trỏ đi nơi khác).
     const here = url === location.href
     // Facebook (Tin, bảng tin) và Douyin (yt-dlp hỏng từ 2026-09; douyin.js đã đổi sang link của video) đọc trong

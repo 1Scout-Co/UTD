@@ -379,6 +379,25 @@ test('TikTok lưới video trên hồ sơ: đúng ô đang rê (cả bài ảnh)
   expect((await sent(page)).at(-1)?.url).toBe('https://www.tiktok.com/@_littledav_/video/7400000000000000003')
 })
 
+// Thẻ quảng cáo trong feed: tiktok.js không có link riêng của nó. Địa chỉ trang là feed, yt-dlp không đọc được ⇒ không
+// gửi gì, bảng báo gọn luôn (trước đây gửi link feed rồi báo lỗi chung sau một lượt yt-dlp vô ích).
+const TIKTOK_AD = `<!doctype html><html><head><title>TikTok - Make Your Day</title></head><body style="margin:0">
+<article data-e2e="recommend-list-item-container" style="padding:30px 40px">
+  <div data-e2e="ad-card">Quảng cáo</div>
+  <div id="xgwrapper-0-7412345678901234567"><video id="main" width="360" height="640" style="display:block;background:#000"></video></div>
+</article>
+</body></html>`
+
+test('TikTok thẻ quảng cáo trong feed: không gửi link trang feed cho yt-dlp, bảng báo gọn "không đọc được"', async ({ page }) => {
+  await openAt(page, 'https://www.tiktok.com/foryou', [media()], [], TIKTOK_AD, ['tiktok.js', 'content.js'])
+  await hover(page, '#main')
+  await pill(page).click()
+  await expect(panel(page).locator('.status.error')).toHaveText('UTD không đọc được video này.')
+  await expect(panel(page).locator('.row')).toHaveCount(0)
+  await page.waitForTimeout(500)
+  expect(await sent(page), 'không hỏi nền, không gửi link feed').toEqual([])
+})
+
 // Douyin (extensions/*/douyin.js + douyin-page.js; notes/douyin.md): yt-dlp không đọc được Douyin ⇒ bảng hỏi trong
 // trang trước, với link riêng `/video/<mã>` của đúng video (feed: `feed-active-video` mang `data-e2e-vid`; lưới hồ sơ:
 // link của ô; khung `?modal_id=`).

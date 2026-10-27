@@ -78,6 +78,21 @@ downloads_a_combined_only_page_from_the_analysed_stream_without_asking_yt_dlp}` 
 `probe_cache::remember` ⇒ chọn "Tốt nhất" ⇒ kế hoạch `Source::Cached`, một luồng `Single`, cookie `tt_chain_token` gửi
 đi, mirror `-0` không bị đụng, không gọi resolver).
 
+## Sửa sau review 2026-10-27
+
+- **Tiếp tục task đã tạm dừng phải mang cookie luồng.** `fast::resume_plan` đặt cookie của kế hoạch là `fast.cookies`
+  (chỉ hũ đăng nhập) nên cookie `tt_chain_token` của luồng (chỉ ở RAM, không vào journal — luật giữ nguyên) mất sau khi
+  tạm dừng: CDN trả 403, task đứng 0 B/s rồi `recover` hỏi yt-dlp (~12 s). Nay lượt tiếp tục hỏi
+  `Resolver::cached(job)`: luồng của lần "Phân tích" còn trong `probe_cache` ⇒ `cookies_for(fast.cookies, &streams)`
+  (link vẫn là của task con trong journal); không còn (mở lại app, cache đầy) ⇒ như cũ, đường `recover` lo.
+  Bài thử: `fast::tests::resume_keeps_the_stream_cookies_of_a_paused_combined_only_page` (tạm dừng giữa chừng một luồng
+  gộp TikTok có cổng cookie, tiếp tục ⇒ tải xong, không gọi yt-dlp, mọi yêu cầu mang cookie). `tiktok_json` của bài thử
+  nay khai `downloader_options.http_chunk_size` như yt-dlp để file chia nhiều yêu cầu.
+- **Thẻ quảng cáo trong feed không gửi link feed cho yt-dlp.** `tiktok.js` trả `null` cho thẻ quảng cáo nhưng
+  `analysisUrl` (content.js) rơi về `location.href` (link feed) ⇒ một lượt yt-dlp vô ích rồi bảng báo lỗi chung. Nay trang
+  có module mà module trả `null` ⇒ `analysisUrl` trả `null`, `open()` báo luôn "UTD không đọc được video này." (không
+  hỏi nền). Bài thử: `e2e/video-button.spec.ts` › "TikTok thẻ quảng cáo trong feed…".
+
 ## Phụ lục A — Các dự án khác làm thế nào (đọc mã, 2026-10-26)
 
 | Dự án (commit) | Cách lấy mã video | Chạy ở |

@@ -611,7 +611,8 @@ fn tiktok_json(server: &Server, page: &str) -> serde_json::Value {
             "height": height,
             "filesize_approx": 3200,
             "http_headers": { "User-Agent": "UTD-test-agent" },
-            "cookies": "ttwid=1%7Cx; Domain=127.0.0.1; Path=/; Expires=1824135169; tt_chain_token=\"abc\"; Domain=127.0.0.1; Path=/"
+            "downloader_options": { "http_chunk_size": CAP },
+            "cookies":"ttwid=1%7Cx; Domain=127.0.0.1; Path=/; Expires=1824135169; tt_chain_token=\"abc\"; Domain=127.0.0.1; Path=/"
         })
     };
     serde_json::json!({
@@ -725,6 +726,56 @@ async fn downloads_a_combined_only_page_from_the_analysed_stream_without_asking_
             .iter()
             .all(|hit| hit.cookie_text.as_deref() == Some("ttwid=1%7Cx; tt_chain_token=abc")),
         "{stream:?}"
+    );
+}
+
+/// TikTok: tạm dừng giữa chừng rồi tiếp tục. Cookie `tt_chain_token` của luồng chỉ ở RAM (không vào journal), nên lượt
+/// tiếp tục lấy lại từ lần "Phân tích" còn nhớ: không có thì CDN trả 403, task đứng 0 B/s rồi mới hỏi yt-dlp (~12 s).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_keeps_the_stream_cookies_of_a_paused_combined_only_page() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    server.delay_ms.store(400, Ordering::Relaxed);
+    let (mut task, job, _) = analysed_tiktok(&lab, &server, "best");
+    let resolver = Fixed {
+        resolved: lab.streams(&server, "/gone", "/gone"),
+        calls: AtomicUsize::new(0),
+    };
+    let cancel = CancellationToken::new();
+    let pausing = Recorder {
+        pause_on_bytes: Some(cancel.clone()),
+        ..Recorder::default()
+    };
+    let fast = lab.fast(&pausing, &resolver, cancel);
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_eq!(task.status, TaskStatus::Paused);
+    let children = lab.journal.list_children(&task.id).unwrap();
+    assert_eq!(children.len(), 1, "một file có cả hình lẫn tiếng");
+    let kept = children[0].downloaded_bytes;
+    assert!(
+        kept > 0 && kept < lab.combined.len() as u64,
+        "dừng giữa chừng: đã có {kept} / {} byte",
+        lab.combined.len()
+    );
+    // Yêu cầu của lượt trước có thể còn đang tới server: chờ rồi mới tiếp tục.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    server.delay_ms.store(0, Ordering::Relaxed);
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_finished(&lab, &task);
+    assert_eq!(
+        resolver.calls.load(Ordering::Relaxed),
+        0,
+        "tiếp tục bằng link đã lưu, không hỏi yt-dlp"
+    );
+    let stream = server.hits("/tt-c.mp4");
+    assert!(
+        stream
+            .iter()
+            .all(|hit| hit.cookie_text.as_deref() == Some("ttwid=1%7Cx; tt_chain_token=abc")),
+        "mọi yêu cầu, cả lượt tiếp tục, mang cookie luồng: {stream:?}"
     );
 }
 

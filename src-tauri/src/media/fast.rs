@@ -39,8 +39,9 @@ pub(super) type ResolveFuture<'a> =
 pub(super) trait Resolver: Send + Sync {
     fn resolve<'a>(&'a self, url: &'a str, selector: &'a str) -> ResolveFuture<'a>;
 
-    /// Luồng của lần "Phân tích" còn hạn, khỏi chạy yt-dlp lần hai. Chỉ lượt đầu (`start`) hỏi;
-    /// lấy link mới (`refresh`) luôn qua `resolve`.
+    /// Luồng của lần "Phân tích" còn hạn, khỏi chạy yt-dlp lần hai. Lượt đầu (`start`) hỏi để lấy link;
+    /// lượt tiếp tục (`resume_plan`) hỏi để lấy lại cookie luồng, link vẫn là của task con; lấy link mới
+    /// (`refresh`) luôn qua `resolve`.
     fn cached(&self, job: &MediaJob) -> Option<Resolved> {
         probe_cache::lookup(&job_urls(job), &job.selector, resolve::now_secs())
     }
@@ -356,13 +357,20 @@ async fn resume_plan(
     if stale {
         return refresh(fast, task, job, children).await;
     }
+    // Cookie luồng (TikTok `tt_chain_token`) chỉ ở RAM, không vào journal: lấy lại từ lần "Phân tích" nếu còn
+    // trong cache (cùng lần chạy app). Hết (mở lại app, cache đầy) thì chỉ còn cookie đăng nhập: CDN trả 403 ⇒
+    // `recover` hỏi yt-dlp link mới kèm cookie.
+    let cookies = match fast.resolver.cached(job) {
+        Some(analysed) => cookies_for(fast.cookies.as_ref(), &analysed.streams),
+        None => fast.cookies.clone(),
+    };
     Ok(Step::Go(Plan {
         layout,
         hints: parts::hints_from_children(&children),
         estimates: Vec::new(),
         children,
         source: Source::Cached,
-        cookies: fast.cookies.clone(),
+        cookies,
     }))
 }
 
