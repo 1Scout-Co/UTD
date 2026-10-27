@@ -7,6 +7,7 @@
 //! yt-dlp, không cookie. Mọi thứ chỉ ở RAM.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -87,23 +88,30 @@ pub(crate) struct Variant {
 }
 
 struct Feed {
+    /// Số lượt: mỗi `Feed` mới (phần đầu của tiện ích) một số khác, để `list` của lượt cũ không đụng lượt mới.
+    generation: u64,
     name: Option<String>,
     entries: Vec<ChannelEntry>,
     done: bool,
     error: Option<String>,
-    /// Người dùng bấm Dừng / đóng hộp (hoặc cửa sổ đóng): trang tiếp theo của tiện ích bị từ chối cho tới khi nó
-    /// bắt đầu lượt mới.
+    /// Số `list` đang phát lượt này.
+    listeners: usize,
+    /// Người dùng bấm Dừng / đóng hộp (hoặc cửa sổ đóng) và không còn `list` nào nghe lượt này: trang tiếp theo của
+    /// tiện ích bị từ chối. Hết khi có `list` nghe lại (bản dev chạy hai lần) hoặc tiện ích bắt đầu lượt mới.
     stopped: bool,
     updated: Instant,
 }
 
 impl Feed {
     fn new() -> Self {
+        static GENERATIONS: AtomicU64 = AtomicU64::new(0);
         Self {
+            generation: GENERATIONS.fetch_add(1, Ordering::Relaxed),
             name: None,
             entries: Vec::new(),
             done: false,
             error: None,
+            listeners: 0,
             stopped: false,
             updated: Instant::now(),
         }
@@ -237,11 +245,13 @@ pub(super) async fn list(journal: &Journal, url: &str, sink: &impl Sink, cancel:
     let downloaded = seen::Downloaded::load(journal, &seen_key);
     let mut sent = 0;
     let mut head_sent = false;
+    let mut listening = Listening { key: &key, generation: None, user_stopped: false };
     loop {
         let changed = CHANGED.notified();
         tokio::pin!(changed);
         changed.as_mut().enable();
-        let snapshot = lock(&FEEDS).get(&key).map(|feed| {
+        let snapshot = lock(&FEEDS).get_mut(&key).map(|feed| {
+            listening.attach(feed);
             (feed.name.clone(), feed.entries[sent.min(feed.entries.len())..].to_vec(), feed.done, feed.error.clone())
         });
         let Some((name, mut fresh, done, error)) = snapshot else {
@@ -255,7 +265,7 @@ pub(super) async fn list(journal: &Journal, url: &str, sink: &impl Sink, cancel:
                 handle: None,
             };
             if !sink.deliver(ListingEvent::Head { head }) {
-                return stopped(&key, sent);
+                return listening.stop(sent);
             }
         }
         if !fresh.is_empty() {
@@ -264,7 +274,7 @@ pub(super) async fn list(journal: &Journal, url: &str, sink: &impl Sink, cancel:
                 entry.downloaded = downloaded.contains(&entry.id);
             }
             if !sink.deliver(ListingEvent::Entries { entries: fresh }) {
-                return stopped(&key, sent);
+                return listening.stop(sent);
             }
         }
         if done {
@@ -275,7 +285,7 @@ pub(super) async fn list(journal: &Journal, url: &str, sink: &impl Sink, cancel:
             };
         }
         tokio::select! {
-            _ = cancel.cancelled() => return stopped(&key, sent),
+            _ = cancel.cancelled() => return listening.stop(sent),
             _ = &mut changed => {}
             _ = tokio::time::sleep(IDLE) => {
                 return ListingEvent::Done {
@@ -288,16 +298,51 @@ pub(super) async fn list(journal: &Journal, url: &str, sink: &impl Sink, cancel:
     }
 }
 
-/// Người dùng dừng (nút Dừng, đóng hộp, đóng cửa sổ): danh sách đã nhận giữ nguyên, nhưng đánh dấu lượt để `push`
-/// báo cho tiện ích thôi lật trang (nó vẫn có thể bắt đầu lượt mới).
-fn stopped(key: &str, total: usize) -> ListingEvent {
-    if let Some(feed) = lock(&FEEDS).get_mut(key) {
-        feed.stopped = true;
+/// Một lần `list` đang phát một lượt của hồ sơ. Lượt là `Feed` mà `list` thấy lần đầu; tiện ích bắt đầu lượt mới
+/// (thay `Feed`) thì lần `list` cũ rời đi không đụng lượt mới.
+struct Listening<'a> {
+    key: &'a str,
+    generation: Option<u64>,
+    /// Rời đi vì người dùng dừng (nút Dừng, đóng hộp, đóng cửa sổ), không phải vì phát xong.
+    user_stopped: bool,
+}
+
+impl Listening<'_> {
+    /// Lần đầu thấy `Feed`: nhớ lượt, tính một người nghe. Lượt đang dừng mà chưa xong thì lại có người nghe ⇒ bỏ dừng
+    /// (bản dev huỷ lần nghe thứ nhất rồi nghe lại; tiện ích lật trang tiếp sau ~2,5 s nên kịp).
+    fn attach(&mut self, feed: &mut Feed) {
+        if self.generation.is_none() {
+            self.generation = Some(feed.generation);
+            feed.listeners += 1;
+            if feed.stopped && !feed.done {
+                feed.stopped = false;
+            }
+        }
     }
-    ListingEvent::Done {
-        total,
-        complete: false,
-        error: None,
+
+    /// Người dùng dừng: danh sách đã nhận giữ nguyên; lúc rời đi lượt được đánh dấu để `push` báo cho tiện ích thôi
+    /// lật trang (nó vẫn có thể bắt đầu lượt mới).
+    fn stop(&mut self, total: usize) -> ListingEvent {
+        self.user_stopped = true;
+        ListingEvent::Done {
+            total,
+            complete: false,
+            error: None,
+        }
+    }
+}
+
+impl Drop for Listening<'_> {
+    fn drop(&mut self) {
+        let Some(generation) = self.generation else {
+            return;
+        };
+        if let Some(feed) = lock(&FEEDS).get_mut(self.key).filter(|feed| feed.generation == generation) {
+            feed.listeners = feed.listeners.saturating_sub(1);
+            if self.user_stopped && feed.listeners == 0 {
+                feed.stopped = true;
+            }
+        }
     }
 }
 
@@ -517,6 +562,99 @@ mod tests {
         let done = list(&journal, profile, &Closed, &CancellationToken::new()).await;
         assert!(matches!(done, ListingEvent::Done { complete: false, error: None, .. }), "{done:?}");
         assert!(push(profile, page("7400000000000000402")).is_err());
+        drop(journal);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn ids(collect: &Collect) -> Vec<String> {
+        collect
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                ListingEvent::Entries { entries } => Some(entries.iter().map(|entry| entry.id.clone()).collect::<Vec<_>>()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// Bấm Tải bằng UTD lại khi hộp cũ còn mở: tiện ích mở lượt mới (`push({})`) rồi giao diện mới đóng hộp cũ (huỷ).
+    /// Lượt cũ dừng không được khoá lượt mới.
+    #[tokio::test]
+    async fn an_old_run_stopping_does_not_lock_the_new_run() {
+        let (journal, root) = temp_journal();
+        let profile = "https://www.douyin.com/user/MS4wLjABAAAAdouyinTest06";
+        push(profile, Part::default()).unwrap();
+        push(profile, page("7400000000000000601")).unwrap();
+        let old_cancel = CancellationToken::new();
+        let old = Collect::default();
+        let (done, ()) = tokio::join!(list(&journal, profile, &old, &old_cancel), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            push(profile, Part::default()).unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            old_cancel.cancel();
+        });
+        assert!(matches!(done, ListingEvent::Done { complete: false, error: None, .. }), "{done:?}");
+
+        push(profile, page("7400000000000000602")).expect("trang đầu của lượt mới phải được nhận");
+        push(profile, Part { done: true, ..Part::default() }).unwrap();
+        let fresh = Collect::default();
+        let done = list(&journal, profile, &fresh, &CancellationToken::new()).await;
+        assert!(matches!(done, ListingEvent::Done { total: 1, complete: true, .. }), "{done:?}");
+        assert_eq!(ids(&fresh), ["7400000000000000602"], "lượt mới chỉ có mục của nó");
+        drop(journal);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Bản dev (React StrictMode) chạy effect hai lần: lần nghe thứ nhất bị huỷ ngay, lần thứ hai nghe cùng lượt.
+    #[tokio::test]
+    async fn a_listing_cancelled_at_once_does_not_lock_the_listing_that_follows_it() {
+        let (journal, root) = temp_journal();
+        let profile = "https://www.douyin.com/user/MS4wLjABAAAAdouyinTest07";
+        push(profile, Part::default()).unwrap();
+        push(profile, page("7400000000000000701")).unwrap();
+        let first_cancel = CancellationToken::new();
+        first_cancel.cancel();
+        let done = list(&journal, profile, &Collect::default(), &first_cancel).await;
+        assert!(matches!(done, ListingEvent::Done { complete: false, error: None, .. }), "{done:?}");
+
+        let (second, second_cancel) = (Collect::default(), CancellationToken::new());
+        let (done, ()) = tokio::join!(list(&journal, profile, &second, &second_cancel), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            push(profile, page("7400000000000000702")).expect("trang tiếp theo phải được nhận khi lại có người nghe");
+            push(profile, Part { done: true, ..Part::default() }).unwrap();
+        });
+        assert!(matches!(done, ListingEvent::Done { total: 2, complete: true, .. }), "{done:?}");
+        assert_eq!(ids(&second), ["7400000000000000701", "7400000000000000702"]);
+        drop(journal);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Lần nghe cũ bị huỷ đúng lúc lần nghe mới đã bắt đầu (thứ tự hai lời gọi không cố định) cũng không được khoá lượt.
+    #[tokio::test]
+    async fn a_listener_leaving_does_not_lock_the_run_while_another_still_listens() {
+        let (journal, root) = temp_journal();
+        let profile = "https://www.douyin.com/user/MS4wLjABAAAAdouyinTest08";
+        push(profile, Part::default()).unwrap();
+        push(profile, page("7400000000000000801")).unwrap();
+        let (stale_cancel, current_cancel) = (CancellationToken::new(), CancellationToken::new());
+        let (stale, current) = (Collect::default(), Collect::default());
+        let (current_done, stale_done, ()) = tokio::join!(
+            list(&journal, profile, &current, &current_cancel),
+            list(&journal, profile, &stale, &stale_cancel),
+            async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                stale_cancel.cancel();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                push(profile, page("7400000000000000802")).expect("còn người nghe ⇒ trang tiếp theo phải được nhận");
+                push(profile, Part { done: true, ..Part::default() }).unwrap();
+            }
+        );
+        assert!(matches!(stale_done, ListingEvent::Done { complete: false, error: None, .. }), "{stale_done:?}");
+        assert!(matches!(current_done, ListingEvent::Done { total: 2, complete: true, .. }), "{current_done:?}");
+        assert_eq!(ids(&current), ["7400000000000000801", "7400000000000000802"]);
         drop(journal);
         let _ = std::fs::remove_dir_all(root);
     }

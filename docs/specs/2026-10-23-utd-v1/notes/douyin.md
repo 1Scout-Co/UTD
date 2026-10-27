@@ -92,6 +92,15 @@ Không đọc cookie ở đâu cả cho Douyin: `fetch` trong trang tự kèm co
     mới nên nhận lại bình thường. Danh sách đã nhận vẫn giữ trong RAM 30 phút như cũ.
   - Chưa làm: mở lại hộp (cùng hồ sơ) trên lượt đã dừng sẽ chờ tới `IDLE` (120 s) rồi báo "danh sách có thể chưa đủ";
     đường vào hộp thật là bấm trên trang Douyin nên luôn bắt đầu lượt mới.
+  - **`stopped` theo lượt, không theo khoá hồ sơ.** Đặt theo khoá thì hai ca hỏng: (1) bấm lại khi hộp cũ còn mở —
+    tiện ích `push({})` (Feed mới) rồi giao diện đóng hộp cũ (huỷ) ⇒ `stopped` rơi lên Feed mới ⇒ trang đầu bị từ chối,
+    hộp mới chờ `IDLE` rồi báo 0 video; (2) bản dev (StrictMode) huỷ lần nghe thứ nhất ngay rồi nghe lại ⇒ trang tiếp
+    theo bị từ chối. Nay `Feed.generation` (số tăng mỗi Feed mới) và `Feed.listeners` (số `list` đang phát lượt đó): mỗi
+    `list` nhớ lượt nó thấy lần đầu (`Listening`), lúc rời đi vì huỷ chỉ đặt `stopped` khi lượt đó vẫn là Feed hiện tại
+    của khoá và không còn `list` nào nghe (thứ tự huỷ cũ/nghe mới không cố định); `list` bắt đầu trên lượt đang
+    `stopped` mà chưa `done` ⇒ bỏ `stopped`. Test: `an_old_run_stopping_does_not_lock_the_new_run`,
+    `a_listing_cancelled_at_once_does_not_lock_the_listing_that_follows_it`,
+    `a_listener_leaving_does_not_lock_the_run_while_another_still_listens`.
 - **Đường dự phòng `window.player` (camelCase)** cũng bỏ bản `gearName` chứa `bytevc2` và nhận cờ HEVC `isBytevc1` (cùng
   `is_bytevc1`/`is_h265`/`isH265`), để cùng mức thì H.264 đứng trước như đường API.
 - Chưa thử trên Firefox thật: `scripting.executeScript` trả `documentId` và nhận `target.documentIds` hay không; mã đã
