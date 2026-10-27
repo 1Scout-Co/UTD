@@ -1,0 +1,12 @@
+{
+  "branch": "claude/yt-probe-5d81c2",
+  "commit": "b144dba",
+  "base": "e72ee30 (tip claude/fb-media-4c7a19, đã review riêng: notes/review-final.json)",
+  "tier": "thường — 1 lượt chất lượng Grok high: diff nhỏ (probe.rs::pin + test + ghi chú), không đụng auth/tiền/dữ liệu/đồng thời",
+  "reviewers": ["grok-4.7-high (Cursor)"],
+  "findings": [],
+  "areas_checked": "probe.rs::pin cùng numbered_group/numbered_base/field và probe_cache::plain_language; parse_format gọi pin; split_choice/pick_audio/with_id/video_pin dùng mã ghim; filesize với case một tiếng, khác cỡ, thiếu cỡ, mirror TikTok. Test pins_the_original_language_when_youtube_lists_each_track_twice, keeps_old_selectors_when_a_numbered_id_has_no_unique_language, pins_numbered_combined_ids_directly_only_when_the_whole_group_is_mirrors.",
+  "ac": ["M-2 (qa-report lượt 5): Shorts lồng tiếng — cỡ Tốt nhất + lượt tải không hỏi lại yt-dlp", "M-3: không phải lỗi (cha + con của yt-dlp.exe)"],
+  "delta_reviewed_by": "captain",
+  "delta": "b144dba..HEAD: chỉ tài liệu (dòng sổ tiến độ, file này)"
+}

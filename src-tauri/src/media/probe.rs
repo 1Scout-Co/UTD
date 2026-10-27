@@ -756,7 +756,9 @@ fn parse_format(value: &Value, items: &[Value]) -> Option<Format> {
 /// Mã ghi vào selector. Nhiều format trùng mã thì yt-dlp thêm số thứ tự (`140-0`…`140-23`, tiếng gốc
 /// số lớn nhất): số chỉ là vị trí, trang thêm bản lồng tiếng là `140-23` trỏ sang tiếng khác. Khi đó
 /// ghim kèm ngôn ngữ (`140-23[language=en-US]`), lệch thì yt-dlp rơi về phần sau `/`; nhóm không có
-/// ngôn ngữ riêng cho mã này thì không ghim.
+/// ngôn ngữ riêng cho mã này thì không ghim. YouTube có khi trả mỗi tiếng hai lần (hai client, chỉ khác cờ
+/// "default", cỡ trùng từng byte): vẫn là một tiếng, ghim được; cùng ngôn ngữ mà khác cỡ (vd. bản thuyết
+/// minh) hoặc thiếu cỡ thì không.
 fn pin(id: &str, language: &str, items: &[Value]) -> Option<String> {
     let Some(base) = numbered_base(id) else {
         return Some(id.to_string());
@@ -765,11 +767,12 @@ fn pin(id: &str, language: &str, items: &[Value]) -> Option<String> {
     if group.len() < 2 {
         return Some(id.to_string());
     }
-    let alone = group
+    let size = |item: &&Value| item.get("filesize").and_then(Value::as_u64);
+    let mut same = group
         .iter()
-        .filter(|item| field(item, "language") == language)
-        .count()
-        == 1;
+        .filter(|item| field(item, "language") == language);
+    let first = same.next().and_then(size);
+    let alone = same.all(|item| first.is_some() && size(item) == first);
     (alone && probe_cache::plain_language(language)).then(|| format!("{id}[language={language}]"))
 }
 
@@ -1230,6 +1233,38 @@ mod tests {
     }
 
     #[test]
+    fn pins_the_original_language_when_youtube_lists_each_track_twice() {
+        // Shorts `Zhz7bQb9saM` (tiếng Việt gốc + lồng tiếng Anh): mỗi tiếng có hai bản (hai client, chỉ khác cờ
+        // "default"), cỡ trùng từng byte. Trước đây không ghim được ⇒ bảng lấy cỡ bản 360p, lượt tải hỏi lại yt-dlp.
+        let formats = vec![
+            dub("140-0", "m4a", "en-US", 2_610_332),
+            dub("140-1", "m4a", "en-US", 2_610_332),
+            dub("140-2", "m4a", "vi", 2_609_107),
+            dub("140-3", "m4a", "vi", 2_609_107),
+            dub("251-0", "webm", "en-US", 2_257_774),
+            dub("251-1", "webm", "en-US", 2_257_774),
+            dub("251-2", "webm", "vi", 2_700_777),
+            dub("251-3", "webm", "vi", 2_700_777),
+            combined("18", 360, 12_108_842),
+            video("400", "mp4", 1440, 33_173_910),
+        ];
+        let result = build_result("https://example.com/watch", &info(formats), true).unwrap();
+        let best = selector(&result, "best");
+        assert_eq!(best, "400+140-3[language=vi]/bv*+ba/b");
+        assert_eq!(option(&result, "best").size_bytes, Some(35_783_017));
+        assert_eq!(
+            probe_cache::selector_ids(best),
+            Some(vec!["400", "140-3"]),
+            "lượt tải lấy luồng từ bộ nhớ Phân tích"
+        );
+        assert_eq!(
+            selector(&result, "audio-m4a"),
+            "140-3[language=vi]/ba[ext=m4a]/ba"
+        );
+        assert_eq!(selector(&result, "audio-mp3"), "251-3[language=vi]/ba/b");
+    }
+
+    #[test]
     fn keeps_old_selectors_when_a_numbered_id_has_no_unique_language() {
         let formats = vec![
             audio("140-0", "m4a", 900),
@@ -1242,12 +1277,17 @@ mod tests {
 
         let items = vec![
             dub("140-0", "m4a", "en", 1),
-            dub("140-1", "m4a", "en", 1),
+            dub("140-1", "m4a", "en", 2),
             dub("140-2", "m4a", "en US", 1),
             dub("140-drc", "m4a", "en", 1),
             video("http-1080", "mp4", 1080, 1),
         ];
-        assert_eq!(pin("140-1", "en", &items), None, "trùng ngôn ngữ");
+        assert_eq!(pin("140-1", "en", &items), None, "trùng ngôn ngữ, khác tiếng (cỡ khác)");
+        let no_size = vec![
+            json!({ "format_id": "140-0", "language": "en" }),
+            json!({ "format_id": "140-1", "language": "en" }),
+        ];
+        assert_eq!(pin("140-1", "en", &no_size), None, "không biết cỡ ⇒ không chắc là một tiếng");
         assert_eq!(pin("140-2", "en US", &items), None, "ngôn ngữ cần ngoặc");
         assert_eq!(pin("140-drc", "en", &items).as_deref(), Some("140-drc"));
         assert_eq!(
