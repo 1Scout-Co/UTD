@@ -40,6 +40,44 @@ Nhánh `claude/fb-media-4c7a19` (đã ghép main @ `93ed9a3`). Chủ dự án b�
 - Rust: `fast::tests::sends_the_cookies_yt_dlp_set_for_the_stream` (máy chủ giả trả 403 nếu thiếu `tt_chain_token=abc`;
   tải xong ngay lượt đầu, không hỏi yt-dlp lại), `resolve::tests::splits_yt_dlp_stream_cookies_and_unquotes_values`.
 
+## Chọn chất lượng là tải ngay (2026-10-27)
+
+Chủ dự án báo (sổ chốt e5z3): chọn một dòng trong bảng "Tải video này" hoặc hộp Tải media vẫn đứng "Đang tải 0 B/s"
+~12 s (log `media.timing … resolved source=fresh ms≈11000–13000`), bảng ghi "1920p", và hiện hai dòng trùng
+("Tốt nhất ≈3,2 MB" cùng "1920p ≈3,2 MB").
+
+- **Nguyên nhân:** format TikTok của yt-dlp đều gộp sẵn hình + tiếng, mã có số thứ tự vì hai CDN mirror
+  (`bytevc1_1080p_1146746-0`, `-1`). `probe::merge_choice` chỉ ghim được luồng tách (hình + tiếng riêng) ⇒ selector
+  của "Tốt nhất" là từ khoá `bv*+ba/b` ⇒ `probe_cache::lookup` không tìm được mã nào ⇒ `fast.rs` hỏi yt-dlp lần hai
+  (`fresh`). Nhãn mức lấy theo `height` (cạnh dài của video dọc); bảng luôn thêm dòng mức dù chỉ có một mức.
+- **Cách sửa** (`media/probe.rs`; `fast.rs` không đổi: một luồng có cả hình + tiếng đã đi đường tải nhanh một file,
+  `Layout::Single`, và vẫn mang cookie luồng `tt_chain_token` qua `cookies_for`):
+  1. `merge_choice` = `split_choice` (luồng tách, như cũ) rồi `combined_choice`: bậc `preference` cao nhất, format
+     gộp `plain` cao nhất trong giới hạn mức, chỉ khi không có luồng nào cao hơn (cùng luật không tụt độ phân giải);
+     ở mức đó lấy mp4 cuối danh sách (yt-dlp xếp kém → tốt) ⇒ `bytevc1_1080p_1146746-1/bv*+ba/b`.
+  2. Mã đánh số mà cả nhóm cùng một ngôn ngữ (mirror) ghim thẳng (`mirror_pin`), chỉ cho format gộp; tiếng riêng vẫn
+     theo `pin` (lồng tiếng YouTube ghim kèm `[language=…]`). Mirror lệch thì yt-dlp rơi về phần sau `/`.
+  3. Mức tính theo **cạnh ngắn** (`Format::level`, như `res` của yt-dlp): 1080×1920 ⇒ "1080p", 720×1280 ⇒ "720p",
+     576×1024 ⇒ "576p"; `id` của dòng, nhãn, "tối đa {N}p" đều theo mức, nên `preset::Quality::Height` (lô link) và
+     huy hiệu "Phổ biến" (1080) khớp với video dọc. Bộ lọc dự phòng vẫn theo `height` thật: dọc 1080 ⇒
+     `bv*[height<=1920]+ba/b[height<=1920]`; ngang giữ nguyên selector cũ.
+  4. Chỉ một mức ⇒ không thêm dòng mức (bảng chỉ có "Tốt nhất", M4A, MP3). Hộp Tải media liệt kê mức quen thuộc nên
+     còn một dòng cũng bỏ; bảng trên trang (`every_height`) liệt kê mọi mức có thật từ 144p (TikTok dọc ra thêm 576p).
+- **Đổi so với trước, chủ ý:** trang chỉ có format gộp (hoặc mức chỉ có format gộp) nay ghim mã format gộp ở đầu
+  selector, phần dự phòng sau `/` giữ nguyên (ba chỗ kỳ vọng trong `probe.rs` thêm tiền tố mã: `18/…`, `22/…`, `37/…`).
+- **Chưa kiểm với TikTok thật:** các bài thử dùng JSON dựng theo mô tả format yt-dlp 2026.10.26 (mã, kích thước, cookie).
+  Cần mở bảng trên một video TikTok thật và đọc log `media.timing … resolved source=cached`.
+
+Bài thử: `probe::tests::{pins_the_best_combined_tiktok_format_so_the_download_reuses_the_analysed_stream,
+names_levels_by_the_short_side_so_vertical_videos_read_like_landscape_ones, lists_no_level_row_that_would_repeat_the_only_level,
+labels_vertical_dash_videos_by_the_short_side_and_keeps_the_pins, a_combined_format_never_hides_a_taller_stream_or_a_better_container,
+pins_numbered_combined_ids_directly_only_when_the_whole_group_is_mirrors}`,
+`probe_cache::tests::returns_the_one_combined_stream_with_the_cookies_yt_dlp_set`,
+`fast::tests::{plans_one_cached_stream_with_its_cookies_for_a_combined_only_page,
+downloads_a_combined_only_page_from_the_analysed_stream_without_asking_yt_dlp}` (JSON kiểu TikTok ⇒ `probe` ⇒
+`probe_cache::remember` ⇒ chọn "Tốt nhất" ⇒ kế hoạch `Source::Cached`, một luồng `Single`, cookie `tt_chain_token` gửi
+đi, mirror `-0` không bị đụng, không gọi resolver).
+
 ## Phụ lục A — Các dự án khác làm thế nào (đọc mã, 2026-10-26)
 
 | Dự án (commit) | Cách lấy mã video | Chạy ở |
