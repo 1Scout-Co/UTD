@@ -1,4 +1,6 @@
-import { Film, Loader2, Lock, Square } from "lucide-react"
+import { Fragment, type ReactNode } from "react"
+
+import { Clock, Film, Loader2, Lock, Square } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -27,18 +29,30 @@ function formatDuration(seconds: number): string {
     : `${minutes}:${rest}`
 }
 
-function entryMeta(entry: ChannelEntry): string {
+// Thời lượng kèm đồng hồ: "23/07/2024 · 5:17" dễ đọc nhầm 5:17 là giờ đăng.
+function entryMeta(entry: ChannelEntry): ReactNode {
   const parts = [
     entry.timestamp === null ? null : formatDate(entry.timestamp * 1000),
-    entry.durationSeconds ? formatDuration(entry.durationSeconds) : null,
+    entry.durationSeconds ? (
+      <span className="inline-flex items-center gap-0.5">
+        <Clock aria-hidden className="size-3" />
+        {formatDuration(entry.durationSeconds)}
+      </span>
+    ) : null,
     entry.viewCount === null
       ? null
       : t("channel.views", {
           count: entry.viewCount,
           views: formatCompact(entry.viewCount),
         }),
-  ]
-  return parts.filter(Boolean).join(" · ") || "—"
+  ].filter(Boolean)
+  if (parts.length === 0) return "—"
+  return parts.map((part, index) => (
+    <Fragment key={index}>
+      {index > 0 ? " · " : null}
+      {part}
+    </Fragment>
+  ))
 }
 
 /** Ảnh đại diện, tên kênh, số video (đếm dần), nút Dừng khi đang liệt kê. */

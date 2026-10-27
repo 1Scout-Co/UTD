@@ -208,13 +208,16 @@
     frame = requestAnimationFrame(follow)
   }
 
-  /** Nút nằm ngay trên mép trên-phải video (không đè điều khiển của trình phát); hết chỗ thì vào trong góc. */
+  /**
+   * Nút nằm ngay trên mép trên-phải video (không đè điều khiển của trình phát); hết chỗ, hoặc chỗ đó là thanh cố định
+   * của trang (Douyin: thanh đầu trang), thì vào trong góc.
+   */
   function place() {
     const rect = target ? target.getBoundingClientRect() : anchor
     if (!rect) return
     const width = pill.hidden ? 0 : pill.offsetWidth
     let top = rect.top - PILL_HEIGHT - GAP
-    if (top < GAP) top = Math.max(GAP, rect.top + GAP)
+    if (top < GAP || pageBarAt(rect.right - width / 2, top + PILL_HEIGHT / 2)) top = Math.max(GAP, rect.top + GAP)
     const left = Math.min(Math.max(GAP, rect.right - width - (top > rect.top ? GAP : 0)), innerWidth - width - GAP)
     pill.style.top = `${top}px`
     pill.style.left = `${left}px`
@@ -226,6 +229,17 @@
       panel.style.top = `${panelTop}px`
       panel.style.left = `${Math.min(Math.max(GAP, right - panel.offsetWidth), innerWidth - panel.offsetWidth - GAP)}px`
     }
+  }
+
+  /** Điểm (x, y) thuộc lớp cố định/dính của trang (thanh đầu trang…) không chứa video đang gắn nút. */
+  function pageBarAt(x, y) {
+    if (!target) return false
+    const element = document.elementsFromPoint(x, y).find((element) => element !== host)
+    for (let node = element; node && node !== document.body; node = node.parentElement) {
+      if (node.contains(target)) return false
+      if (/^(fixed|sticky)$/.test(getComputedStyle(node).position)) return true
+    }
+    return false
   }
 
   /** Hỏi nền định dạng của `url`; `signIn` = cú bấm thật, nền được đọc cookie nếu nguồn đòi đăng nhập. */

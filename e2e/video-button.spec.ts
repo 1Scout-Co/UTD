@@ -109,6 +109,22 @@ test('rê chuột vào video ⇒ nút "Tải video này" ngay trên mép trên-p
   await expect(pill(page)).toBeHidden({ timeout: 4000 })
 })
 
+test('ngay trên video là thanh cố định của trang (Douyin) ⇒ nút vào góc trong video, không che thanh', async ({ page }) => {
+  const body = `<!doctype html><html><body style="margin:0">
+<header style="position:fixed;top:0;left:0;right:0;height:60px;background:#222;z-index:10"></header>
+<div style="padding-top:64px"><video id="main" width="640" height="360" style="display:block;margin-left:40px;background:#000"></video></div>
+</body></html>`
+  await page.route('http://fixed.utd.test/**', (route) => route.fulfill({ contentType: 'text/html', body }))
+  await page.addInitScript(stubContentApi, { messages: MESSAGES, replies: [], enabled: true })
+  await page.goto('http://fixed.utd.test/watch')
+  await page.addScriptTag({ path: 'extensions/chromium/content.js' })
+  const video = await hover(page, '#main')
+  await expect(pill(page)).toBeVisible()
+  const button = (await pill(page).boundingBox())!
+  expect(button.y).toBeGreaterThanOrEqual(video.y)
+  expect(button.x + button.width).toBeLessThanOrEqual(video.x + video.width)
+})
+
 test('bấm nút ⇒ bảng "đang đọc" rồi các định dạng kèm dung lượng; chọn 1080p ⇒ UTD tải luôn, không mở app', async ({ page }) => {
   await openPage(page, [media()])
   await hover(page, '#main')
