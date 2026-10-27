@@ -47,6 +47,22 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../extensions/chromium/social-harvest.js"),
     ),
     (
+        "chromium/tiktok.js",
+        include_bytes!("../../extensions/chromium/tiktok.js"),
+    ),
+    (
+        "chromium/douyin.js",
+        include_bytes!("../../extensions/chromium/douyin.js"),
+    ),
+    (
+        "chromium/douyin-page.js",
+        include_bytes!("../../extensions/chromium/douyin-page.js"),
+    ),
+    (
+        "chromium/douyin-channel.js",
+        include_bytes!("../../extensions/chromium/douyin-channel.js"),
+    ),
+    (
         "chromium/popup.html",
         include_bytes!("../../extensions/chromium/popup.html"),
     ),
@@ -97,6 +113,22 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
     (
         "firefox/social-harvest.js",
         include_bytes!("../../extensions/firefox/social-harvest.js"),
+    ),
+    (
+        "firefox/tiktok.js",
+        include_bytes!("../../extensions/firefox/tiktok.js"),
+    ),
+    (
+        "firefox/douyin.js",
+        include_bytes!("../../extensions/firefox/douyin.js"),
+    ),
+    (
+        "firefox/douyin-page.js",
+        include_bytes!("../../extensions/firefox/douyin-page.js"),
+    ),
+    (
+        "firefox/douyin-channel.js",
+        include_bytes!("../../extensions/firefox/douyin-channel.js"),
     ),
     (
         "firefox/popup.html",
@@ -431,6 +463,10 @@ mod tests {
                 "fb-media.js",
                 "social-bulk.js",
                 "social-harvest.js",
+                "tiktok.js",
+                "douyin.js",
+                "douyin-page.js",
+                "douyin-channel.js",
             ] {
                 assert!(bundled(&format!("{browser}/{script}")), "{browser}/{script}");
             }
@@ -441,7 +477,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             firefox["background"]["scripts"],
-            serde_json::json!(["background.js", "takeover.js", "page-media.js", "social-bulk.js"])
+            serde_json::json!(["background.js", "takeover.js", "page-media.js", "social-bulk.js", "douyin-channel.js"])
         );
         let background = String::from_utf8_lossy(include_bytes!("../../extensions/chromium/background.js"));
         assert!(background.contains("importScripts(\"takeover.js\")"));

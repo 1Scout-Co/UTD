@@ -36,10 +36,22 @@ struct HostRequest {
     /// Bản 2, `media-streams`: luồng tiện ích đọc thẳng từ trang (Tin Facebook…), app kiểm (media/page_streams.rs).
     #[serde(default)]
     streams: Vec<serde_json::Value>,
+    /// Bản 2, `channel-entries`: một phần danh sách hồ sơ Douyin tiện ích lấy trong tab (media/channel/douyin.rs).
+    #[serde(default)]
+    entries: Vec<serde_json::Value>,
+    #[serde(default)]
+    author: Option<serde_json::Value>,
+    #[serde(default)]
+    done: bool,
+    #[serde(default)]
+    error: Option<String>,
     /// Bản 2, `social-list`: một đợt ảnh/video tải hàng loạt (Facebook / Instagram / Threads), app kiểm (src/social).
     #[serde(default)]
     social: Option<serde_json::Value>,
 }
+
+/// Mỗi phần danh sách hồ sơ tối đa chừng này video (một trang của Douyin là 18).
+const MAX_CHANNEL_ENTRIES: usize = 100;
 
 /// Selector / tiêu đề dài hơn thì từ chối (app kiểm kỹ lại).
 const MAX_SELECTOR_CHARS: usize = 512;
@@ -168,6 +180,23 @@ fn pipe_payload(request: &HostRequest) -> Result<serde_json::Value, String> {
                 })),
                 _ => Err("Yêu cầu từ trình duyệt không hợp lệ.".into()),
             }
+        }
+        // Danh sách hồ sơ Douyin lấy trong tab, đẩy dần (app kiểm từng mục). Không cookie.
+        "channel-entries" if request.version >= 2 => {
+            let url = request.url.trim();
+            if !is_web_url(url) || request.entries.len() > MAX_CHANNEL_ENTRIES {
+                return Err("Yêu cầu từ trình duyệt không hợp lệ.".into());
+            }
+            Ok(serde_json::json!({
+                "url": url,
+                "kind": request.kind,
+                "channel": {
+                    "entries": request.entries,
+                    "author": request.author,
+                    "done": request.done,
+                    "error": request.error,
+                },
+            }))
         }
         _ => Err("Yêu cầu từ trình duyệt không hợp lệ.".into()),
     }
@@ -496,6 +525,25 @@ mod tests {
 ";
         let response = exchange(&mut peer(reply), "{}").unwrap();
         assert_eq!(response.media.unwrap()["title"], "Video");
+    }
+
+    /// Danh sách hồ sơ Douyin: bản 2, tối đa 100 mục mỗi phần, không kèm cookie.
+    #[test]
+    fn channel_entries_are_version_two_and_capped() {
+        let part = |version: u32, count: usize| {
+            let entries: Vec<serde_json::Value> = (0..count).map(|index| serde_json::json!({ "id": index.to_string() })).collect();
+            pipe_payload(&message(serde_json::json!({
+                "version": version, "type": "channel-entries", "url": "https://www.douyin.com/user/MS4wLjABAAAA",
+                "entries": entries, "done": true, "error": "blocked", "auth": { "site": "douyin.com" },
+            })))
+        };
+        let payload = part(2, 18).unwrap();
+        assert_eq!(payload["kind"], "channel-entries");
+        assert_eq!(payload["channel"]["entries"].as_array().unwrap().len(), 18);
+        assert_eq!(payload["channel"]["done"], true);
+        assert_eq!(payload.get("auth"), None, "không chuyển cookie");
+        assert!(part(1, 1).is_err());
+        assert!(part(2, MAX_CHANNEL_ENTRIES + 1).is_err());
     }
 
     /// Luồng đọc thẳng từ trang: bản 2, 1–2 luồng http(s), không kèm cookie.

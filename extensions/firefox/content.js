@@ -22,6 +22,14 @@
   const YOUTUBE_VIDEO = /^\/(watch|shorts\/|live\/|embed\/)/
   // Facebook: đọc luồng của video đang xem ngay trong trang (Tin, bảng tin: yt-dlp không đọc được; notes/fb-media.md).
   const FACEBOOK = /(^|\.)facebook\.com$/
+  const DOUYIN = /(^|\.)douyin\.com$/
+  const hostOf = (url) => {
+    try {
+      return new URL(url).hostname
+    } catch {
+      return ""
+    }
+  }
   // Đọc trong trang mà nền không trả lời chừng này ms thì thôi, không để bảng treo.
   const PAGE_MEDIA_TIMEOUT = 8000
 
@@ -105,7 +113,7 @@
     pill.append(label)
     actions.set(pill, () => {
       if (panel && !panel.hidden) close()
-      else void open(analysisUrl(), sourceOf(target))
+      else void open(analysisUrl(target), sourceOf(target))
     })
     panel = document.createElement("div")
     panel.className = "panel"
@@ -147,8 +155,16 @@
     return /^https?:\/\//i.test(src) ? src : null
   }
 
-  /** Trang đang xem: yt-dlp đọc được trang video quen và nhiều trang nhúng video. */
-  function analysisUrl() {
+  /**
+   * Link cho yt-dlp: link riêng của `video` nếu module của trang tìm được (tiktok.js: feed, lưới hồ sơ — địa chỉ trang
+   * không phải link video), không thì trang đang xem (yt-dlp đọc được trang video quen và nhiều trang nhúng video).
+   * Trang có module mà module không tìm được (thẻ quảng cáo, ô không rõ bài) ⇒ `null`: địa chỉ trang là feed/lưới,
+   * gửi cho yt-dlp chỉ tốn một lượt rồi báo lỗi chung.
+   */
+  function analysisUrl(video) {
+    for (const site of globalThis.__utdVideoSites ?? []) {
+      if (site.hosts.test(location.hostname)) return video ? site.videoUrl(video) || null : location.href
+    }
     return location.href
   }
 
@@ -163,8 +179,9 @@
     clearTimeout(hideTimer)
     if (duration) hideTimer = setTimeout(hide, duration)
     if (!frame) frame = requestAnimationFrame(follow)
-    const url = analysisUrl()
-    if (KNOWN.test(location.hostname) && !FACEBOOK.test(location.hostname) && !prefetched.has(url)) {
+    const url = analysisUrl(video)
+    // Chỉ đọc sẵn video của chính trang: rê qua lưới video (hồ sơ TikTok…) không chạy yt-dlp cho từng ô.
+    if (KNOWN.test(location.hostname) && !FACEBOOK.test(location.hostname) && url === location.href && !prefetched.has(url)) {
       prefetched.add(url)
       void formatsFor(url, sourceOf(video), false)
     }
@@ -193,13 +210,16 @@
     frame = requestAnimationFrame(follow)
   }
 
-  /** Nút nằm ngay trên mép trên-phải video (không đè điều khiển của trình phát); hết chỗ thì vào trong góc. */
+  /**
+   * Nút nằm ngay trên mép trên-phải video (không đè điều khiển của trình phát); hết chỗ, hoặc chỗ đó là thanh cố định
+   * của trang (Douyin: thanh đầu trang), thì vào trong góc.
+   */
   function place() {
     const rect = target ? target.getBoundingClientRect() : anchor
     if (!rect) return
     const width = pill.hidden ? 0 : pill.offsetWidth
     let top = rect.top - PILL_HEIGHT - GAP
-    if (top < GAP) top = Math.max(GAP, rect.top + GAP)
+    if (top < GAP || pageBarAt(rect.right - width / 2, top + PILL_HEIGHT / 2)) top = Math.max(GAP, rect.top + GAP)
     const left = Math.min(Math.max(GAP, rect.right - width - (top > rect.top ? GAP : 0)), innerWidth - width - GAP)
     pill.style.top = `${top}px`
     pill.style.left = `${left}px`
@@ -211,6 +231,17 @@
       panel.style.top = `${panelTop}px`
       panel.style.left = `${Math.min(Math.max(GAP, right - panel.offsetWidth), innerWidth - panel.offsetWidth - GAP)}px`
     }
+  }
+
+  /** Điểm (x, y) thuộc lớp cố định/dính của trang (thanh đầu trang…) không chứa video đang gắn nút. */
+  function pageBarAt(x, y) {
+    if (!target) return false
+    const element = document.elementsFromPoint(x, y).find((element) => element !== host)
+    for (let node = element; node && node !== document.body; node = node.parentElement) {
+      if (node.contains(target)) return false
+      if (/^(fixed|sticky)$/.test(getComputedStyle(node).position)) return true
+    }
+    return false
   }
 
   /** Hỏi nền định dạng của `url`; `signIn` = cú bấm thật, nền được đọc cookie nếu nguồn đòi đăng nhập. */
@@ -268,11 +299,11 @@
    * Luồng của video đang xem đọc thẳng trong trang (nền chạy page-media.js): `{ title, formats, manifests, files }`,
    * không đọc được thì `null`. Điểm gửi đi là giữa video đang gắn nút (hoặc chỗ chuột phải) để chọn đúng video.
    */
-  function pageMedia(point) {
+  function pageMedia(point, url) {
     const rect = target?.getBoundingClientRect()
     const at = rect ? { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 } : point
     const asked = api.runtime
-      .sendMessage({ type: "utd.page-media", x: at?.x ?? null, y: at?.y ?? null })
+      .sendMessage({ type: "utd.page-media", x: at?.x ?? null, y: at?.y ?? null, url })
       .then((reply) => (reply?.ok ? reply.media : null))
       .catch(() => null)
     return Promise.race([asked, new Promise((resolve) => setTimeout(() => resolve(null), PAGE_MEDIA_TIMEOUT))])
@@ -291,12 +322,18 @@
       anchor = at
     }
     panel.hidden = false
-    render(header(null), status(t("videoReading"), null, true))
+    // Không có link của video này (`analysisUrl` null): báo luôn, không hỏi nền.
+    render(header(null), url ? status(t("videoReading"), null, true) : status(t("videoFailed"), "error"))
     if (!frame) frame = requestAnimationFrame(follow)
+    if (!url) return
     // Chỉ đọc trong trang khi bảng là của chính trang đang mở (không phải link chuột phải trỏ đi nơi khác).
     const here = url === location.href
+    // Facebook (Tin, bảng tin) và Douyin (yt-dlp hỏng từ 2026-09; douyin.js đã đổi sang link của video) đọc trong
+    // trang trước yt-dlp.
     const facebook = FACEBOOK.test(location.hostname)
-    let found = here && facebook ? await pageMedia(point) : null
+    const douyin = DOUYIN.test(location.hostname) && DOUYIN.test(hostOf(url))
+    const pageFirst = (here && facebook) || douyin
+    let found = pageFirst ? await pageMedia(point, url) : null
     if (panel.hidden) return
     if (found?.formats.length) return showFormats(found, url)
     let reply = await formatsFor(url, src, false)
@@ -307,7 +344,7 @@
     if (panel.hidden) return
     // yt-dlp không đọc được trang (UTD có chạy): bắt luồng media trang đã tải, kiểu IDM.
     if (!reply.ok && reply.code && here) {
-      found ??= await pageMedia(point)
+      found ??= await pageMedia(point, url)
       if (panel.hidden) return
       if (found?.formats.length) return showFormats(found, url)
       const manifest = found?.manifests[0]
@@ -324,8 +361,8 @@
       const signIn = SIGN_IN.test(reply.code ?? "")
       // Mã lỗi của UTD (yt-dlp không đọc được…) ⇒ câu chung — Facebook: chưa thấy luồng nào, cho video phát rồi bấm
       // lại; không mã (UTD chưa chạy…) ⇒ câu của nền.
-      const failed = facebook && here ? t("videoNoStream") : t("videoFailed")
-      const text = signIn && !facebook ? t("videoSignIn") : reply.code ? failed : reply.message || failed
+      const failed = pageFirst ? t("videoNoStream") : t("videoFailed")
+      const text = signIn && !pageFirst ? t("videoSignIn") : reply.code ? failed : reply.message || failed
       render(header(null), status(text, "error"))
       return
     }
@@ -508,7 +545,8 @@
     if (video) {
       target = video
       pill.hidden = false
-      void open(message.url, sourceOf(video))
+      // Chuột phải lên video: nền gửi trang đang mở; module của trang (tiktok.js) có thể biết link riêng của video.
+      void open(message.url === location.href ? analysisUrl(video) : message.url, sourceOf(video))
     } else {
       pill.hidden = true
       void open(message.url, null, { top: point.y + PILL_HEIGHT, right: point.x + 136, bottom: point.y, left: point.x }, point)

@@ -128,14 +128,19 @@ const SITES: &[(&str, Rule)] = &[
 
 /// Trang kênh/playlist tải được cả loạt. Link rút gọn (`vm.tiktok.com`) chưa biết là video hay kênh: đi
 /// đường trang video, `media_probe` thấy là kênh thì trả [`CHANNEL_PAGE_ERROR`].
-const CHANNEL_SITES: &[(&str, Rule)] = &[("tiktok.com", tiktok_user), ("youtube.com", youtube_channel)];
+const CHANNEL_SITES: &[(&str, Rule)] = &[
+    ("tiktok.com", tiktok_user),
+    ("youtube.com", youtube_channel),
+    ("douyin.com", douyin_user),
+];
 
 /// Link là trang xem video/nghe nhạc của một trang media lớn (không phải trang chủ, kênh hay tệp trực tiếp).
 pub fn is_media_page(raw: &str) -> bool {
     matches_site(raw, SITES)
 }
 
-/// Link là trang kênh TikTok (`tiktok.com/@user`) hoặc kênh/playlist YouTube.
+/// Link là trang kênh TikTok (`tiktok.com/@user`), hồ sơ Douyin (`douyin.com/user/<sec_uid>`) hoặc kênh/playlist
+/// YouTube.
 pub fn is_channel_page(raw: &str) -> bool {
     matches_site(raw, CHANNEL_SITES)
 }
@@ -318,6 +323,10 @@ pub fn channel_listing_url(raw: &str) -> Option<String> {
         .path_segments()
         .map(|parts| parts.filter(|part| !part.is_empty()).map(str::to_string).collect())
         .unwrap_or_default();
+    // Hồ sơ Douyin: một dạng duy nhất, khoá của lượt tải cả hồ sơ (media/channel/douyin.rs).
+    if on_domain(&host, "douyin.com") {
+        return Some(format!("https://www.douyin.com/user/{}", path.get(1)?));
+    }
     if on_domain(&host, "youtube.com") {
         if path.first().is_some_and(|first| first == "playlist") {
             url.query_pairs_mut().append_pair("list", list.as_deref()?);
@@ -368,6 +377,18 @@ fn youtube(page: &Page<'_>) -> bool {
 fn tiktok(page: &Page<'_>) -> bool {
     (page.at(0).starts_with('@') && page.at(1) == "video" && page.has(2))
         || (page.at(0) == "t" && page.has(1))
+}
+
+/// Hồ sơ Douyin `/user/<sec_uid>` (`/user/self` là trang của chính người xem, cần đăng nhập: không tính).
+fn douyin_user(page: &Page<'_>) -> bool {
+    page.at(0) == "user"
+        && page.path.len() == 2
+        && page.at(1) != "self"
+        && (8..=200).contains(&page.at(1).len())
+        && page
+            .at(1)
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 /// `@user` đứng một mình (không phải `/video/…`, `/live`).
@@ -613,6 +634,7 @@ mod tests {
         "https://www.youtube.com/channel/UC1234567890/videos",
         "https://www.youtube.com/c/SomeName",
         "https://www.youtube.com/user/SomeName/videos",
+        "https://www.douyin.com/user/MS4wLjABAAAAx9_Kq-AbC?from_tab_name=main",
         "https://www.youtube.com/playlist?list=PL123",
         "https://music.youtube.com/playlist?list=OLAK5uy_abc",
     ];
@@ -623,6 +645,9 @@ mod tests {
         "https://www.tiktok.com/@user.name/video/7234567890123456789",
         "https://www.tiktok.com/@user.name/photo/7234567890123456789",
         "https://www.tiktok.com/@user.name/live",
+        "https://www.douyin.com/user/self",
+        "https://www.douyin.com/video/7412345678901234567",
+        "https://www.douyin.com/user/MS4wLjABAAAAx9/post/1",
         "https://www.tiktok.com/explore",
         "https://vm.tiktok.com/ZMabc123/",
         "https://www.youtube.com/",
@@ -777,6 +802,10 @@ mod tests {
             ("https://www.youtube.com/@Some", "https://www.youtube.com/@Some/videos"),
             ("https://www.youtube.com/@Some/featured", "https://www.youtube.com/@Some/videos"),
             ("https://www.youtube.com/@Some/shorts?x=1", "https://www.youtube.com/@Some/shorts"),
+            (
+                "https://douyin.com/user/MS4wLjABAAAAx9_Kq-AbC?from_tab_name=main&vid=1#x",
+                "https://www.douyin.com/user/MS4wLjABAAAAx9_Kq-AbC",
+            ),
             (
                 "https://www.youtube.com/channel/UC123",
                 "https://www.youtube.com/channel/UC123/videos",

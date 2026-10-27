@@ -29,10 +29,13 @@ struct Hit {
     user_agent: Option<String>,
     referer: Option<String>,
     cookie: bool,
+    cookie_text: Option<String>,
 }
 
 enum Route {
     File(Arc<Vec<u8>>, &'static str),
+    /// 403 khi header `Cookie` không có đúng chuỗi này (CDN TikTok đòi `tt_chain_token`).
+    Gated(Arc<Vec<u8>>, &'static str, &'static str),
     Forbidden,
 }
 
@@ -119,9 +122,17 @@ fn answer(
         user_agent: header("user-agent"),
         referer: header("referer"),
         cookie: header("cookie").is_some(),
+        cookie_text: header("cookie"),
     };
-    let reply = match routes.get(&path) {
-        Some(Route::File(body, kind)) => {
+    let opened = match routes.get(&path) {
+        Some(Route::Gated(body, kind, needed)) => header("cookie")
+            .is_some_and(|cookie| cookie.split("; ").any(|pair| pair == *needed))
+            .then_some((body, kind)),
+        Some(Route::File(body, kind)) => Some((body, kind)),
+        _ => None,
+    };
+    let reply = match (opened, routes.get(&path)) {
+        (Some((body, kind)), _) => {
             let total = body.len() as u64;
             if method == "HEAD" {
                 head(200, total, kind, None, &[])
@@ -140,8 +151,8 @@ fn answer(
                 head(200, total, kind, None, body)
             }
         }
-        Some(Route::Forbidden) => head(403, 0, "text/plain", None, &[]),
-        None => head(404, 0, "text/plain", None, &[]),
+        (None, Some(Route::Forbidden | Route::Gated(..))) => head(403, 0, "text/plain", None, &[]),
+        (None, _) => head(404, 0, "text/plain", None, &[]),
     };
     log.lock().unwrap().push(hit);
     let wait = delay.load(Ordering::Relaxed);
@@ -222,6 +233,8 @@ struct Lab {
     ffmpeg: PathBuf,
     video: Arc<Vec<u8>>,
     audio: Arc<Vec<u8>>,
+    /// Một file có cả hình lẫn tiếng, như format gộp của TikTok.
+    combined: Arc<Vec<u8>>,
     journal: Arc<Journal>,
     engine: Arc<DownloadEngine>,
     _root: TempRoot,
@@ -271,11 +284,22 @@ fn lab() -> Option<Lab> {
         &binary,
         &[&audio_args[..], &["-f", "ipod", &audio_out]].concat(),
     );
+    let combined = root.join("combined.mp4");
+    let combined_out = combined.to_string_lossy();
+    let combined_args = [
+        "-f", "lavfi", "-i", picture, "-f", "lavfi", "-i", tone, "-c:v", "mpeg4", "-q:v", "2",
+        "-c:a", "aac", "-b:a", "128k", "-shortest",
+    ];
+    ffmpeg(
+        &binary,
+        &[&combined_args[..], &["-f", "mp4", &combined_out]].concat(),
+    );
     let journal = Arc::new(Journal::open(root.join("utd.db")).unwrap());
     let engine = Arc::new(DownloadEngine::new(journal.clone(), EngineOptions::default()).unwrap());
     Some(Lab {
         video: Arc::new(std::fs::read(&video).unwrap()),
         audio: Arc::new(std::fs::read(&audio).unwrap()),
+        combined: Arc::new(std::fs::read(&combined).unwrap()),
         downloads,
         ffmpeg: binary,
         journal,
@@ -296,6 +320,18 @@ impl Lab {
             Route::File(self.audio.clone(), "audio/mp4"),
         );
         routes.insert("/gone".to_string(), Route::Forbidden);
+        routes.insert(
+            "/tt-v.mp4".to_string(),
+            Route::Gated(self.video.clone(), "video/mp4", "tt_chain_token=abc"),
+        );
+        routes.insert(
+            "/tt-a.m4a".to_string(),
+            Route::Gated(self.audio.clone(), "audio/mp4", "tt_chain_token=abc"),
+        );
+        routes.insert(
+            "/tt-c.mp4".to_string(),
+            Route::Gated(self.combined.clone(), "video/mp4", "tt_chain_token=abc"),
+        );
         Server::start(routes)
     }
 
@@ -359,6 +395,7 @@ impl Lab {
             chunk: Some(CAP),
             available_at: None,
             drm: false,
+            cookies: Default::default(),
         };
         Resolved {
             streams: vec![
@@ -525,6 +562,425 @@ async fn downloads_both_streams_with_capped_requests_then_muxes() {
         tasks.iter().all(|event| event.id == task.id),
         "task con không lên giao diện"
     );
+}
+
+/// TikTok: CDN trả 403 nếu thiếu cookie yt-dlp đặt cho luồng (`tt_chain_token`, giá trị có ngoặc kép).
+/// Engine gửi kèm cookie đó (bỏ ngoặc) ngay lượt đầu, không đứng 0 B/s rồi quay về yt-dlp.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sends_the_cookies_yt_dlp_set_for_the_stream() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    let (mut task, job) = lab.parent();
+    let mut resolved = lab.streams(&server, "/tt-v.mp4", "/tt-a.m4a");
+    for stream in &mut resolved.streams {
+        stream.cookies = resolve::StreamCookies::parse(
+            "ttwid=1%7Cx; Domain=127.0.0.1; Path=/; Expires=1824135169; tt_chain_token=\"abc\"; Domain=127.0.0.1; Path=/",
+        );
+    }
+    let resolver = Fixed {
+        resolved,
+        calls: AtomicUsize::new(0),
+    };
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_finished(&lab, &task);
+    assert_eq!(resolver.calls.load(Ordering::Relaxed), 1, "không hỏi yt-dlp lại");
+    let video = server.hits("/tt-v.mp4");
+    assert!(
+        video
+            .iter()
+            .all(|hit| hit.cookie_text.as_deref() == Some("ttwid=1%7Cx; tt_chain_token=abc")),
+        "{video:?}"
+    );
+}
+
+/// `yt-dlp -J` của một video TikTok: mọi format gộp hình + tiếng, mỗi mức hai mirror (`-0`, `-1`), cookie
+/// `tt_chain_token` ở từng format. Mirror `-0` trỏ vào `/gone` (403): chỉ mirror `-1` tải được.
+fn tiktok_json(server: &Server, page: &str) -> serde_json::Value {
+    let expire = resolve::now_secs() + 6 * 3600;
+    let format = |id: &str, path: &str, width: u64, height: u64| {
+        serde_json::json!({
+            "format_id": id,
+            "url": server.url(&format!("{path}?expire={expire}")),
+            "protocol": "http",
+            "ext": "mp4",
+            "vcodec": "h265",
+            "acodec": "aac",
+            "width": width,
+            "height": height,
+            "filesize_approx": 3200,
+            "http_headers": { "User-Agent": "UTD-test-agent" },
+            "downloader_options": { "http_chunk_size": CAP },
+            "cookies":"ttwid=1%7Cx; Domain=127.0.0.1; Path=/; Expires=1824135169; tt_chain_token=\"abc\"; Domain=127.0.0.1; Path=/"
+        })
+    };
+    serde_json::json!({
+        "title": "Clip",
+        "webpage_url": page,
+        "formats": [
+            format("bytevc1_720p_509915-0", "/gone", 720, 1280),
+            format("bytevc1_720p_509915-1", "/gone", 720, 1280),
+            format("bytevc1_1080p_1146746-0", "/gone", 1080, 1920),
+            format("bytevc1_1080p_1146746-1", "/tt-c.mp4", 1080, 1920),
+        ]
+    })
+}
+
+/// `yt-dlp -J` của một video TikTok DÀI: nhạc nền `audio` (mp3, không cookie, không hạn; dài hơn video nên KHÔNG
+/// được tải), `download` (bản có watermark, thiếu `width`/`height`), 540p gộp hình + tiếng, 720p h265 CHỈ HÌNH. Mirror
+/// `-0` của mỗi mức trỏ vào `/gone` (403); `-1` ở `/tt-v.mp4` (hình) và `/tt-c.mp4` (gộp, mpeg4 + aac, đòi cookie
+/// `tt_chain_token`).
+fn tiktok_split_json(server: &Server, page: &str) -> serde_json::Value {
+    let expire = resolve::now_secs() + 6 * 3600;
+    let cookies = "ttwid=1%7Cx; Domain=127.0.0.1; Path=/; Expires=1824135169; tt_chain_token=\"abc\"; Domain=127.0.0.1; Path=/";
+    let format = |id: &str, path: &str, vcodec: &str, acodec: &str, preference: i64| {
+        serde_json::json!({
+            "format_id": id,
+            "url": server.url(&format!("{path}?expire={expire}")),
+            "protocol": "http",
+            "ext": "mp4",
+            "vcodec": vcodec,
+            "acodec": acodec,
+            "preference": preference,
+            "filesize_approx": 3200,
+            "http_headers": { "User-Agent": "UTD-test-agent" },
+            "downloader_options": { "http_chunk_size": CAP },
+            "cookies": cookies
+        })
+    };
+    let sized = |mut format: serde_json::Value, width: u64, height: u64| {
+        format["width"] = width.into();
+        format["height"] = height.into();
+        format
+    };
+    // Nhạc nền: không cookie, không hạn, không `preference`. Nội dung là m4a nhưng khai mp3 như TikTok.
+    let audio = serde_json::json!({
+        "format_id": "audio",
+        "url": server.url("/a.m4a"),
+        "protocol": "http",
+        "ext": "mp3",
+        "vcodec": "none",
+        "acodec": "mp3",
+        "http_headers": { "User-Agent": "UTD-test-agent" },
+        "downloader_options": { "http_chunk_size": CAP }
+    });
+    serde_json::json!({
+        "title": "Clip",
+        "webpage_url": page,
+        "extractor_key": "TikTok",
+        "formats": [
+            audio,
+            format("download", "/gone", "h264", "aac", -2),
+            sized(format("h264_540p_1526080-0", "/gone", "h264", "aac", -1), 576, 1024),
+            sized(format("h264_540p_1526080-1", "/tt-c.mp4", "h264", "aac", -1), 576, 1024),
+            sized(format("bytevc1_720p_698386-0", "/gone", "h265", "none", -1), 720, 1280),
+            sized(format("bytevc1_720p_698386-1", "/tt-v.mp4", "h265", "none", -1), 720, 1280),
+        ]
+    })
+}
+
+/// Trang vừa "Phân tích" bằng JSON kiểu TikTok: job tải mang selector của dòng `id` mà hộp chọn định dạng trả.
+fn analysed_tiktok(lab: &Lab, server: &Server, id: &str) -> (DownloadTask, MediaJob, String) {
+    analysed_page(lab, |page| tiktok_json(server, page), id)
+}
+
+fn analysed_page(
+    lab: &Lab,
+    json: impl Fn(&str) -> serde_json::Value,
+    id: &str,
+) -> (DownloadTask, MediaJob, String) {
+    let page = format!(
+        "https://www.tiktok.com/@a/video/{}",
+        uuid::Uuid::new_v4().as_u128()
+    );
+    let value = json(&page);
+    let result = crate::media::probe::build_result(&page, &value, true).expect("probe result");
+    probe_cache::remember(&value, &page, resolve::now_secs());
+    // Hộp Tải media, rồi bảng trên trang của tiện ích (đủ mọi mức, kể cả khi hộp chỉ có một mức).
+    let selector = result
+        .formats
+        .iter()
+        .chain(&result.every_height)
+        .find(|format| format.id == id)
+        .map(|format| format.selector.clone())
+        .expect("dòng đã chọn");
+    let (task, job) = lab.parent_for(&page, None, &selector);
+    (task, job, selector)
+}
+
+/// TikTok: chọn "Tốt nhất" (hoặc một mức) là tải ngay, không chạy yt-dlp lần hai (trước đây `fresh`, đứng
+/// 0 B/s ~12 s): selector ghim một mã gộp ⇒ cache trả đúng một luồng ⇒ kế hoạch Cached, một file, có cookie luồng.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plans_one_cached_stream_with_its_cookies_for_a_combined_only_page() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    for id in ["best", "1080"] {
+        let (mut task, job, selector) = analysed_tiktok(&lab, &server, id);
+        assert!(
+            selector.starts_with("bytevc1_1080p_1146746-1/"),
+            "{selector}"
+        );
+        let resolver = Fixed {
+            resolved: lab.streams(&server, "/gone", "/gone"),
+            calls: AtomicUsize::new(0),
+        };
+        let cached = resolver.cached(&job).expect("luồng của lần phân tích");
+        let ids: Vec<&str> = cached
+            .streams
+            .iter()
+            .map(|stream| stream.format_id.as_str())
+            .collect();
+        assert_eq!(ids, ["bytevc1_1080p_1146746-1"], "đúng một luồng");
+
+        let sink = Recorder::default();
+        let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+        let Step::Go(plan) = start(&fast, &mut task, &job).await.unwrap() else {
+            panic!("phải tải bằng đường nhanh");
+        };
+        assert_eq!(plan.source, Source::Cached);
+        assert_eq!(
+            plan.layout,
+            Layout::Single,
+            "một file có cả hình lẫn tiếng, không ghép"
+        );
+        assert_eq!(plan.children.len(), 1);
+        assert_eq!(
+            resolver.calls.load(Ordering::Relaxed),
+            0,
+            "không hỏi yt-dlp"
+        );
+        let url = utd_engine::validate_url(&plan.children[0].url).unwrap();
+        let sent = plan.cookies.as_ref().and_then(|jar| jar.header_for(&url));
+        assert_eq!(
+            sent.as_ref().and_then(|value| value.to_str().ok()),
+            Some("ttwid=1%7Cx; tt_chain_token=abc"),
+            "cookie yt-dlp đặt cho luồng"
+        );
+    }
+}
+
+/// TikTok video DÀI: bậc cao nhất là hình riêng (h265, mirror `-0/-1`), tiếng riêng `audio` là nhạc nền, kèm bản
+/// `download` có watermark thiếu chiều cao. Chọn chất lượng vẫn là tải ngay (trước đây `fresh` 8–12 s): kế hoạch Cached,
+/// hai task con (hình, rồi format gộp 540p để lấy tiếng thật của video; không phải nhạc nền, không phải
+/// `download`), cookie luồng của hình, không hỏi yt-dlp.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plans_cached_video_and_the_sound_of_the_combined_format_for_a_long_tiktok() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    for id in ["best", "720"] {
+        let json = |page: &str| tiktok_split_json(&server, page);
+        let (mut task, job, selector) = analysed_page(&lab, json, id);
+        assert!(
+            selector.starts_with("bytevc1_720p_698386-1+h264_540p_1526080-1/b"),
+            "{selector}"
+        );
+        let resolver = Fixed {
+            resolved: lab.streams(&server, "/gone", "/gone"),
+            calls: AtomicUsize::new(0),
+        };
+        let cached = resolver.cached(&job).expect("luồng của lần phân tích");
+        let ids: Vec<&str> = cached
+            .streams
+            .iter()
+            .map(|stream| stream.format_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            ["bytevc1_720p_698386-1", "h264_540p_1526080-1"],
+            "hình + format gộp"
+        );
+
+        let sink = Recorder::default();
+        let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+        let Step::Go(plan) = start(&fast, &mut task, &job).await.unwrap() else {
+            panic!("phải tải bằng đường nhanh");
+        };
+        assert_eq!(plan.source, Source::Cached);
+        assert_eq!(plan.layout, Layout::Merge, "hình và tiếng ghép bằng ffmpeg");
+        assert_eq!(plan.children.len(), 2);
+        assert!(plan.children[0].url.contains("/tt-v.mp4"), "hình trước");
+        assert!(plan.children[1].url.contains("/tt-c.mp4"), "rồi format gộp");
+        assert_eq!(
+            resolver.calls.load(Ordering::Relaxed),
+            0,
+            "không hỏi yt-dlp"
+        );
+        let url = utd_engine::validate_url(&plan.children[0].url).unwrap();
+        let sent = plan.cookies.as_ref().and_then(|jar| jar.header_for(&url));
+        assert_eq!(
+            sent.as_ref().and_then(|value| value.to_str().ok()),
+            Some("ttwid=1%7Cx; tt_chain_token=abc"),
+            "cookie yt-dlp đặt cho luồng hình"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn downloads_a_combined_only_page_from_the_analysed_stream_without_asking_yt_dlp() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    let (mut task, job, _) = analysed_tiktok(&lab, &server, "best");
+    let resolver = Fixed {
+        resolved: lab.streams(&server, "/gone", "/gone"),
+        calls: AtomicUsize::new(0),
+    };
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_finished(&lab, &task);
+    assert_eq!(
+        resolver.calls.load(Ordering::Relaxed),
+        0,
+        "không chạy yt-dlp lần hai"
+    );
+    assert!(
+        server.hits("/gone").is_empty(),
+        "mirror -0 không được đụng tới"
+    );
+    let stream = server.hits("/tt-c.mp4");
+    assert!(!stream.is_empty());
+    assert!(
+        stream
+            .iter()
+            .all(|hit| hit.cookie_text.as_deref() == Some("ttwid=1%7Cx; tt_chain_token=abc")),
+        "{stream:?}"
+    );
+}
+
+/// TikTok: tạm dừng giữa chừng rồi tiếp tục. Cookie `tt_chain_token` của luồng chỉ ở RAM (không vào journal), nên lượt
+/// tiếp tục lấy lại từ lần "Phân tích" còn nhớ: không có thì CDN trả 403, task đứng 0 B/s rồi mới hỏi yt-dlp (~12 s).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_keeps_the_stream_cookies_of_a_paused_combined_only_page() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    server.delay_ms.store(400, Ordering::Relaxed);
+    let (mut task, job, _) = analysed_tiktok(&lab, &server, "best");
+    let resolver = Fixed {
+        resolved: lab.streams(&server, "/gone", "/gone"),
+        calls: AtomicUsize::new(0),
+    };
+    let cancel = CancellationToken::new();
+    let pausing = Recorder {
+        pause_on_bytes: Some(cancel.clone()),
+        ..Recorder::default()
+    };
+    let fast = lab.fast(&pausing, &resolver, cancel);
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_eq!(task.status, TaskStatus::Paused);
+    let children = lab.journal.list_children(&task.id).unwrap();
+    assert_eq!(children.len(), 1, "một file có cả hình lẫn tiếng");
+    let kept = children[0].downloaded_bytes;
+    assert!(
+        kept > 0 && kept < lab.combined.len() as u64,
+        "dừng giữa chừng: đã có {kept} / {} byte",
+        lab.combined.len()
+    );
+    // Yêu cầu của lượt trước có thể còn đang tới server: chờ rồi mới tiếp tục.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    server.delay_ms.store(0, Ordering::Relaxed);
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_finished(&lab, &task);
+    assert_eq!(
+        resolver.calls.load(Ordering::Relaxed),
+        0,
+        "tiếp tục bằng link đã lưu, không hỏi yt-dlp"
+    );
+    let stream = server.hits("/tt-c.mp4");
+    assert!(
+        stream
+            .iter()
+            .all(|hit| hit.cookie_text.as_deref() == Some("ttwid=1%7Cx; tt_chain_token=abc")),
+        "mọi yêu cầu, cả lượt tiếp tục, mang cookie luồng: {stream:?}"
+    );
+}
+
+/// Như trên cho trang có bậc cao nhất chỉ hình (hình + format gộp lấy tiếng): `resume_plan` lấy cookie luồng từ lần
+/// "Phân tích" nên tiếp tục không hỏi yt-dlp (trước đây selector `bv*+ba/b` không có trong cache ⇒ hỏi lại ~12 s).
+/// File cuối đúng một hình + một tiếng: hình của format gộp không lọt vào (`assert_finished` đếm luồng), và nhạc
+/// nền `audio` không bị tải.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_keeps_the_stream_cookies_of_a_paused_video_only_top_tier() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    server.delay_ms.store(400, Ordering::Relaxed);
+    let json = |page: &str| tiktok_split_json(&server, page);
+    let (mut task, job, _) = analysed_page(&lab, json, "best");
+    let resolver = Fixed {
+        resolved: lab.streams(&server, "/gone", "/gone"),
+        calls: AtomicUsize::new(0),
+    };
+    let cancel = CancellationToken::new();
+    let pausing = Recorder {
+        pause_on_bytes: Some(cancel.clone()),
+        ..Recorder::default()
+    };
+    let fast = lab.fast(&pausing, &resolver, cancel);
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_eq!(task.status, TaskStatus::Paused);
+    let children = lab.journal.list_children(&task.id).unwrap();
+    assert_eq!(children.len(), 2, "hình + tiếng");
+    assert!(
+        children.iter().any(|child| child.downloaded_bytes > 0),
+        "dừng giữa chừng"
+    );
+    // Yêu cầu của lượt trước có thể còn đang tới server: chờ rồi mới tiếp tục.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    server.delay_ms.store(0, Ordering::Relaxed);
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_finished(&lab, &task);
+    assert_eq!(
+        resolver.calls.load(Ordering::Relaxed),
+        0,
+        "tiếp tục bằng link đã lưu, không hỏi yt-dlp"
+    );
+    let video = server.hits("/tt-v.mp4");
+    assert!(
+        video
+            .iter()
+            .all(|hit| hit.cookie_text.as_deref() == Some("ttwid=1%7Cx; tt_chain_token=abc")),
+        "mọi yêu cầu hình, cả lượt tiếp tục, mang cookie luồng: {video:?}"
+    );
+    assert!(!server.hits("/tt-c.mp4").is_empty(), "tiếng lấy từ format gộp");
+    assert!(server.hits("/a.m4a").is_empty(), "không tải nhạc nền");
+    assert!(server.hits("/gone").is_empty(), "không đụng mirror `-0`");
+}
+
+/// Dòng "Âm thanh M4A" của TikTok video dài: tiếng lấy từ format gộp (không phải nhạc nền `audio`), ffmpeg bỏ hình
+/// khi tách ⇒ file m4a chỉ có tiếng.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn extracts_the_sound_of_the_combined_format_for_the_audio_row_of_a_long_tiktok() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    let json = |page: &str| tiktok_split_json(&server, page);
+    let (mut task, mut job, selector) = analysed_page(&lab, json, "audio-m4a");
+    assert_eq!(selector, "h264_540p_1526080-1/b");
+    job.audio_format = Some("m4a".into());
+    lab.journal.save_media_job(&job).unwrap();
+    let resolver = Fixed {
+        resolved: lab.streams(&server, "/gone", "/gone"),
+        calls: AtomicUsize::new(0),
+    };
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_eq!(task.status, TaskStatus::Completed, "{:?}", task.error);
+    assert_eq!(lab.files(), ["Clip.m4a"]);
+    assert_eq!(
+        lab.stream_kinds(&lab.downloads.join("Clip.m4a")),
+        ["audio"],
+        "chỉ tiếng, không còn hình của format gộp"
+    );
+    assert_eq!(resolver.calls.load(Ordering::Relaxed), 0, "không hỏi yt-dlp");
+    assert!(!server.hits("/tt-c.mp4").is_empty());
+    assert!(server.hits("/a.m4a").is_empty(), "không tải nhạc nền");
+    assert!(server.hits("/gone").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{interval, sleep, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
+use utd_engine::auth::CookieJar;
 use utd_engine::{
     now_ms, DownloadControl, DownloadEngine, DownloadOutcome, DownloadTask, EngineEvent,
     ErrorClass, Journal, MediaJob, TaskError, TaskStatus,
@@ -38,8 +39,9 @@ pub(super) type ResolveFuture<'a> =
 pub(super) trait Resolver: Send + Sync {
     fn resolve<'a>(&'a self, url: &'a str, selector: &'a str) -> ResolveFuture<'a>;
 
-    /// Luồng của lần "Phân tích" còn hạn, khỏi chạy yt-dlp lần hai. Chỉ lượt đầu (`start`) hỏi;
-    /// lấy link mới (`refresh`) luôn qua `resolve`.
+    /// Luồng của lần "Phân tích" còn hạn, khỏi chạy yt-dlp lần hai. Lượt đầu (`start`) hỏi để lấy link;
+    /// lượt tiếp tục (`resume_plan`) hỏi để lấy lại cookie luồng, link vẫn là của task con; lấy link mới
+    /// (`refresh`) luôn qua `resolve`.
     fn cached(&self, job: &MediaJob) -> Option<Resolved> {
         probe_cache::lookup(&job_urls(job), &job.selector, resolve::now_secs())
     }
@@ -97,6 +99,8 @@ struct Plan {
     hints: Vec<Hint>,
     estimates: Vec<Option<u64>>,
     source: Source,
+    /// Cookie đăng nhập cộng cookie yt-dlp đặt cho luồng (`cookies_for`), chỉ ở RAM.
+    cookies: Option<Arc<CookieJar>>,
 }
 
 /// Link của kế hoạch tải vừa hỏi yt-dlp hay lấy lại từ chỗ đã lưu.
@@ -254,7 +258,7 @@ async fn start(
     match parts::create(&fast.journal, task, &streams, connections) {
         Ok(children) => {
             timing(fast, task, "parts");
-            Ok(Step::Go(plan_for(layout, children, &streams, source)))
+            Ok(Step::Go(plan_for(fast, layout, children, &streams, source)))
         }
         Err(message) => {
             log::warn!("media: không tạo được luồng con ({message})");
@@ -281,6 +285,7 @@ async fn first_streams(
 }
 
 fn plan_for(
+    fast: &Fast<'_>,
     layout: Layout,
     children: Vec<DownloadTask>,
     streams: &[Stream],
@@ -292,7 +297,23 @@ fn plan_for(
         hints: parts::hints_from_streams(streams),
         estimates: streams.iter().map(|stream| stream.size).collect(),
         source,
+        cookies: cookies_for(fast.cookies.as_ref(), streams),
     }
+}
+
+/// Cookie cho các task con: cookie đăng nhập (nếu có) cộng cookie yt-dlp đặt cho luồng (TikTok: thiếu
+/// `tt_chain_token` thì CDN trả 403, task đứng 0 B/s rồi mới quay về yt-dlp). Engine chỉ gửi cookie tới
+/// đúng miền của nó.
+fn cookies_for(signed_in: Option<&Arc<CookieJar>>, streams: &[Stream]) -> Option<Arc<CookieJar>> {
+    let mut jar = signed_in.cloned();
+    for stream in streams.iter().filter(|stream| !stream.cookies.is_empty()) {
+        let Ok(url) = utd_engine::validate_url(&stream.url) else {
+            continue;
+        };
+        jar.get_or_insert_with(|| Arc::new(CookieJar::new([])))
+            .absorb_text(&url, stream.cookies.lines());
+    }
+    jar
 }
 
 /// Chạy yt-dlp `-J` (huỷ được). `Go(Err)` = yt-dlp báo lỗi.
@@ -336,12 +357,20 @@ async fn resume_plan(
     if stale {
         return refresh(fast, task, job, children).await;
     }
+    // Cookie luồng (TikTok `tt_chain_token`) chỉ ở RAM, không vào journal: lấy lại từ lần "Phân tích" nếu còn
+    // trong cache (cùng lần chạy app). Hết (mở lại app, cache đầy) thì chỉ còn cookie đăng nhập: CDN trả 403 ⇒
+    // `recover` hỏi yt-dlp link mới kèm cookie.
+    let cookies = match fast.resolver.cached(job) {
+        Some(analysed) => cookies_for(fast.cookies.as_ref(), &analysed.streams),
+        None => fast.cookies.clone(),
+    };
     Ok(Step::Go(Plan {
         layout,
         hints: parts::hints_from_children(&children),
         estimates: Vec::new(),
         children,
         source: Source::Cached,
+        cookies,
     }))
 }
 
@@ -388,6 +417,7 @@ async fn refresh(
     let children = parts::reconcile(&fast.journal, task, children, &streams, connections)?;
     timing(fast, task, "refreshed source=fresh");
     Ok(Step::Go(plan_for(
+        fast,
         layout,
         children,
         &streams,
@@ -448,7 +478,7 @@ async fn download(fast: &Fast<'_>, task: &mut DownloadTask, plan: &Plan) -> Resu
     // Một luồng hỏng thì dừng luồng kia (giữ đoạn đã tải); tạm dừng task cha dừng cả hai.
     let siblings = fast.cancel.child_token();
     let (events, mut inbox) = mpsc::unbounded_channel();
-    let mut workers = spawn_parts(fast, pending, &siblings, &events);
+    let mut workers = spawn_parts(fast, pending, plan.cookies.as_ref(), &siblings, &events);
     drop(events);
     let mut outcomes = Outcomes::default();
     let mut ticker = interval(TICK);
@@ -473,6 +503,7 @@ async fn download(fast: &Fast<'_>, task: &mut DownloadTask, plan: &Plan) -> Resu
 fn spawn_parts(
     fast: &Fast<'_>,
     pending: Vec<(String, Option<u16>)>,
+    cookies: Option<&Arc<CookieJar>>,
     siblings: &CancellationToken,
     events: &mpsc::UnboundedSender<EngineEvent>,
 ) -> JoinSet<utd_engine::Result<DownloadOutcome>> {
@@ -483,7 +514,7 @@ fn spawn_parts(
             cancel: siblings.child_token(),
             events: Some(events.clone()),
             initial_connections,
-            cookies: fast.cookies.clone(),
+            cookies: cookies.cloned(),
         };
         workers.spawn(async move { engine.resume(&id, control).await });
     }

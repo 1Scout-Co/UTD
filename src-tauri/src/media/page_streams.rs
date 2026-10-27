@@ -130,6 +130,7 @@ pub(super) fn resolved(streams: &[PageStream], page_url: Option<&str>) -> Resolv
                 chunk: None,
                 available_at: None,
                 drm: false,
+                cookies: Default::default(),
             }
         })
         .collect();

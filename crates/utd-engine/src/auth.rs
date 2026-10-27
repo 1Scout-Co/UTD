@@ -212,14 +212,16 @@ impl CookieJar {
 
     /// Gộp `Set-Cookie` máy chủ trả cho yêu cầu tới `url` (RFC 6265 §5.2–5.3, phần cần cho tải file).
     pub fn absorb<'a>(&self, url: &Url, set_cookies: impl IntoIterator<Item = &'a HeaderValue>) {
+        self.absorb_text(url, set_cookies.into_iter().filter_map(|header| header.to_str().ok()));
+    }
+
+    /// Như `absorb`, với dòng `Set-Cookie` dạng chữ (vd cookie yt-dlp đặt cho một luồng media).
+    pub fn absorb_text<'a>(&self, url: &Url, set_cookies: impl IntoIterator<Item = &'a str>) {
         let Some(host) = host_of(url) else {
             return;
         };
         let now = unix_now();
-        for header in set_cookies {
-            let Ok(text) = header.to_str() else {
-                continue;
-            };
+        for text in set_cookies {
             let Some(cookie) = parse_set_cookie(text, &host, url, now) else {
                 continue;
             };

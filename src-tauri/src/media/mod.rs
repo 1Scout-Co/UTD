@@ -262,6 +262,34 @@ pub async fn add_media_download(
 }
 
 pub(crate) fn enqueue_media(app: AppHandle, mut input: AddMediaInput) -> Result<DownloadTask, String> {
+    // Video Douyin trong danh sách hồ sơ (channel/douyin.rs): tải thẳng link MP4 đã có, yt-dlp không đọc được Douyin.
+    let page = channel::douyin::streams_for(&input).map(|(title, streams)| {
+        if input.title.trim().is_empty() {
+            input.title = title;
+        }
+        input.selector = page_streams::SELECTOR.into();
+        input.quality = None;
+        streams
+    });
+    enqueue_with(app, input, page)
+}
+
+/// Video đọc thẳng từ trang (`page_streams`, nút "Tải video này"): như `enqueue_media`, không cookie (link luồng đã
+/// có chữ ký của trang).
+pub(crate) fn enqueue_page(
+    app: AppHandle,
+    input: AddMediaInput,
+    streams: &[page_streams::PageStream],
+) -> Result<DownloadTask, String> {
+    enqueue_with(app, input, Some(streams.to_vec()))
+}
+
+/// Tạo task rồi xếp hàng. `page`: luồng đọc từ trang, lưu trước khi xếp hàng để runner thấy ngay.
+fn enqueue_with(
+    app: AppHandle,
+    mut input: AddMediaInput,
+    page: Option<Vec<page_streams::PageStream>>,
+) -> Result<DownloadTask, String> {
     let (journal, queue) = {
         let state = app.state::<AppState>();
         (state.journal.clone(), state.queue.clone())
@@ -270,12 +298,22 @@ pub(crate) fn enqueue_media(app: AppHandle, mut input: AddMediaInput) -> Result<
     let destination = with_subfolder(folder, input.subfolder.as_deref())?;
     let place = if input.later { Place::Back } else { Place::Front };
     let pick = input.channel.take();
-    let grant = crate::commands::signed_in(&app, input.auth_grant.as_deref(), &input.url);
+    let grant = match page {
+        Some(_) => None,
+        None => crate::commands::signed_in(&app, input.auth_grant.as_deref(), &input.url),
+    };
     let task = create_media(&journal, &destination, input, grant.as_deref())?;
+    if let Some(streams) = &page
+        && let Err(error) = page_streams::save(&journal, &task.id, streams)
+    {
+        let _ = journal.delete_task(&task.id);
+        return Err(error);
+    }
     if let Some(grant) = &grant {
         app.state::<AppState>().auth.bind(&task.id, &grant.id);
     }
     if let Err(error) = queue.submit(vec![Entry::new(task.id.clone())], place) {
+        page_streams::forget(&journal, &task.id);
         let _ = journal.delete_task(&task.id);
         return Err(error);
     }
@@ -283,31 +321,6 @@ pub(crate) fn enqueue_media(app: AppHandle, mut input: AddMediaInput) -> Result<
         && let Err(error) = channel::remember(&journal, pick, &task.id)
     {
         log::warn!("channel: không nhớ được video đã tải ({error})");
-    }
-    Ok(task)
-}
-
-/// Video đọc thẳng từ trang (`page_streams`, nút "Tải video này"): như `enqueue_media`, lưu link luồng trước khi
-/// xếp hàng để runner thấy ngay. Không cookie: link luồng đã có chữ ký của trang.
-pub(crate) fn enqueue_page(
-    app: AppHandle,
-    input: AddMediaInput,
-    streams: &[page_streams::PageStream],
-) -> Result<DownloadTask, String> {
-    let (journal, queue) = {
-        let state = app.state::<AppState>();
-        (state.journal.clone(), state.queue.clone())
-    };
-    let destination = crate::commands::download_dir_for(&app, input.dest_dir.as_deref())?;
-    let task = create_media(&journal, &destination, input, None)?;
-    if let Err(error) = page_streams::save(&journal, &task.id, streams) {
-        let _ = journal.delete_task(&task.id);
-        return Err(error);
-    }
-    if let Err(error) = queue.submit(vec![Entry::new(task.id.clone())], Place::Front) {
-        page_streams::forget(&journal, &task.id);
-        let _ = journal.delete_task(&task.id);
-        return Err(error);
     }
     Ok(task)
 }

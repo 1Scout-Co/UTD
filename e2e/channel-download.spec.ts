@@ -319,6 +319,8 @@ test('S-61: lọc, chọn, một chất lượng chung, cả kênh vào hàng đ
   await expect(dialog.locator('[data-s="S-61"]')).toBeVisible()
   await expect(dialog.getByText('Kênh Mẫu', { exact: true })).toBeVisible()
   await expect(dialog.getByText('@kenh.mau · 5 video')).toBeVisible()
+  // Thời lượng có đồng hồ đứng trước (không đọc nhầm là giờ đăng).
+  await expect(dialog.locator('li svg.lucide-clock').first()).toBeVisible()
   // StrictMode (bản dev) chạy effect hai lần: lượt đầu bị huỷ ngay, lượt cuối là lượt thật.
   expect((await app.calls('channel_list')).at(-1)).toEqual({ url: CHANNEL, listingId: expect.any(String) })
 

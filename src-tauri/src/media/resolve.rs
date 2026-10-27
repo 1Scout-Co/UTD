@@ -9,7 +9,7 @@ use tokio::time::timeout;
 use utd_engine::{validate_url, ErrorClass, TaskError};
 
 use crate::media::{
-    ffmpeg_location, run_signed, runner, sign_in_pipe_error, tools, yt_dlp_signed,
+    ffmpeg_location, probe_cache, run_signed, runner, sign_in_pipe_error, tools, yt_dlp_signed,
 };
 
 /// YouTube bóp tốc độ yêu cầu Range lớn: mỗi yêu cầu xin tối đa chừng này khi yt-dlp không nói.
@@ -43,6 +43,53 @@ pub(super) struct Stream {
     pub chunk: Option<u64>,
     pub available_at: Option<i64>,
     pub drm: bool,
+    pub cookies: StreamCookies,
+}
+
+/// Cookie yt-dlp đặt cho luồng (`cookies` của format): CDN TikTok trả 403 nếu thiếu `tt_chain_token`.
+/// Mỗi cookie một dòng kiểu `Set-Cookie`, giá trị bỏ ngoặc kép như yt-dlp gửi (giữ ngoặc thì CDN cũng
+/// trả 403). Chỉ ở RAM (probe_cache, hũ cookie của lượt tải), không vào journal.
+#[derive(Clone, Default, PartialEq)]
+pub(super) struct StreamCookies(Vec<String>);
+
+impl std::fmt::Debug for StreamCookies {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "StreamCookies({})", self.0.len())
+    }
+}
+
+impl StreamCookies {
+    const MAX: usize = 32;
+
+    /// `a=1; Domain=.x.com; Path=/; Secure; Expires=…; b="2"; Domain=…` ⇒ `["a=1; Domain=.x.com; …", "b=2; …"]`.
+    pub fn parse(text: &str) -> Self {
+        let mut lines: Vec<String> = Vec::new();
+        for part in text.split(';').map(str::trim).filter(|part| !part.is_empty()) {
+            let (name, value) = part.split_once('=').unwrap_or((part, ""));
+            let attribute = matches!(
+                name.trim().to_ascii_lowercase().as_str(),
+                "domain" | "path" | "secure" | "expires" | "max-age" | "httponly" | "samesite" | "version" | "comment"
+            );
+            match lines.last_mut() {
+                Some(line) if attribute => {
+                    line.push_str("; ");
+                    line.push_str(part);
+                }
+                _ if attribute || !part.contains('=') => {}
+                _ => lines.push(format!("{}={}", name.trim(), value.trim().trim_matches('"'))),
+            }
+        }
+        lines.truncate(Self::MAX);
+        Self(lines)
+    }
+
+    pub fn lines(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(String::as_str)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl Stream {
@@ -108,6 +155,32 @@ impl Layout {
     }
 }
 
+/// Đối số yt-dlp cho selector ghim ĐÚNG hai mã (`399+140/…`; TikTok video dài: `<hình chỉ hình>+<format gộp>/…`,
+/// hình 720p ghép với tiếng của bản gộp 540p). Mặc định yt-dlp chỉ giữ MỘT luồng hình khi ghép: format thứ hai
+/// cũng có hình nên bị bỏ, kết quả chỉ còn hình và MẤT TIẾNG (đo thật 2026-10-27). `--video-multistreams` giữ cả
+/// hai. Cờ này chỉ đổi kết quả khi hai vế đều có hình: `bv*+ba/b`, `399+140`, `b`, `ba` ra đúng cùng luồng có và
+/// không có cờ (đo trên YouTube và TikTok). Selector không ghim đúng hai mã thì không thêm gì.
+///
+/// `merging` = yt-dlp tải và tự ghép (đường dự phòng của runner): ffmpeg của yt-dlp map cả hình của format gộp ⇒
+/// file ra hai luồng hình. `-map -1:v:0` (sau các `-map` của yt-dlp) bỏ luồng hình thứ hai; không khớp luồng nào
+/// (hình + tiếng riêng như YouTube) thì ffmpeg bỏ qua, file ra giống hệt byte (đo trên YouTube `134+140`).
+pub(super) fn pair_args(selector: &str, merging: bool) -> &'static [&'static str] {
+    const KEEP_BOTH: &[&str] = &["--video-multistreams"];
+    const KEEP_ONE_PICTURE: &[&str] = &[
+        "--video-multistreams",
+        "--ppa",
+        "Merger+ffmpeg_o:-map -1:v:0",
+    ];
+    if !probe_cache::selector_ids(selector).is_some_and(|ids| ids.len() == 2) {
+        return &[];
+    }
+    if merging {
+        KEEP_ONE_PICTURE
+    } else {
+        KEEP_BOTH
+    }
+}
+
 /// `yt-dlp -J -f <selector>`: chỉ đọc thông tin, không tải media.
 pub(super) async fn resolve(
     tools: &tools::MediaTools,
@@ -127,6 +200,7 @@ pub(super) async fn resolve(
         "-f",
         selector,
     ]);
+    command.args(pair_args(selector, false));
     // Không có ffmpeg, yt-dlp chọn định dạng khác: chỉ chỗ giống hệt lượt tải thật.
     if let Some(location) = ffmpeg_location(tools) {
         command.arg("--ffmpeg-location").arg(location);
@@ -218,6 +292,11 @@ pub(super) fn parse_stream(value: &Value) -> Option<Stream> {
             .and_then(|options| number(options.get("http_chunk_size"))),
         available_at: number(value.get("available_at")).and_then(|at| i64::try_from(at).ok()),
         drm: flagged(value.get("has_drm")),
+        cookies: value
+            .get("cookies")
+            .and_then(Value::as_str)
+            .map(StreamCookies::parse)
+            .unwrap_or_default(),
         url,
     })
 }
@@ -424,7 +503,29 @@ mod tests {
             chunk: None,
             available_at: None,
             drm: false,
+            cookies: Default::default(),
         }
+    }
+
+    #[test]
+    fn splits_yt_dlp_stream_cookies_and_unquotes_values() {
+        let cookies = StreamCookies::parse(
+            "ttwid=1%7Cx; Domain=.tiktok.com; Path=/; Secure; Expires=1824135169; tt_csrf_token=y; Domain=.tiktok.com; Path=/; Secure; tt_chain_token=\"z/+=\"; Domain=.tiktok.com; Path=/; Secure; Expires=1808583169",
+        );
+        assert_eq!(
+            cookies.lines().collect::<Vec<_>>(),
+            [
+                "ttwid=1%7Cx; Domain=.tiktok.com; Path=/; Secure; Expires=1824135169",
+                "tt_csrf_token=y; Domain=.tiktok.com; Path=/; Secure",
+                "tt_chain_token=z/+=; Domain=.tiktok.com; Path=/; Secure; Expires=1808583169",
+            ]
+        );
+        assert_eq!(format!("{cookies:?}"), "StreamCookies(3)", "không lộ giá trị trong log");
+        let format = serde_json::json!({
+            "format_id": "h264_540p", "url": "https://v16-webapp-prime.tiktok.com/video/x", "ext": "mp4",
+            "protocol": "https", "cookies": "tt_chain_token=\"z\"; Domain=.tiktok.com; Path=/"
+        });
+        assert!(!parse_stream(&format).unwrap().cookies.is_empty());
     }
 
     fn resolved(streams: Vec<Stream>) -> Resolved {
@@ -562,6 +663,96 @@ mod tests {
             stream("140", "https", "m4a", "none", "mp4a"),
         ]);
         assert!(check(&two, Some("m4a"), true, 0).is_err());
+    }
+
+    /// `yt-dlp -J --video-multistreams -f bytevc1_720p_698386-1+h264_540p_1526080-1/b` thật (video TikTok 174 s,
+    /// 2026-10-27), bỏ phần thân: hình 720p h265 CHỈ HÌNH rồi format gộp 540p h264 + aac. Không có
+    /// `--video-multistreams`, yt-dlp bỏ format thứ hai vì nó cũng có hình và chỉ trả hình (mất tiếng).
+    fn tiktok_pair() -> Value {
+        let format = |id: &str, vcodec: &str, acodec: &str, width: u64, height: u64, size: u64| {
+            json!({
+                "format_id": id,
+                "url": format!("https://v19-webapp-prime.tiktok.com/video/tos/alisg/{id}/"),
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": vcodec,
+                "acodec": acodec,
+                "width": width,
+                "height": height,
+                "filesize": size,
+                "preference": -1,
+                "http_headers": { "User-Agent": "Mozilla/5.0" },
+                "cookies": "tt_chain_token=\"abc\"; Domain=.tiktok.com; Path=/"
+            })
+        };
+        json!({
+            "title": "Video dài",
+            "format_id": "bytevc1_720p_698386-1+h264_540p_1526080-1",
+            "protocol": "https+https",
+            "ext": "mkv",
+            "acodec": "aac",
+            "requested_formats": [
+                format("bytevc1_720p_698386-1", "h265", "none", 720, 1280, 11_107_596),
+                format("h264_540p_1526080-1", "h264", "aac", 576, 1024, 33_376_714),
+            ]
+        })
+    }
+
+    #[test]
+    fn merges_a_video_only_stream_with_the_audio_of_a_combined_one_in_that_order() {
+        let parsed = parse(&tiktok_pair()).expect("resolved");
+        let (layout, streams) = check(&parsed, None, true, 0).expect("eligible");
+        assert_eq!(layout, Layout::Merge);
+        let ids: Vec<&str> = streams.iter().map(|stream| stream.format_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["bytevc1_720p_698386-1", "h264_540p_1526080-1"],
+            "hình đầu vào 0, format gộp (lấy tiếng) đầu vào 1"
+        );
+        assert!(streams[0].has_video() && !streams[0].has_audio());
+        assert!(streams[1].has_video() && streams[1].has_audio());
+        assert!(!streams[0].cookies.is_empty() && !streams[1].cookies.is_empty());
+        assert_eq!(check(&parsed, None, false, 0), Err("merge needs ffmpeg"));
+        // Tiếp tục task đã dừng: hai task con ⇒ vẫn là ghép.
+        assert_eq!(Layout::infer(None, streams.len()), Some(Layout::Merge));
+    }
+
+    #[test]
+    fn takes_the_sound_of_a_combined_stream_for_an_audio_job() {
+        // Dòng M4A/MP3 của TikTok: một format gộp, ffmpeg bỏ hình khi tách tiếng.
+        let combined = resolved(vec![stream("h264_540p_1526080-1", "https", "mp4", "h264", "aac")]);
+        assert_eq!(
+            check(&combined, Some("m4a"), true, 0).unwrap().0,
+            Layout::Audio(AudioFormat::M4a)
+        );
+        assert_eq!(
+            check(&combined, Some("mp3"), true, 0).unwrap().0,
+            Layout::Audio(AudioFormat::Mp3)
+        );
+    }
+
+    #[test]
+    fn asks_yt_dlp_for_several_video_streams_only_when_two_ids_are_pinned() {
+        // Không có `--video-multistreams`, `A+B` mà B cũng có hình chỉ trả A (mất tiếng); có cờ thì trả cả hai.
+        let tiktok = "bytevc1_720p_698386-1+h264_540p_1526080-1/b[height<=1280]";
+        assert_eq!(pair_args(tiktok, false), ["--video-multistreams"]);
+        // Tải bằng yt-dlp: ffmpeg của yt-dlp map cả hình của format gộp, bỏ nó đi để file chỉ có một hình.
+        assert_eq!(
+            pair_args(tiktok, true),
+            ["--video-multistreams", "--ppa", "Merger+ffmpeg_o:-map -1:v:0"]
+        );
+        assert_eq!(pair_args("399+140/bv*+ba/b", false), ["--video-multistreams"]);
+        for selector in [
+            "bv*+ba/b",
+            "bv*[height<=720]+ba/b[height<=720]",
+            "h264_540p_1526080-1/bv*[height<=1024]+ba/b[height<=1024]",
+            "h264_540p_1526080-1/b",
+            "140/ba[ext=m4a]/ba",
+            "b",
+        ] {
+            assert!(pair_args(selector, false).is_empty(), "{selector}");
+            assert!(pair_args(selector, true).is_empty(), "{selector}");
+        }
     }
 
     #[test]
