@@ -32,6 +32,9 @@ const MAX_TITLE_CHARS: usize = 300;
 const BROWSER: &str = "[channel.douyin_browser] Mở trang hồ sơ Douyin trong trình duyệt rồi bấm chuột phải › Tải bằng UTD: danh sách được lấy ngay trong trang.";
 const BLOCKED: &str = "[channel.douyin_blocked] Douyin không trả thêm danh sách (có thể cần xác minh trên trang). Mở trang hồ sơ, xác minh nếu được hỏi rồi bấm lại.";
 const LOGIN: &str = "[channel.douyin_login] Douyin đòi đăng nhập để xem danh sách này. Đăng nhập trên trang Douyin rồi bấm lại.";
+/// Trả cho tiện ích khi hộp Tải cả kênh đã dừng/đóng: nó chỉ cần biết `ok = false` để thôi lật trang, người dùng
+/// không thấy câu này (nên không có mã dịch).
+const STOPPED: &str = "Hộp Tải cả kênh đã dừng.";
 
 /// Một phần danh sách tiện ích gửi (`url` của hồ sơ đi riêng).
 #[derive(Debug, Default, Deserialize)]
@@ -88,6 +91,9 @@ struct Feed {
     entries: Vec<ChannelEntry>,
     done: bool,
     error: Option<String>,
+    /// Người dùng bấm Dừng / đóng hộp (hoặc cửa sổ đóng): trang tiếp theo của tiện ích bị từ chối cho tới khi nó
+    /// bắt đầu lượt mới.
+    stopped: bool,
     updated: Instant,
 }
 
@@ -98,6 +104,7 @@ impl Feed {
             entries: Vec::new(),
             done: false,
             error: None,
+            stopped: false,
             updated: Instant::now(),
         }
     }
@@ -134,7 +141,8 @@ fn video_id(url: &str) -> Option<String> {
     (matches!(kind, "video" | "note") && digits && parts.next().is_none()).then(|| id.to_string())
 }
 
-/// Nhận một phần danh sách. Phần đầu (rỗng, chưa xong) mở lượt mới cho hồ sơ đó.
+/// Nhận một phần danh sách. Phần đầu (rỗng, chưa xong) mở lượt mới cho hồ sơ đó. Hộp đã dừng thì từ chối (lỗi) để
+/// tiện ích thôi lật trang; hộp chưa mở (chưa ai gọi `list`) thì chưa phải dừng.
 pub(crate) fn push(url: &str, part: Part) -> Result<(), String> {
     let key = profile_url(url).ok_or("[channel.not_channel] Không phải link hồ sơ Douyin.")?;
     let start = part.entries.is_empty() && !part.done && part.error.is_none() && part.author.is_none();
@@ -152,6 +160,9 @@ pub(crate) fn push(url: &str, part: Part) -> Result<(), String> {
             feeds.insert(key.clone(), Feed::new());
         }
         let feed = feeds.entry(key).or_insert_with(Feed::new);
+        if feed.stopped {
+            return Err(STOPPED.into());
+        }
         feed.updated = Instant::now();
         if let Some(name) = part.author.and_then(|author| author.name).map(|name| clean(&name)).filter(|name| !name.is_empty()) {
             feed.name = Some(name);
@@ -244,7 +255,7 @@ pub(super) async fn list(journal: &Journal, url: &str, sink: &impl Sink, cancel:
                 handle: None,
             };
             if !sink.deliver(ListingEvent::Head { head }) {
-                return stopped(sent);
+                return stopped(&key, sent);
             }
         }
         if !fresh.is_empty() {
@@ -253,7 +264,7 @@ pub(super) async fn list(journal: &Journal, url: &str, sink: &impl Sink, cancel:
                 entry.downloaded = downloaded.contains(&entry.id);
             }
             if !sink.deliver(ListingEvent::Entries { entries: fresh }) {
-                return stopped(sent);
+                return stopped(&key, sent);
             }
         }
         if done {
@@ -264,7 +275,7 @@ pub(super) async fn list(journal: &Journal, url: &str, sink: &impl Sink, cancel:
             };
         }
         tokio::select! {
-            _ = cancel.cancelled() => return stopped(sent),
+            _ = cancel.cancelled() => return stopped(&key, sent),
             _ = &mut changed => {}
             _ = tokio::time::sleep(IDLE) => {
                 return ListingEvent::Done {
@@ -277,7 +288,12 @@ pub(super) async fn list(journal: &Journal, url: &str, sink: &impl Sink, cancel:
     }
 }
 
-fn stopped(total: usize) -> ListingEvent {
+/// Người dùng dừng (nút Dừng, đóng hộp, đóng cửa sổ): danh sách đã nhận giữ nguyên, nhưng đánh dấu lượt để `push`
+/// báo cho tiện ích thôi lật trang (nó vẫn có thể bắt đầu lượt mới).
+fn stopped(key: &str, total: usize) -> ListingEvent {
+    if let Some(feed) = lock(&FEEDS).get_mut(key) {
+        feed.stopped = true;
+    }
     ListingEvent::Done {
         total,
         complete: false,
@@ -355,6 +371,28 @@ mod tests {
             self.0.lock().unwrap().push(event);
             true
         }
+    }
+
+    /// Cửa sổ đã đóng: không ai nhận sự kiện nữa.
+    struct Closed;
+
+    impl Sink for Closed {
+        fn deliver(&self, _event: ListingEvent) -> bool {
+            false
+        }
+    }
+
+    fn page(id: &str) -> Part {
+        Part {
+            entries: vec![entry(id, vec![variant(720, false)])],
+            ..Part::default()
+        }
+    }
+
+    fn temp_journal() -> (Journal, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("utd-douyin-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        (Journal::open(root.join("utd.db")).unwrap(), root)
     }
 
     #[test]
@@ -435,5 +473,60 @@ mod tests {
         drop(events);
         drop(journal);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Bấm Dừng (hoặc đóng hộp) ⇒ trang tiếp theo của tiện ích bị từ chối để nó thôi lật; bấm lại trên trang Douyin
+    /// (phần đầu rỗng) thì nhận lại như lượt mới.
+    #[tokio::test]
+    async fn refuses_more_pages_after_the_box_stopped_listening_until_a_new_start() {
+        let (journal, root) = temp_journal();
+        let profile = "https://www.douyin.com/user/MS4wLjABAAAAdouyinTest03";
+        push(profile, Part::default()).unwrap();
+        push(profile, page("7400000000000000301")).unwrap();
+        let cancel = CancellationToken::new();
+        let collect = Collect::default();
+        let (done, ()) = tokio::join!(list(&journal, profile, &collect, &cancel), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel.cancel();
+        });
+        assert!(matches!(done, ListingEvent::Done { total: 1, complete: false, error: None }), "{done:?}");
+
+        assert!(push(profile, page("7400000000000000302")).is_err(), "đã dừng ⇒ tiện ích thôi lật trang");
+        assert!(
+            push(profile, Part { done: true, error: Some("blocked".into()), ..Part::default() }).is_err(),
+            "kể cả phần báo lỗi cuối"
+        );
+
+        push(profile, Part::default()).unwrap();
+        push(profile, page("7400000000000000303")).unwrap();
+        let again = Collect::default();
+        push(profile, Part { done: true, ..Part::default() }).unwrap();
+        let done = list(&journal, profile, &again, &CancellationToken::new()).await;
+        assert!(matches!(done, ListingEvent::Done { total: 1, complete: true, .. }), "{done:?}");
+        drop(journal);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Cửa sổ đóng giữa lúc phát danh sách (không ai nhận sự kiện) cũng là dừng.
+    #[tokio::test]
+    async fn refuses_more_pages_when_nobody_receives_the_list_any_more() {
+        let (journal, root) = temp_journal();
+        let profile = "https://www.douyin.com/user/MS4wLjABAAAAdouyinTest04";
+        push(profile, Part::default()).unwrap();
+        push(profile, page("7400000000000000401")).unwrap();
+        let done = list(&journal, profile, &Closed, &CancellationToken::new()).await;
+        assert!(matches!(done, ListingEvent::Done { complete: false, error: None, .. }), "{done:?}");
+        assert!(push(profile, page("7400000000000000402")).is_err());
+        drop(journal);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Hộp chưa mở (chưa có ai gọi `list`) thì chưa phải dừng: các trang đầu vẫn được nhận.
+    #[test]
+    fn accepts_pages_before_the_box_opens() {
+        let profile = "https://www.douyin.com/user/MS4wLjABAAAAdouyinTest05";
+        push(profile, Part::default()).unwrap();
+        push(profile, page("7400000000000000501")).unwrap();
+        push(profile, page("7400000000000000502")).unwrap();
     }
 }

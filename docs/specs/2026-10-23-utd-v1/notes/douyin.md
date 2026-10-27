@@ -66,13 +66,52 @@ https://github.com/jiji262/douyin-downloader.
 Không đọc cookie ở đâu cả cho Douyin: `fetch` trong trang tự kèm cookie của trình duyệt, tin `channel-entries` và
 `media-streams` không có trường `auth` (native host bỏ nếu có). Lời gọi chỉ chạy trong cú bấm của người dùng.
 
+### Sửa sau review 2026-10-27
+
+- **Chỉ chạy API Douyin trong đúng tài liệu Douyin.** `executeScript` thế giới MAIN chạy trong tài liệu *hiện tại* của
+  tab, mà trang lạ tự định nghĩa được `window[Symbol.for("utd.douyin")].posts` (douyin-page.js giữ nguyên khi đã có
+  sẵn) ⇒ người dùng mở website khác trong cùng tab giữa hai lượt (nghỉ 2,5 s) thì trang đó trả được mục Douyin hợp lệ
+  kèm `variants[].url` ở máy chủ lạ. Nay `douyinCall` (dùng cho cả lật hồ sơ lẫn nút "Tải video này") mỗi lần gọi:
+  1. chạy một `executeScript` **không đặt `world`** (ISOLATED, trang không sửa được hàm gốc ở đó) đọc
+     `location.hostname`; không phải `douyin.com` (https) ⇒ ném lỗi, không chạy gì trong trang;
+  2. lấy `documentId` của kết quả đó (Chromium ≥ 106) và nhắm các lời gọi MAIN vào `target: { tabId, documentIds }`;
+     tab đã sang tài liệu khác ⇒ trình duyệt từ chối. Không có `documentId` (Firefox có thể không có) ⇒ vẫn `frameIds:
+     [0]` kèm kiểm host ở bước 1, còn một khe hở vài ms giữa kiểm và chạy;
+  3. cả một lượt tải hồ sơ dùng chung một `run`: tài liệu của lần gọi đầu được ghi lại, lần sau khác tài liệu ⇒ ném lỗi
+     ⇒ vòng đẩy `done: true, error: "blocked"` (câu có sẵn "Douyin không trả thêm danh sách…") rồi dừng.
+- **Dừng/đóng hộp phải dừng vòng lật; bấm lại phải mở hộp.** Trước đây `douyinRunning` (Set) giữ chỗ suốt vòng (tới 5000
+  video × 2,5 s) và vòng bỏ qua kết quả `push`: Dừng/đóng hộp trong app mà tiện ích vẫn lật tiếp, bấm chuột phải lại
+  thì `return true` ngay (không gửi `download`) nên hộp không mở. Nay:
+  - Mỗi lượt có một `run`; `douyinRuns` (Map theo `sec_uid`) giữ lượt hiện tại. Bấm lại ⇒ lượt mới thay lượt cũ (vòng cũ
+    thấy mình không còn là lượt hiện tại sau mỗi `await` và thoát, không đẩy thêm gì), lượt mới `push({})` rồi gửi
+    `download` như lần đầu ⇒ hộp mở.
+  - Vòng dừng khi `push` trả không `ok`. App báo điều đó bằng `douyin::push` trả lỗi (`Hộp Tải cả kênh đã dừng.`, không
+    có mã dịch vì người dùng không thấy) khi lượt đã bị dừng: `Feed.stopped` đặt lúc `list` kết thúc vì huỷ
+    (`channel_list_cancel`: nút Dừng, đóng hộp) hoặc vì cửa sổ không nhận sự kiện nữa. Hộp chưa mở thì chưa phải dừng
+    (trang đầu có thể tới trước khi hộp gọi `channel_list`). Phần đầu rỗng (`push({})`, người dùng bấm lại) tạo `Feed`
+    mới nên nhận lại bình thường. Danh sách đã nhận vẫn giữ trong RAM 30 phút như cũ.
+  - Chưa làm: mở lại hộp (cùng hồ sơ) trên lượt đã dừng sẽ chờ tới `IDLE` (120 s) rồi báo "danh sách có thể chưa đủ";
+    đường vào hộp thật là bấm trên trang Douyin nên luôn bắt đầu lượt mới.
+- **Đường dự phòng `window.player` (camelCase)** cũng bỏ bản `gearName` chứa `bytevc2` và nhận cờ HEVC `isBytevc1` (cùng
+  `is_bytevc1`/`is_h265`/`isH265`), để cùng mức thì H.264 đứng trước như đường API.
+- Chưa thử trên Firefox thật: `scripting.executeScript` trả `documentId` và nhận `target.documentIds` hay không; mã đã
+  chừa đường lùi khi kết quả không có `documentId`, nhưng nếu Firefox trả `documentId` mà từ chối `documentIds` thì
+  Douyin trên Firefox báo "blocked" ngay (không chạy sang trang lạ).
+
 ## Bài thử
 
 - `e2e/douyin.spec.ts`: API giả — chi tiết video (H.264 trước, bỏ DASH/watermark, không tự điền chữ ký, `modal_id`), bị
-  chặn ⇒ `window.player`, một trang `aweme/post` (link, thời lượng, ảnh bìa, bản MP4; bài ảnh không có bản nào), tải cả
-  hồ sơ trong nền (báo trước, mở hộp, lật 2 trang, bỏ mục/link lạ, không cookie).
+  chặn ⇒ `window.player` (cả camelCase: bỏ `bytevc2`, cờ `isBytevc1`), một trang `aweme/post` (link, thời lượng, ảnh bìa,
+  bản MP4; bài ảnh không có bản nào), tải cả hồ sơ trong nền (báo trước, mở hộp, lật 2 trang, bỏ mục/link lạ, không
+  cookie, đọc host trước mỗi lời gọi và nhắm `documentIds`). Sửa sau review: mở website khác trong cùng tab giữa hai trang
+  (có và không có `documentId`) ⇒ không nhận mục của trang lạ, báo `blocked`; sang tài liệu Douyin khác ⇒ dừng; tab rời
+  đi ngay sau lúc kiểm host ⇒ lời gọi bị từ chối; nút trên trang không chạy gì khi tab đã sang website khác; app báo hộp
+  đã dừng ⇒ không lật trang tiếp; bấm lại giữa lúc lật ⇒ lượt cũ dừng và hộp mở lại.
 - `e2e/video-button.spec.ts`: feed (`data-e2e-vid`), lưới (link bọc và cạnh video), `modal_id` + báo gọn khi chưa đọc được.
-- Rust: `channel::douyin` (chọn bản theo chất lượng; phát danh sách đẩy dần, không trùng, lỗi bị chặn), `native_host`
+  Sửa sau review: trang có module (`tiktok.js`, `douyin.js`) mà module không tìm được link của video (thẻ quảng cáo) ⇒
+  `analysisUrl` trả `null`, bảng báo "UTD không đọc được video này." và không gửi link trang cho yt-dlp.
+- Rust: `channel::douyin` (chọn bản theo chất lượng; phát danh sách đẩy dần, không trùng, lỗi bị chặn; sau Dừng/đóng hộp
+  `push` từ chối đến khi có phần đầu mới), `native_host`
   (`channel-entries` bản 2, tối đa 100 mục, không cookie), `media_pages` (hồ sơ Douyin là trang kênh).
 
 ## Phụ lục A — Các dự án khác làm thế nào (đọc mã, 2026-10-26)

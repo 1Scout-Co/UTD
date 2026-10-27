@@ -65,7 +65,9 @@
     const ladder = Array.isArray(video.bit_rate) ? video.bit_rate : Array.isArray(video.bitRateList) ? video.bitRateList : []
     const found = []
     for (const rate of ladder) {
-      if (String(rate?.format ?? "").toLowerCase() === "dash" || /bytevc2/i.test(String(rate?.gear_name ?? ""))) continue
+      // API snake_case (`gear_name`, `is_bytevc1`) và dữ liệu trình phát camelCase (`gearName`, `isBytevc1`).
+      const gear = String(rate?.gear_name ?? rate?.gearName ?? "")
+      if (String(rate?.format ?? "").toLowerCase() === "dash" || /bytevc2/i.test(gear)) continue
       const address = rate.play_addr ?? rate.playAddr
       const url = bestUrl(address)
       if (!url) continue
@@ -75,7 +77,7 @@
         url,
         height: Math.min(width || height, height || width),
         sizeBytes: Number(address?.data_size ?? rate.dataSize) || null,
-        h265: Boolean(rate.is_h265 || rate.is_bytevc1 || rate.isH265),
+        h265: Boolean(rate.is_h265 || rate.is_bytevc1 || rate.isH265 || rate.isBytevc1),
       })
     }
     const base = bestUrl(video.play_addr ?? video.playAddr)
