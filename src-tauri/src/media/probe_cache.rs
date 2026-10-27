@@ -270,6 +270,11 @@ mod tests {
             selector_ids("251-4[language=zh-Hans]/ba/b"),
             Some(vec!["251-4"])
         );
+        assert_eq!(
+            selector_ids("bytevc1_1080p_1146746-1/bv*[height<=1920]+ba/b[height<=1920]"),
+            Some(vec!["bytevc1_1080p_1146746-1"]),
+            "format gộp hình + tiếng (TikTok): một mã"
+        );
         for selector in [
             "bv*+ba/b",
             "ba/b",
@@ -346,6 +351,95 @@ mod tests {
             lookup(&[maybe.as_str()], "140/ba", now).is_none(),
             "nghi DRM thì không lưu"
         );
+    }
+
+    #[test]
+    fn returns_the_one_combined_stream_with_the_cookies_yt_dlp_set() {
+        let page = unique("https://www.tiktok.com/@a/video/");
+        let now = resolve::now_secs();
+        let mirror = |id: &str| {
+            json!({
+                "format_id": id,
+                "url": format!("https://v19-webapp-prime.tiktok.com/video/{id}?expire={}", now + 6 * 3600),
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h265",
+                "acodec": "aac",
+                "width": 1080,
+                "height": 1920,
+                "cookies": "tt_chain_token=\"abc\"; Domain=.tiktok.com; Path=/"
+            })
+        };
+        let value = json!({
+            "webpage_url": page,
+            "formats": [mirror("bytevc1_1080p_1146746-0"), mirror("bytevc1_1080p_1146746-1")]
+        });
+        remember(&value, &page, now);
+        let found = lookup(
+            &[page.as_str()],
+            "bytevc1_1080p_1146746-1/bv*[height<=1920]+ba/b[height<=1920]",
+            now,
+        )
+        .expect("luồng của lần phân tích");
+        let ids: Vec<&str> = found
+            .streams
+            .iter()
+            .map(|stream| stream.format_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            ["bytevc1_1080p_1146746-1"],
+            "đúng một luồng, có cả hình lẫn tiếng"
+        );
+        assert!(found.streams[0].has_video() && found.streams[0].has_audio());
+        assert!(
+            !found.streams[0].cookies.is_empty(),
+            "giữ cookie yt-dlp đặt cho luồng"
+        );
+    }
+
+    #[test]
+    fn returns_the_video_only_stream_first_then_the_combined_one_that_gives_the_sound() {
+        // TikTok video dài: hình 720p chỉ hình + format gộp 540p lấy tiếng; `audio` là nhạc nền, không được kéo vào.
+        let page = unique("https://www.tiktok.com/@a/video/");
+        let now = resolve::now_secs();
+        let stream = |id: &str, vcodec: &str, acodec: &str| {
+            json!({
+                "format_id": id,
+                "url": format!("https://v19-webapp-prime.tiktok.com/video/{id}?expire={}", now + 6 * 3600),
+                "protocol": "https",
+                "ext": if id == "audio" { "mp3" } else { "mp4" },
+                "vcodec": vcodec,
+                "acodec": acodec,
+                "cookies": "tt_chain_token=\"abc\"; Domain=.tiktok.com; Path=/"
+            })
+        };
+        let value = json!({
+            "webpage_url": page,
+            "formats": [
+                stream("audio", "none", "mp3"),
+                stream("h264_540p_1526080-1", "h264", "aac"),
+                stream("bytevc1_720p_698386-1", "h265", "none"),
+            ]
+        });
+        remember(&value, &page, now);
+        let selector = "bytevc1_720p_698386-1+h264_540p_1526080-1/b";
+        let found = lookup(&[page.as_str()], selector, now).expect("luồng của lần phân tích");
+        let ids: Vec<&str> = found
+            .streams
+            .iter()
+            .map(|stream| stream.format_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            ["bytevc1_720p_698386-1", "h264_540p_1526080-1"],
+            "theo thứ tự selector, không theo thứ tự danh sách format"
+        );
+        assert!(found.streams[0].has_video() && !found.streams[0].has_audio());
+        assert!(found.streams[1].has_video() && found.streams[1].has_audio());
+        assert!(found.streams.iter().all(|stream| !stream.cookies.is_empty()));
+        // Mã mirror mất khỏi danh sách (mirror đổi chỗ) ⇒ không có trong cache, để yt-dlp lo.
+        assert!(lookup(&[page.as_str()], "bytevc1_720p_698386-0+h264_540p_1526080-1/b", now).is_none());
     }
 
     #[test]

@@ -13,6 +13,16 @@
       "matches": ["http://*/*", "https://*/*"],
       "js": ["content.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["https://*.tiktok.com/*"],
+      "js": ["tiktok.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://*.douyin.com/*"],
+      "js": ["douyin.js"],
+      "run_at": "document_start"
     }
   ],
   "background": {

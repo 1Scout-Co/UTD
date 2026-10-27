@@ -15,6 +15,7 @@ use crate::media::finish::{
     clamp, emit_progress, emit_task, error, fail, finalize, pause, set_status,
 };
 use crate::media::preset::{self, Settled};
+use crate::media::resolve;
 use crate::media::sources::Tool;
 use crate::media::{
     auto_tools, fast, ffmpeg_location, kill_tree, sign_in_pipe_error, tools, yt_dlp_signed,
@@ -290,7 +291,8 @@ async fn attempt(
         .arg("--print")
         .arg("after_move:UTD_FILE:%(filepath)s")
         .arg("-f")
-        .arg(&job.selector);
+        .arg(&job.selector)
+        .args(resolve::pair_args(&job.selector, true));
     if let Some(format) = &job.audio_format {
         command.arg("-x").arg("--audio-format").arg(format);
     } else {

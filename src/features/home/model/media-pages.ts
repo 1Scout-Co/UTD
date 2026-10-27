@@ -94,6 +94,10 @@ const isHandle = (part: string) => part.length > 1 && part.startsWith("@")
 // `@user` đứng một mình (không phải `/video/…`, `/live`).
 const tiktokUser = (page: Page) => page.path.length === 1 && isHandle(at(page, 0))
 
+// Hồ sơ Douyin `/user/<sec_uid>` (`/user/self` là trang của chính người xem: không tính). Cùng luật với app.
+const douyinUser = (page: Page) =>
+  at(page, 0) === "user" && page.path.length === 2 && at(page, 1) !== "self" && /^[\w-]{8,200}$/.test(at(page, 1))
+
 // `@kênh`, `channel/<id>`, `c/<tên>`, `user/<tên>` (kèm thẻ Video/Shorts/Trực tiếp) hoặc `playlist?list=`.
 function youtubeChannel(page: Page): boolean {
   if (at(page, 0) === "playlist") return page.listParam && page.path.length === 1
@@ -138,6 +142,7 @@ const SITES: [string, (page: Page) => boolean][] = [
 const CHANNEL_SITES: [string, (page: Page) => boolean][] = [
   ["tiktok.com", tiktokUser],
   ["youtube.com", youtubeChannel],
+  ["douyin.com", douyinUser],
 ]
 
 // `host` là `domain` hoặc tên miền con của nó (`notyoutube.com` không tính).

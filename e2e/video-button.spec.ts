@@ -109,6 +109,22 @@ test('rê chuột vào video ⇒ nút "Tải video này" ngay trên mép trên-p
   await expect(pill(page)).toBeHidden({ timeout: 4000 })
 })
 
+test('ngay trên video là thanh cố định của trang (Douyin) ⇒ nút vào góc trong video, không che thanh', async ({ page }) => {
+  const body = `<!doctype html><html><body style="margin:0">
+<header style="position:fixed;top:0;left:0;right:0;height:60px;background:#222;z-index:10"></header>
+<div style="padding-top:64px"><video id="main" width="640" height="360" style="display:block;margin-left:40px;background:#000"></video></div>
+</body></html>`
+  await page.route('http://fixed.utd.test/**', (route) => route.fulfill({ contentType: 'text/html', body }))
+  await page.addInitScript(stubContentApi, { messages: MESSAGES, replies: [], enabled: true })
+  await page.goto('http://fixed.utd.test/watch')
+  await page.addScriptTag({ path: 'extensions/chromium/content.js' })
+  const video = await hover(page, '#main')
+  await expect(pill(page)).toBeVisible()
+  const button = (await pill(page).boundingBox())!
+  expect(button.y).toBeGreaterThanOrEqual(video.y)
+  expect(button.x + button.width).toBeLessThanOrEqual(video.x + video.width)
+})
+
 test('bấm nút ⇒ bảng "đang đọc" rồi các định dạng kèm dung lượng; chọn 1080p ⇒ UTD tải luôn, không mở app', async ({ page }) => {
   await openPage(page, [media()])
   await hover(page, '#main')
@@ -255,11 +271,13 @@ const STORY_MEDIA = {
   },
 }
 
-async function openAt(page: Page, url: string, replies: Reply[], pageMedia: Reply[]) {
-  await page.route(`${new URL(url).origin}/**`, (route) => route.fulfill({ contentType: 'text/html', body: PAGE }))
+async function openAt(page: Page, url: string, replies: Reply[], pageMedia: Reply[], body = PAGE, scripts = ['content.js']) {
+  await page.route(`${new URL(url).origin}/**`, (route) =>
+    route.fulfill({ contentType: 'text/html; charset=utf-8', body }),
+  )
   await page.addInitScript(stubContentApi, { messages: MESSAGES, replies, enabled: true, pageMedia })
   await page.goto(url)
-  await page.addScriptTag({ path: 'extensions/chromium/content.js' })
+  for (const script of scripts) await page.addScriptTag({ path: `extensions/chromium/${script}` })
   await page.waitForTimeout(50)
 }
 
@@ -298,7 +316,157 @@ test('trang khác yt-dlp không đọc được ⇒ bắt manifest HLS trang đ�
   const messages = await sent(page)
   expect(messages.map((message) => [message.type, message.url])).toEqual([
     ['utd.video-formats', 'http://video.utd.test/watch'],
-    ['utd.page-media', undefined],
+    ['utd.page-media', 'http://video.utd.test/watch'],
     ['utd.video-formats', 'https://cdn.utd.test/hls/master.m3u8'],
+  ])
+})
+
+// TikTok (extensions/*/tiktok.js): feed và lưới hồ sơ có địa chỉ trang không phải link video ⇒ gửi yt-dlp link riêng
+// `/@kênh/video/<mã>` của đúng video đang gắn nút. Trang giả theo DOM của TikTok web (khung `xgwrapper-<số>-<mã>`,
+// mục feed `recommend-list-item-container`, ô lưới `user-post-item` bọc trong link bài đăng).
+const TIKTOK_FEED = `<!doctype html><html><head><title>TikTok - Make Your Day</title></head><body style="margin:0">
+<article data-e2e="recommend-list-item-container" style="padding:30px 40px">
+  <div id="xgwrapper-0-7412345678901234567"><video id="main" width="360" height="640" style="display:block;background:#000"></video></div>
+  <a href="/@davidnguyenjr" data-e2e="video-author-avatar">David Nguyen Jr.</a>
+</article>
+<article data-e2e="recommend-list-item-container" style="padding:30px 40px">
+  <div id="xgwrapper-1-7499999999999999999"><video id="next" width="360" height="640" style="display:block;background:#000"></video></div>
+  <a href="/@khac">Khác</a>
+</article>
+</body></html>`
+
+const TIKTOK_GRID = `<!doctype html><html><head><title>Dav (@_littledav_) | TikTok</title></head><body style="margin:0">
+<div data-e2e="user-post-item-list" style="display:flex;gap:10px;padding:40px">
+  <div data-e2e="user-post-item"><a href="https://www.tiktok.com/@_littledav_/video/7400000000000000001"><video id="tile1" width="200" height="300" style="display:block;background:#000"></video></a></div>
+  <div data-e2e="user-post-item"><a href="https://www.tiktok.com/@_littledav_/video/7400000000000000002"><video id="tile2" width="200" height="300" style="display:block;background:#000"></video></a></div>
+  <div data-e2e="user-post-item"><a href="/@_littledav_/photo/7400000000000000003"><video id="tile3" width="200" height="300" style="display:block;background:#000"></video></a></div>
+</div>
+</body></html>`
+
+test('TikTok feed (For You): nút gửi yt-dlp link riêng của video đang xem, không phải trang feed', async ({ page }) => {
+  await openAt(page, 'https://www.tiktok.com/foryou', [media()], [], TIKTOK_FEED, ['tiktok.js', 'content.js'])
+  await hover(page, '#main')
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(FORMATS.length)
+  expect((await sent(page))[0]).toEqual({
+    type: 'utd.video-formats',
+    url: 'https://www.tiktok.com/@davidnguyenjr/video/7412345678901234567',
+    src: null,
+    signIn: false,
+  })
+  await page.keyboard.press('Escape')
+  await page.locator('#next').scrollIntoViewIfNeeded()
+  await hover(page, '#next')
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(0)
+  expect((await sent(page)).at(-1)?.url).toBe('https://www.tiktok.com/@khac/video/7499999999999999999')
+})
+
+test('TikTok lưới video trên hồ sơ: đúng ô đang rê (cả bài ảnh), không gửi link kênh, rê qua không chạy yt-dlp', async ({ page }) => {
+  await openAt(page, 'https://www.tiktok.com/@_littledav_', [media(), media()], [], TIKTOK_GRID, ['tiktok.js', 'content.js'])
+  await hover(page, '#tile1')
+  await hover(page, '#tile2')
+  await page.waitForTimeout(200)
+  expect(await sent(page), 'rê qua các ô không đọc sẵn').toEqual([])
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(FORMATS.length)
+  expect((await sent(page))[0].url).toBe('https://www.tiktok.com/@_littledav_/video/7400000000000000002')
+  await page.keyboard.press('Escape')
+  await hover(page, '#tile3')
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(FORMATS.length)
+  // Bài ảnh: yt-dlp không nhận /photo/, gửi dạng /video/ (yt-dlp ra nhạc của bài).
+  expect((await sent(page)).at(-1)?.url).toBe('https://www.tiktok.com/@_littledav_/video/7400000000000000003')
+})
+
+// Thẻ quảng cáo trong feed: tiktok.js không có link riêng của nó. Địa chỉ trang là feed, yt-dlp không đọc được ⇒ không
+// gửi gì, bảng báo gọn luôn (trước đây gửi link feed rồi báo lỗi chung sau một lượt yt-dlp vô ích).
+const TIKTOK_AD = `<!doctype html><html><head><title>TikTok - Make Your Day</title></head><body style="margin:0">
+<article data-e2e="recommend-list-item-container" style="padding:30px 40px">
+  <div data-e2e="ad-card">Quảng cáo</div>
+  <div id="xgwrapper-0-7412345678901234567"><video id="main" width="360" height="640" style="display:block;background:#000"></video></div>
+</article>
+</body></html>`
+
+test('TikTok thẻ quảng cáo trong feed: không gửi link trang feed cho yt-dlp, bảng báo gọn "không đọc được"', async ({ page }) => {
+  await openAt(page, 'https://www.tiktok.com/foryou', [media()], [], TIKTOK_AD, ['tiktok.js', 'content.js'])
+  await hover(page, '#main')
+  await pill(page).click()
+  await expect(panel(page).locator('.status.error')).toHaveText('UTD không đọc được video này.')
+  await expect(panel(page).locator('.row')).toHaveCount(0)
+  await page.waitForTimeout(500)
+  expect(await sent(page), 'không hỏi nền, không gửi link feed').toEqual([])
+})
+
+// Douyin (extensions/*/douyin.js + douyin-page.js; notes/douyin.md): yt-dlp không đọc được Douyin ⇒ bảng hỏi trong
+// trang trước, với link riêng `/video/<mã>` của đúng video (feed: `feed-active-video` mang `data-e2e-vid`; lưới hồ sơ:
+// link của ô; khung `?modal_id=`).
+const DOUYIN_FEED = `<!doctype html><html><head><title>抖音-记录美好生活</title></head><body style="margin:0">
+<div data-e2e="feed-item" style="padding:30px 40px"><div data-e2e="feed-active-video" data-e2e-vid="7300000000000000001">
+  <video id="main" width="360" height="640" style="display:block;background:#000"></video></div></div>
+</body></html>`
+
+const DOUYIN_GRID = `<!doctype html><html><head><title>主页 - 抖音</title></head><body style="margin:0">
+<ul data-e2e="user-post-list" style="display:flex;gap:10px;padding:40px;list-style:none">
+  <li><a href="//www.douyin.com/video/7300000000000000011"><video id="tile1" width="200" height="300" style="display:block;background:#000"></video></a></li>
+  <li><div><video id="tile2" width="200" height="300" style="display:block;background:#000"></video></div><a href="/note/7300000000000000012">图文</a></li>
+</ul>
+</body></html>`
+
+const DOUYIN_MEDIA = {
+  ok: true,
+  media: {
+    title: 'Video Douyin thử',
+    formats: [
+      { id: '1080', sizeBytes: 9 * MB, streams: [{ url: 'https://v3-web.douyinvod.com/a/1080.mp4', kind: 'both', codecs: null, sizeBytes: 9 * MB }] },
+      { id: '720', sizeBytes: 5 * MB, streams: [{ url: 'https://v3-web.douyinvod.com/a/720.mp4', kind: 'both', codecs: null, sizeBytes: 5 * MB }] },
+    ],
+    manifests: [],
+    files: [],
+  },
+}
+
+test('Douyin feed: đọc trong trang với link /video/<mã> của video đang phát; chọn ⇒ UTD tải MP4 không watermark', async ({ page }) => {
+  await openAt(page, 'https://www.douyin.com/?recommend=1', [], [DOUYIN_MEDIA], DOUYIN_FEED, ['douyin.js', 'content.js'])
+  await hover(page, '#main')
+  await pill(page).click()
+  const rows = panel(page).locator('.row')
+  await expect(rows).toHaveText(['1080p≈ 9 MB', '720p≈ 5 MB'])
+  await rows.first().click()
+  await expect(panel(page)).toContainText('Đã thêm vào UTD')
+  const messages = await sent(page)
+  expect(messages.map((message) => [message.type, message.url])).toEqual([
+    ['utd.page-media', 'https://www.douyin.com/video/7300000000000000001'],
+    ['utd.video-streams', undefined],
+  ])
+  expect(messages[1].streams).toEqual(DOUYIN_MEDIA.media.formats[0].streams)
+})
+
+test('Douyin lưới hồ sơ và khung modal_id: đúng ô đang rê (link bọc hoặc cạnh video), không chạy yt-dlp khi rê qua', async ({ page }) => {
+  await openAt(page, 'https://www.douyin.com/user/MS4wLjABAAAAtest', [], [DOUYIN_MEDIA, DOUYIN_MEDIA], DOUYIN_GRID, ['douyin.js', 'content.js'])
+  await hover(page, '#tile1')
+  await hover(page, '#tile2')
+  await page.waitForTimeout(200)
+  expect(await sent(page)).toEqual([])
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(2)
+  expect((await sent(page))[0].url).toBe('https://www.douyin.com/video/7300000000000000012')
+  await page.keyboard.press('Escape')
+  await hover(page, '#tile1')
+  await pill(page).click()
+  await expect(panel(page).locator('.row')).toHaveCount(2)
+  expect((await sent(page)).at(-1)?.url).toBe('https://www.douyin.com/video/7300000000000000011')
+})
+
+test('Douyin chưa đọc được (Douyin chặn, yt-dlp cũng không) ⇒ báo gọn, không treo', async ({ page }) => {
+  const empty = { ok: true, media: { title: null, formats: [], manifests: [], files: [] } }
+  const body = DOUYIN_FEED.replace('data-e2e="feed-active-video" data-e2e-vid="7300000000000000001"', 'data-e2e="feed-active-video"')
+  await openAt(page, 'https://www.douyin.com/jingxuan?modal_id=7300000000000000099', [{ ok: false, code: 'media.unsupported', message: 'x' }], [empty], body, ['douyin.js', 'content.js'])
+  await hover(page, '#main')
+  await pill(page).click()
+  await expect(panel(page).locator('.status.error')).toHaveText('Chưa thấy luồng video. Cho video phát rồi bấm lại.')
+  expect((await sent(page)).map((message) => [message.type, message.url])).toEqual([
+    ['utd.page-media', 'https://www.douyin.com/video/7300000000000000099'],
+    ['utd.video-formats', 'https://www.douyin.com/video/7300000000000000099'],
   ])
 })
