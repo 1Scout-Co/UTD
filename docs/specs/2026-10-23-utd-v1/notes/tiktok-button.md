@@ -121,8 +121,9 @@ nói đè lên nhạc, nhạc lệch đoạn.
   sẵn, không đổi); Âm thanh M4A và MP3 `h264_540p_1526080-1/b`. Phần dự phòng sau `/` là `b` (gộp sẵn, tiếng đúng, hình
   thấp hơn) chứ không `bv*+ba`: `+ba` ghép hình với nhạc nền. Video ngắn (bậc cao nhất đã gộp sẵn) giữ nguyên selector
   `<mã gộp>/bv*+ba/b`; ở đó `bv*` chọn format gộp rồi yt-dlp bỏ `ba` thừa (đo thật), nên không rơi vào nhạc nền.
-- **Dòng M4A/MP3 trên TikTok** tải cả format gộp (cùng `b` chọn) rồi ffmpeg bỏ hình (`-vn -map 0:a:0`); kích thước hiển
-  thị là của file tải. Tiếng AAC của các format gộp trong một video có thể khác bitrate (đo một video ngắn: 32 kbps ở
+- **Cỡ hiển thị** là cỡ file ra, không phải số byte tải (QA lượt 5: bảng cộng cả format gộp ghi ≈ 42 MB, file thật
+  11,9 MB): Tốt nhất/720p ghi cỡ hình (tiếng aac của bản gộp chỉ ~0,7 MB, không biết trước); M4A không ghi cỡ.
+- **Dòng M4A/MP3 trên TikTok** tải cả format gộp (cùng `b` chọn) rồi ffmpeg bỏ hình (`-vn -map 0:a:0`). Tiếng AAC của các format gộp trong một video có thể khác bitrate (đo một video ngắn: 32 kbps ở
   bytevc1, 64 kbps ở h264 2240k); `-J` không cho biết bitrate tiếng nên chưa chọn theo đó.
 - **Đường tải:**
   - Cache/`fast.rs`: `selector_ids` đọc cả hai mã ⇒ hai task con `[hình, gộp]` ⇒ `Layout::Merge`; `resume_plan` suy

@@ -1,0 +1,90 @@
+{
+  "branch": "claude/fb-media-4c7a19",
+  "base": "main",
+  "commit": "d173dcd",
+  "date": "2026-10-27",
+  "tier": "Nhạy cảm (đồng thời + cookie luồng + gọi API trong trang, > 400 dòng): Codex Sol high lượt bảo mật + Grok high lượt chất lượng; sau mỗi lần sửa MAJOR chạy lại một lượt Grok chỉ BLOCKER/MAJOR",
+  "passes": [
+    {"file": "review-codex.json", "reviewer": "gpt-6.1-sol high", "brief": "review-brief-security.md", "findings": 1},
+    {"file": "review-grok.json", "reviewer": "grok-4.7-high (Cursor)", "brief": "review-brief.md", "findings": 4},
+    {"file": "review-grok-2.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau sửa 9c7a39a/2cc7e68", "findings": 1},
+    {"file": "review-grok-3.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau sửa 5cd4db9", "findings": 0},
+    {"file": "review-grok-4.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau 51f52d8", "findings": 0},
+    {"file": "review-grok-5.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau 3cd8713 (tiếng thật của video thay nhạc nền TikTok), commit d173dcd", "findings": 0}
+  ],
+  "findings": [
+    {
+      "severity": "MAJOR",
+      "reviewer": "codex",
+      "path": "extensions/chromium/douyin-channel.js",
+      "line": 18,
+      "title": "Tab đã rời Douyin vẫn có thể đưa nguồn tải giả vào danh sách hồ sơ",
+      "ac": ["S-60", "S-61"],
+      "status": "fixed",
+      "fix_commit": "9c7a39a",
+      "how": "douyinDocument kiểm location.hostname ở thế giới ISOLATED + ghim documentIds cho mọi lần gọi; tài liệu đổi giữa lượt ⇒ ném lỗi"
+    },
+    {
+      "severity": "MAJOR",
+      "reviewer": "grok",
+      "path": "extensions/chromium/douyin-channel.js",
+      "line": 61,
+      "title": "Dừng/đóng hộp Tải cả kênh Douyin không dừng vòng lật trang; bấm lại bị nuốt",
+      "ac": ["S-60", "S-61"],
+      "status": "fixed",
+      "fix_commit": "9c7a39a",
+      "how": "douyinRuns theo sec_uid, bấm lại thay lượt cũ; vòng dừng khi push không ok"
+    },
+    {
+      "severity": "MAJOR",
+      "reviewer": "grok",
+      "path": "src-tauri/src/media/fast.rs",
+      "line": 365,
+      "title": "Tiếp tục tải TikTok không gửi tt_chain_token nên CDN trả 403",
+      "ac": ["S-74", "S-75"],
+      "status": "fixed",
+      "fix_commit": "2cc7e68",
+      "how": "resume_plan lấy cookie luồng từ probe_cache qua Resolver::cached(job); test fast_tests"
+    },
+    {
+      "severity": "MINOR",
+      "reviewer": "grok",
+      "path": "extensions/chromium/content.js",
+      "line": 164,
+      "title": "videoUrl trả null (quảng cáo TikTok) bị đổi thành địa chỉ trang",
+      "ac": ["S-74"],
+      "status": "fixed",
+      "fix_commit": "2cc7e68",
+      "how": "analysisUrl trả null khi module trang trả null ⇒ bảng báo không đọc được video ngay; e2e thẻ quảng cáo"
+    },
+    {
+      "severity": "MINOR",
+      "reviewer": "grok",
+      "path": "extensions/chromium/douyin-page.js",
+      "line": 68,
+      "title": "window.player camelCase không loại bytevc2 trên gearName, bỏ sót cờ isBytevc1",
+      "ac": ["S-74"],
+      "status": "fixed",
+      "fix_commit": "9c7a39a",
+      "how": "lọc gearName bytevc2, đọc cờ isBytevc1"
+    },
+    {
+      "severity": "MAJOR",
+      "reviewer": "grok",
+      "path": "src-tauri/src/media/channel/douyin.rs",
+      "line": 295,
+      "title": "Huỷ lượt liệt kê cũ đặt Feed.stopped lên feed mới (bấm lại / StrictMode bị từ chối)",
+      "ac": ["S-60"],
+      "status": "fixed",
+      "fix_commit": "5cd4db9",
+      "how": "Feed.generation + listeners; guard Listening chỉ đặt stopped khi đúng lượt, listeners về 0 và do người dùng dừng"
+    }
+  ],
+  "qa_bugs_fixed_after_review": [
+    {"commit": "51f52d8", "what": "TikTok video dài chờ ~12 s: ghim mirror hình riêng; bản download watermark không bị coi là tiếng"},
+    {"commit": "3cd8713", "what": "TikTok video dài: tiếng (nhạc nền `audio`) dài hơn hình ⇒ ghép hình 720p với tiếng của format gộp; M4A/MP3 lấy tiếng của video; --video-multistreams khi selector ghim 2 mã; runner --ppa -map -1:v:0", "reviewed_by": "review-grok-5.json (0 finding)"}
+  ],
+  "delta_reviewed_by": "captain",
+  "delta": "d173dcd..HEAD",
+  "delta_note": "Chỉ sửa MINOR M-1 của QA lượt 5: borrowed_sound_choice ghi cỡ = cỡ hình (không cộng format gộp mà ffmpeg bỏ hình); m4a_option không ghi cỡ khi tiếng lấy từ format gộp; test probe cập nhật (đỏ trước, xanh sau); ghi chú tiktok-button.md + notes qa-report.md/review-final.json"
+}

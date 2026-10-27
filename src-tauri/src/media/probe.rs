@@ -415,8 +415,8 @@ fn level_height(formats: &[Format], level: u64) -> u64 {
 }
 
 fn m4a_option(formats: &[Format]) -> MediaFormatOption {
-    // Trang có nhạc nền (TikTok): tiếng của video nằm trong format gộp. Tải cả file nên kích thước là của file đó;
-    // bitrate của format gộp là của cả hình, không phải của tiếng.
+    // Trang có nhạc nền (TikTok): tiếng của video nằm trong format gộp. Cỡ và bitrate của format gộp là của cả
+    // hình, không phải của tiếng (file ra chỉ còn tiếng) ⇒ không ghi.
     let from_video = video_sound(formats);
     let picked = pick_audio(formats, Some("m4a"));
     let shown = from_video.or(picked).or_else(|| loudest(formats));
@@ -424,7 +424,9 @@ fn m4a_option(formats: &[Format]) -> MediaFormatOption {
         id: "audio-m4a".into(),
         label: "Âm thanh M4A".into(),
         detail: "Chỉ âm thanh · giữ chất lượng gốc".into(),
-        size_bytes: shown.and_then(|format| format.size),
+        size_bytes: shown
+            .filter(|_| from_video.is_none())
+            .and_then(|format| format.size),
         bitrate_kbps: kbps(
             shown
                 .filter(|_| from_video.is_none())
@@ -519,8 +521,9 @@ fn combined_choice(formats: &[Format], limit: Option<u64>, fallback: &str) -> Op
 /// `<hình>+<format gộp>/<fallback>` khi bậc cao nhất (≤ `limit`) chỉ có hình mà tiếng riêng là nhạc nền (TikTok
 /// video dài: 720p h265 chỉ hình, tiếng riêng `audio` là nhạc nền): hình cao nhất có thật, tiếng lấy từ format
 /// gộp tốt nhất (`sound_source`). Tốn thêm byte (tải cả format gộp) nhưng đúng tiếng của video; ffmpeg ghép
-/// `-map 0:v:0 -map 1:a:0` nên hình của format gộp bị bỏ. `None` khi không phải trang có nhạc nền, hoặc format
-/// gộp/HLS cao hơn hình tách (khi đó `combined_choice` lo), hoặc không ghim được mã.
+/// `-map 0:v:0 -map 1:a:0` nên hình của format gộp bị bỏ, cỡ file ra ≈ cỡ hình (tiếng aac nhỏ, không biết trước).
+/// `None` khi không phải trang có nhạc nền, hoặc format gộp/HLS cao hơn hình tách (khi đó `combined_choice` lo),
+/// hoặc không ghim được mã.
 fn borrowed_sound_choice(formats: &[Format], limit: Option<u64>, fallback: &str) -> Option<Choice> {
     if !has_soundtrack(formats) {
         return None;
@@ -534,7 +537,7 @@ fn borrowed_sound_choice(formats: &[Format], limit: Option<u64>, fallback: &str)
     let (video_pin, sound_pin) = (video.video_pin()?, sound.video_pin()?);
     Some(Choice {
         selector: format!("{video_pin}+{sound_pin}/{fallback}"),
-        size: sum_size(video.size, sound.size),
+        size: video.size,
         bitrate: video.tbr,
     })
 }
@@ -1519,8 +1522,8 @@ mod tests {
         );
         assert_eq!(
             option(&result, "best").size_bytes,
-            Some(11_107_596 + 33_376_714),
-            "tải cả hai: hình + format gộp"
+            Some(11_107_596),
+            "cỡ file ra ≈ hình 720p: hình của format gộp bị bỏ, tiếng aac của nó nhỏ (QA: file 11,9 MB, bảng cũ 42 MB)"
         );
         assert_eq!(
             option(&result, "best").detail,
@@ -1536,16 +1539,17 @@ mod tests {
             panel(&result, "720").selector,
             "bytevc1_720p_698386-1+h264_540p_1526080-1/b[height<=1280]"
         );
-        assert_eq!(panel(&result, "720").size_bytes, Some(11_107_596 + 33_376_714));
+        assert_eq!(panel(&result, "720").size_bytes, Some(11_107_596));
         // 576p chỉ có format gộp (h264 + aac): ghim mirror như trước.
         assert_eq!(
             panel(&result, "576").selector,
             "h264_540p_1526080-1/bv*[height<=1024]+ba/b[height<=1024]"
         );
-        // Dòng chỉ âm thanh cũng lấy tiếng của video, không lấy nhạc nền; tải cả file nên kích thước là của file đó.
+        // Dòng chỉ âm thanh cũng lấy tiếng của video, không lấy nhạc nền. Cỡ file gộp là của cả hình (file ra chỉ còn
+        // tiếng, QA: 0,7 MB so với bảng cũ 32 MB) ⇒ không ghi cỡ.
         assert_eq!(selector(&result, "audio-m4a"), "h264_540p_1526080-1/b");
         assert_eq!(selector(&result, "audio-mp3"), "h264_540p_1526080-1/b");
-        assert_eq!(option(&result, "audio-m4a").size_bytes, Some(33_376_714));
+        assert_eq!(option(&result, "audio-m4a").size_bytes, None);
         assert_eq!(option(&result, "audio-m4a").bitrate_kbps, None);
     }
 
@@ -1618,7 +1622,7 @@ mod tests {
             "bytevc1_720p_509915-1/bv*[height<=1280]+ba/b[height<=1280]"
         );
         assert_eq!(selector(&result, "audio-m4a"), "bytevc1_1080p_1146746-1/b");
-        assert_eq!(option(&result, "audio-m4a").size_bytes, Some(3200));
+        assert_eq!(option(&result, "audio-m4a").size_bytes, None);
         assert_eq!(selector(&result, "audio-mp3"), "bytevc1_1080p_1146746-1/b");
     }
 
