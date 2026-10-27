@@ -65,6 +65,13 @@ Chủ dự án báo (sổ chốt e5z3): chọn một dòng trong bảng "Tải v
      còn một dòng cũng bỏ; bảng trên trang (`every_height`) liệt kê mọi mức có thật từ 144p (TikTok dọc ra thêm 576p).
 - **Đổi so với trước, chủ ý:** trang chỉ có format gộp (hoặc mức chỉ có format gộp) nay ghim mã format gộp ở đầu
   selector, phần dự phòng sau `/` giữ nguyên (ba chỗ kỳ vọng trong `probe.rs` thêm tiền tố mã: `18/…`, `22/…`, `37/…`).
+- **Video dài vẫn `fresh` 8–12 s (thử thật 2026-10-27, đã sửa):** bậc cao nhất (720p h265) là format CHỈ HÌNH có mirror
+  `-0/-1`, kèm `audio` (mp3) và `download` (watermark, h264 + aac, thiếu `height`). Hình chỉ hình nay ghim mirror cuối
+  (`Format::video_pin` = `pin` rồi `mirror_pin`) ⇒ `bytevc1_720p_698386-1+audio/bv*+ba/b`; "chỉ tiếng" = có tiếng và
+  `vcodec=none` như `ba` của yt-dlp (`Format::audio_only`), nên `download` không còn bị lấy làm tiếng. Bài thử:
+  `probe::tests::{pins_the_mirror_of_a_video_only_top_tier_next_to_the_audio_only_stream,
+  never_takes_a_format_with_picture_but_no_height_as_audio_only}`, `fast::tests::{plans_cached_video_and_audio_for_a_long_tiktok_whose_top_tier_is_video_only,
+  resume_keeps_the_stream_cookies_of_a_paused_video_only_top_tier}`.
 - **Chưa kiểm với TikTok thật:** các bài thử dùng JSON dựng theo mô tả format yt-dlp 2026.10.26 (mã, kích thước, cookie).
   Cần mở bảng trên một video TikTok thật và đọc log `media.timing … resolved source=cached`.
 

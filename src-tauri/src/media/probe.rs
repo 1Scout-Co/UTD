@@ -48,7 +48,7 @@ struct Format {
     /// tự yt-dlp tự đánh, không ghim ổn định được.
     pin: Option<String>,
     /// Mã đánh số mà cả nhóm cùng một ngôn ngữ (hai CDN mirror của TikTok: `…-0`, `…-1` cùng chất lượng):
-    /// chỉ format gộp hình + tiếng dùng khi `pin` là `None`.
+    /// format có hình (gộp hoặc chỉ hình) dùng khi `pin` là `None`; tiếng riêng không dùng.
     mirror_pin: Option<String>,
     ext: String,
     /// Chiều cao pixel thật (video dọc 1080×1920 là 1920): đúng thứ yt-dlp lọc bằng `[height<=…]`.
@@ -56,6 +56,9 @@ struct Format {
     width: Option<u64>,
     has_video: bool,
     has_audio: bool,
+    /// Chỉ tiếng: có tiếng và `vcodec` là `none` (đúng thứ `ba` của yt-dlp chọn). Khác `!has_video`: format có
+    /// codec hình mà thiếu `height` (TikTok `download`) không phải hình, cũng không phải chỉ tiếng.
+    audio_only: bool,
     /// http(s), không nghi DRM, mã ghi được vào selector: engine UTD tải thẳng được.
     plain: bool,
     /// `preference` của extractor, thiếu là -1 như yt-dlp; YouTube gán -10 cho format hỏng.
@@ -71,6 +74,13 @@ impl Format {
     fn level(&self) -> Option<u64> {
         let height = self.height?;
         Some(self.width.map_or(height, |width| width.min(height)))
+    }
+
+    /// Mã ghi vào selector cho format có hình (gộp hoặc chỉ hình): `pin`, không được thì mã mirror. Hai mirror
+    /// cùng chất lượng, không có chuyện lồng tiếng ở hình, nên ghim mirror cuối (mirror yt-dlp xếp sau). Tiếng
+    /// riêng chỉ theo `pin`.
+    fn video_pin(&self) -> Option<&str> {
+        self.pin.as_deref().or(self.mirror_pin.as_deref())
     }
 }
 
@@ -383,7 +393,8 @@ fn merge_choice(formats: &[Format], limit: Option<u64>, fallback: &str) -> Optio
 }
 
 /// `<hình>+<tiếng>/<fallback>`. `None` khi trang không có luồng tách tải thẳng được, format gộp/HLS cao hơn
-/// luồng tách (không tụt độ phân giải), tiếng bị hạ bậc hoặc mã không ghim được.
+/// luồng tách (không tụt độ phân giải), tiếng bị hạ bậc hoặc mã không ghim được. Hình chỉ hình có hai mirror
+/// (TikTok `…-0`, `…-1`) ghim mirror cuối (`Format::video_pin`).
 fn split_choice(formats: &[Format], limit: Option<u64>, fallback: &str) -> Option<Choice> {
     let video = pick_video(formats, limit)?;
     let tallest = video_tier(formats, limit).filter_map(Format::level).max();
@@ -392,7 +403,7 @@ fn split_choice(formats: &[Format], limit: Option<u64>, fallback: &str) -> Optio
     }
     // `ba` cũng xếp `preference` trước: m4a cuối danh sách mà bị hạ bậc thì để yt-dlp tự chọn.
     let audio = pick_audio(formats, Some("m4a")).filter(|audio| top_audio(formats, audio))?;
-    let (video_pin, audio_pin) = (video.pin.as_deref()?, audio.pin.as_deref()?);
+    let (video_pin, audio_pin) = (video.video_pin()?, audio.pin.as_deref()?);
     Some(Choice {
         selector: format!("{video_pin}+{audio_pin}/{fallback}"),
         size: sum_size(video.size, audio.size),
@@ -415,7 +426,7 @@ fn combined_choice(formats: &[Format], limit: Option<u64>, fallback: &str) -> Op
     let picked = whole()
         .find(|format| format.ext == "mp4")
         .or_else(|| whole().next())?;
-    let pin = picked.pin.as_deref().or(picked.mirror_pin.as_deref())?;
+    let pin = picked.video_pin()?;
     Some(Choice {
         selector: format!("{pin}/{fallback}"),
         size: picked.size,
@@ -444,7 +455,7 @@ fn video_tier(formats: &[Format], limit: Option<u64>) -> impl DoubleEndedIterato
 fn top_audio(formats: &[Format], audio: &Format) -> bool {
     formats
         .iter()
-        .filter(|format| format.has_audio && !format.has_video)
+        .filter(|format| format.audio_only)
         .all(|format| format.preference <= audio.preference)
 }
 
@@ -469,7 +480,7 @@ fn pick_audio<'a>(formats: &'a [Format], ext: Option<&str>) -> Option<&'a Format
         formats
             .iter()
             .rev()
-            .filter(|format| format.plain && format.has_audio && !format.has_video)
+            .filter(|format| format.plain && format.audio_only)
     };
     ext.and_then(|ext| alone().find(|format| format.ext == ext))
         .or_else(|| alone().next())
@@ -539,7 +550,7 @@ fn tallest(formats: &[Format]) -> Option<&Format> {
 fn loudest(formats: &[Format]) -> Option<&Format> {
     formats
         .iter()
-        .filter(|format| format.has_audio && !format.has_video)
+        .filter(|format| format.audio_only)
         .max_by(|left, right| audio_rank(left).total_cmp(&audio_rank(right)))
 }
 
@@ -583,6 +594,7 @@ fn parse_format(value: &Value, items: &[Value]) -> Option<Format> {
         width,
         has_video: vcodec != "none" && height.is_some(),
         has_audio: acodec != "none",
+        audio_only: acodec != "none" && vcodec == "none",
         plain,
         preference: value
             .get("preference")
@@ -834,6 +846,36 @@ mod tests {
         ] {
             for mirror in 0..2 {
                 formats.push(tiktok(&format!("{name}-{mirror}"), width, height, size));
+            }
+        }
+        formats
+    }
+
+    /// Video TikTok dài, `yt-dlp -J` thật (2026-10-27), đúng thứ tự: tiếng mp3 riêng; `download` (bản có
+    /// watermark) có hình nhưng thiếu `width`/`height`; 540p h264 gộp hình + tiếng; 720p h265 CHỈ HÌNH. Hai mức
+    /// cuối đều có mã mirror `-0`, `-1`.
+    fn tiktok_long() -> Vec<Value> {
+        let mut formats = vec![
+            json!({
+                "format_id": "audio", "protocol": "https", "ext": "mp3",
+                "vcodec": "none", "acodec": "mp3"
+            }),
+            json!({
+                "format_id": "download", "protocol": "https", "ext": "mp4",
+                "vcodec": "h264", "acodec": "aac", "preference": -2,
+                "filesize": 40_000_000, "tbr": 1500.0
+            }),
+        ];
+        for (name, width, height, vcodec, acodec, size) in [
+            ("h264_540p_1526080", 576, 1024, "h264", "aac", 33_376_714u64),
+            ("bytevc1_720p_698386", 720, 1280, "h265", "none", 11_107_596),
+        ] {
+            for mirror in 0..2 {
+                formats.push(json!({
+                    "format_id": format!("{name}-{mirror}"), "protocol": "https", "ext": "mp4",
+                    "width": width, "height": height, "vcodec": vcodec, "acodec": acodec,
+                    "preference": -1, "filesize": size
+                }));
             }
         }
         formats
@@ -1307,6 +1349,72 @@ mod tests {
             "không có nhóm: pin() đã ghim thẳng"
         );
         assert_eq!(mirror_pin("plain", &alone), None);
+    }
+
+    #[test]
+    fn pins_the_mirror_of_a_video_only_top_tier_next_to_the_audio_only_stream() {
+        let url = "https://www.tiktok.com/@a/video/7677185063775194386";
+        let result = build_result(url, &info(tiktok_long()), true).unwrap();
+        let best = selector(&result, "best");
+        assert_eq!(
+            best, "bytevc1_720p_698386-1+audio/bv*+ba/b",
+            "hình 720p chỉ hình ghim mirror cuối, tiếng riêng là `audio`"
+        );
+        assert_eq!(
+            probe_cache::selector_ids(best),
+            Some(vec!["bytevc1_720p_698386-1", "audio"]),
+            "cache đọc được cả hai mã"
+        );
+        assert_eq!(option(&result, "best").size_bytes, Some(11_107_596));
+        assert_eq!(
+            option(&result, "best").detail,
+            "Video + âm thanh · tối đa 720p"
+        );
+        // Chỉ một mức quen thuộc ⇒ hộp Tải media không thêm dòng mức; bảng trên trang đủ 720p và 576p.
+        assert_eq!(ids_of(&result.formats), ["best", "audio-m4a", "audio-mp3"]);
+        assert_eq!(
+            ids_of(&result.every_height),
+            ["best", "720", "576", "audio-m4a", "audio-mp3"]
+        );
+        assert_eq!(
+            panel(&result, "720").selector,
+            "bytevc1_720p_698386-1+audio/bv*[height<=1280]+ba/b[height<=1280]"
+        );
+        // 576p chỉ có format gộp (h264 + aac): ghim mirror như trước.
+        assert_eq!(
+            panel(&result, "576").selector,
+            "h264_540p_1526080-1/bv*[height<=1024]+ba/b[height<=1024]"
+        );
+    }
+
+    #[test]
+    fn never_takes_a_format_with_picture_but_no_height_as_audio_only() {
+        let url = "https://www.tiktok.com/@a/video/7677185063775194386";
+        let result = build_result(url, &info(tiktok_long()), true).unwrap();
+        // `download` có h264 nhưng thiếu `height`: không phải "chỉ tiếng" (yt-dlp `ba` chỉ lấy `vcodec=none`).
+        assert_eq!(selector(&result, "audio-m4a"), "audio/ba[ext=m4a]/ba");
+        assert_eq!(selector(&result, "audio-mp3"), "audio/ba/b");
+        assert_eq!(option(&result, "audio-m4a").size_bytes, None);
+        for option in result.formats.iter().chain(&result.every_height) {
+            assert!(
+                !option.selector.contains("download"),
+                "{}: {}",
+                option.id,
+                option.selector
+            );
+        }
+        let formats = parse_formats(&info(tiktok_long())).unwrap();
+        let download = formats
+            .iter()
+            .find(|format| format.pin.as_deref() == Some("download"));
+        assert!(download.is_some_and(|format| !format.has_video && !format.audio_only));
+        let loud = loudest(&formats).and_then(|format| format.pin.as_deref());
+        assert_eq!(loud, Some("audio"));
+        // Không có tiếng riêng nào: ba mức "tiếng" đều không chọn `download`.
+        let without_audio: Vec<Value> = tiktok_long().into_iter().skip(1).collect();
+        let formats = parse_formats(&info(without_audio)).unwrap();
+        assert!(pick_audio(&formats, Some("m4a")).is_none());
+        assert!(loudest(&formats).is_none());
     }
 
     /// Chạy: đặt `UTD_PROBE_JSON` = file `yt-dlp -J`, rồi
