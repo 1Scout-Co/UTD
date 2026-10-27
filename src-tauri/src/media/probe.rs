@@ -66,6 +66,11 @@ struct Format {
     size: Option<u64>,
     tbr: Option<f64>,
     abr: Option<f64>,
+    /// Nhạc nền TikTok (format `audio`): nhạc của bài đăng, không phải tiếng của video. Video dùng bài hát thịnh
+    /// hành thì nhạc dài hơn video nhiều (đo: 397 s cho hình 175 s), bắt đầu từ đầu bài nên lệch đoạn và mất lời
+    /// nói đè lên nhạc. Chỉ đánh dấu khi trang có format gộp để lấy tiếng thật (`sound_source`); bài ảnh chỉ
+    /// có nhạc thì nhạc vẫn là tiếng riêng.
+    soundtrack: bool,
 }
 
 impl Format {
@@ -207,7 +212,7 @@ pub(super) fn build_result(
         .get("thumbnail")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let formats = parse_formats(value)?;
+    let formats = parse_formats(value, is_tiktok(value, original_url))?;
     Ok(MediaProbeResult {
         url: original_url.to_string(),
         webpage_url,
@@ -221,14 +226,32 @@ pub(super) fn build_result(
     })
 }
 
+/// Trang TikTok. yt-dlp ghi `extractor_key` = `TikTok`; JSON thiếu trường đó thì xét tên miền của link.
+fn is_tiktok(value: &Value, original_url: &str) -> bool {
+    if let Some(key) = value.get("extractor_key").and_then(Value::as_str) {
+        return key.eq_ignore_ascii_case("tiktok");
+    }
+    [
+        value.get("webpage_url").and_then(Value::as_str),
+        Some(original_url),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|link| utd_engine::validate_url(link).ok())
+    .any(|url| {
+        url.host_str()
+            .is_some_and(|host| host == "tiktok.com" || host.ends_with(".tiktok.com"))
+    })
+}
+
 /// Giữ đúng thứ tự của yt-dlp: kém trước, tốt sau.
-fn parse_formats(value: &Value) -> Result<Vec<Format>, String> {
+fn parse_formats(value: &Value, tiktok: bool) -> Result<Vec<Format>, String> {
     let items = value
         .get("formats")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
-    let formats: Vec<Format> = items
+    let mut formats: Vec<Format> = items
         .iter()
         .filter(|item| item.get("has_drm").and_then(Value::as_bool) != Some(true))
         .filter_map(|item| parse_format(item, items))
@@ -238,6 +261,14 @@ fn parse_formats(value: &Value) -> Result<Vec<Format>, String> {
         .all(|format| !format.has_video && !format.has_audio)
     {
         return Err("[probe.no_formats] Không tìm thấy định dạng media có thể tải.".into());
+    }
+    if tiktok && sound_source(&formats, None).is_some() {
+        for format in formats
+            .iter_mut()
+            .filter(|format| format.audio_only && format.pin.as_deref() == Some("audio"))
+        {
+            format.soundtrack = true;
+        }
     }
     Ok(formats)
 }
@@ -299,10 +330,38 @@ fn listed_levels(levels: &[u64], every: bool) -> Vec<u64> {
     chosen
 }
 
+/// Phần dự phòng sau `/` (yt-dlp tự chọn khi mã ghim không còn).
+struct Fallback {
+    /// yt-dlp tự ghép hình + tiếng riêng.
+    open: String,
+    /// Chỉ format gộp sẵn: tiếng đúng của video. Trang có nhạc nền (TikTok) không được rơi về `+ba`, vì `ba` là
+    /// nhạc nền.
+    whole: String,
+}
+
+impl Fallback {
+    /// `filter` = bộ lọc chiều cao (`[height<=1280]`) hoặc rỗng.
+    fn new(filter: &str) -> Self {
+        Self {
+            open: format!("bv*{filter}+ba/b{filter}"),
+            whole: format!("b{filter}"),
+        }
+    }
+
+    /// Selector khi không ghim được mã nào.
+    fn unpinned(&self, formats: &[Format]) -> &str {
+        if has_soundtrack(formats) {
+            &self.whole
+        } else {
+            &self.open
+        }
+    }
+}
+
 fn best_option(formats: &[Format], max_level: Option<u64>) -> MediaFormatOption {
-    let fallback = "bv*+ba/b";
-    let choice = merge_choice(formats, None, fallback).unwrap_or_else(|| Choice {
-        selector: fallback.into(),
+    let fallback = Fallback::new("");
+    let choice = merge_choice(formats, None, &fallback).unwrap_or_else(|| Choice {
+        selector: fallback.unpinned(formats).into(),
         size: guessed_best_size(formats),
         bitrate: tallest(formats).and_then(|format| format.tbr),
     });
@@ -325,11 +384,11 @@ fn best_option(formats: &[Format], max_level: Option<u64>) -> MediaFormatOption 
 /// Dòng một mức (cạnh ngắn): `id` và nhãn là mức (`1080` / `1080p`, video dọc 1080×1920 cũng vậy).
 fn level_option(formats: &[Format], level: u64) -> MediaFormatOption {
     let height = level_height(formats, level);
-    let fallback = format!("bv*[height<={height}]+ba/b[height<={height}]");
+    let fallback = Fallback::new(&format!("[height<={height}]"));
     let choice = merge_choice(formats, Some(level), &fallback).unwrap_or_else(|| Choice {
         size: guessed_size(formats, level),
         bitrate: top_bitrate(formats, level),
-        selector: fallback,
+        selector: fallback.unpinned(formats).into(),
     });
     MediaFormatOption {
         id: level.to_string(),
@@ -356,15 +415,25 @@ fn level_height(formats: &[Format], level: u64) -> u64 {
 }
 
 fn m4a_option(formats: &[Format]) -> MediaFormatOption {
+    // Trang có nhạc nền (TikTok): tiếng của video nằm trong format gộp. Tải cả file nên kích thước là của file đó;
+    // bitrate của format gộp là của cả hình, không phải của tiếng.
+    let from_video = video_sound(formats);
     let picked = pick_audio(formats, Some("m4a"));
-    let shown = picked.or_else(|| loudest(formats));
+    let shown = from_video.or(picked).or_else(|| loudest(formats));
     MediaFormatOption {
         id: "audio-m4a".into(),
         label: "Âm thanh M4A".into(),
         detail: "Chỉ âm thanh · giữ chất lượng gốc".into(),
         size_bytes: shown.and_then(|format| format.size),
-        bitrate_kbps: kbps(shown.and_then(|format| format.abr.or(format.tbr))),
-        selector: with_id(picked, "ba[ext=m4a]/ba"),
+        bitrate_kbps: kbps(
+            shown
+                .filter(|_| from_video.is_none())
+                .and_then(|format| format.abr.or(format.tbr)),
+        ),
+        selector: match from_video {
+            Some(source) => sound_selector(source),
+            None => with_id(picked, "ba[ext=m4a]/ba"),
+        },
         audio_format: Some("m4a".into()),
         badge: None,
         recommended: false,
@@ -378,18 +447,31 @@ fn mp3_option(formats: &[Format]) -> MediaFormatOption {
         detail: "Chuyển sang MP3 bằng ffmpeg".into(),
         size_bytes: None,
         bitrate_kbps: Some(192),
-        selector: with_id(pick_audio(formats, None), "ba/b"),
+        selector: match video_sound(formats) {
+            Some(source) => sound_selector(source),
+            None => with_id(pick_audio(formats, None), "ba/b"),
+        },
         audio_format: Some("mp3".into()),
         badge: None,
         recommended: false,
     }
 }
 
+/// `<mã format gộp>/b`: lấy tiếng từ file có cả hình lẫn tiếng (ffmpeg bỏ hình khi tách tiếng). Mã mất thì `b`,
+/// không phải `ba` (nhạc nền).
+fn sound_selector(source: &Format) -> String {
+    source
+        .video_pin()
+        .map_or_else(|| "b".into(), |pin| format!("{pin}/b"))
+}
+
 /// Selector ghim mã cho mức `limit` (cạnh ngắn, `None` = cao nhất), kèm `/<fallback>`: yt-dlp vẫn tự chọn khi
 /// mã không còn. Ưu tiên luồng tách `<hình>+<tiếng>`, không có thì một format gộp sẵn hình + tiếng (TikTok…).
 /// `None` (giữ selector cũ, yt-dlp tự chọn) khi không ghim được mà không tụt độ phân giải.
-fn merge_choice(formats: &[Format], limit: Option<u64>, fallback: &str) -> Option<Choice> {
-    split_choice(formats, limit, fallback).or_else(|| combined_choice(formats, limit, fallback))
+fn merge_choice(formats: &[Format], limit: Option<u64>, fallback: &Fallback) -> Option<Choice> {
+    split_choice(formats, limit, &fallback.open)
+        .or_else(|| combined_choice(formats, limit, &fallback.open))
+        .or_else(|| borrowed_sound_choice(formats, limit, &fallback.whole))
 }
 
 /// `<hình>+<tiếng>/<fallback>`. `None` khi trang không có luồng tách tải thẳng được, format gộp/HLS cao hơn
@@ -434,6 +516,66 @@ fn combined_choice(formats: &[Format], limit: Option<u64>, fallback: &str) -> Op
     })
 }
 
+/// `<hình>+<format gộp>/<fallback>` khi bậc cao nhất (≤ `limit`) chỉ có hình mà tiếng riêng là nhạc nền (TikTok
+/// video dài: 720p h265 chỉ hình, tiếng riêng `audio` là nhạc nền): hình cao nhất có thật, tiếng lấy từ format
+/// gộp tốt nhất (`sound_source`). Tốn thêm byte (tải cả format gộp) nhưng đúng tiếng của video; ffmpeg ghép
+/// `-map 0:v:0 -map 1:a:0` nên hình của format gộp bị bỏ. `None` khi không phải trang có nhạc nền, hoặc format
+/// gộp/HLS cao hơn hình tách (khi đó `combined_choice` lo), hoặc không ghim được mã.
+fn borrowed_sound_choice(formats: &[Format], limit: Option<u64>, fallback: &str) -> Option<Choice> {
+    if !has_soundtrack(formats) {
+        return None;
+    }
+    let video = pick_video(formats, limit)?;
+    let tallest = video_tier(formats, limit).filter_map(Format::level).max();
+    if video.level() != tallest {
+        return None;
+    }
+    let sound = sound_source(formats, limit)?;
+    let (video_pin, sound_pin) = (video.video_pin()?, sound.video_pin()?);
+    Some(Choice {
+        selector: format!("{video_pin}+{sound_pin}/{fallback}"),
+        size: sum_size(video.size, sound.size),
+        bitrate: video.tbr,
+    })
+}
+
+/// Trang có nhạc nền TikTok bị loại khỏi tiếng riêng.
+fn has_soundtrack(formats: &[Format]) -> bool {
+    formats.iter().any(|format| format.soundtrack)
+}
+
+/// Format gộp sẵn hình + tiếng tải thẳng được, tốt nhất ≤ `limit` (cạnh ngắn; `None` = cao nhất): nguồn tiếng thật
+/// của video khi tiếng riêng là nhạc nền. Cùng cách `b` của yt-dlp chọn: bậc `preference` cao nhất, mức cao nhất,
+/// mp4 cuối danh sách (yt-dlp xếp kém → tốt). Bản `download` (watermark) thiếu chiều cao nên không được kể.
+fn sound_source(formats: &[Format], limit: Option<u64>) -> Option<&Format> {
+    let whole = || {
+        formats.iter().filter(move |format| {
+            format.plain
+                && format.has_video
+                && format.has_audio
+                && format.level().is_some_and(|level| within(level, limit))
+        })
+    };
+    let top = whole().map(|format| format.preference).max()?;
+    let level = whole()
+        .filter(|format| format.preference == top)
+        .filter_map(Format::level)
+        .max()?;
+    let best = || {
+        whole()
+            .rev()
+            .filter(move |format| format.preference == top && format.level() == Some(level))
+    };
+    best()
+        .find(|format| format.ext == "mp4")
+        .or_else(|| best().next())
+}
+
+/// Nguồn tiếng của video khi tiếng riêng là nhạc nền; `None` ở mọi trang khác.
+fn video_sound(formats: &[Format]) -> Option<&Format> {
+    sound_source(formats, None).filter(|_| has_soundtrack(formats))
+}
+
 /// Format có hình ở mức ≤ `limit` (cạnh ngắn) và bậc `preference` cao nhất. yt-dlp xếp `preference` trước cả
 /// độ phân giải nên `bv*` không chọn bậc dưới: YouTube gán -10 cho format hỏng (ngắn hơn nửa thời lượng).
 fn video_tier(formats: &[Format], limit: Option<u64>) -> impl DoubleEndedIterator<Item = &Format> {
@@ -474,13 +616,14 @@ fn pick_video(formats: &[Format], limit: Option<u64>) -> Option<&Format> {
 }
 
 /// Tiếng: format chỉ có tiếng cuối danh sách, ưu tiên đuôi `ext`. yt-dlp xếp tiếng gốc sau lồng
-/// tiếng, bản DRC trước bản thường, nên cái cuối là tiếng gốc không DRC.
+/// tiếng, bản DRC trước bản thường, nên cái cuối là tiếng gốc không DRC. Nhạc nền TikTok không phải tiếng
+/// của video nên không được chọn.
 fn pick_audio<'a>(formats: &'a [Format], ext: Option<&str>) -> Option<&'a Format> {
     let alone = || {
         formats
             .iter()
             .rev()
-            .filter(|format| format.plain && format.audio_only)
+            .filter(|format| format.plain && format.audio_only && !format.soundtrack)
     };
     ext.and_then(|ext| alone().find(|format| format.ext == ext))
         .or_else(|| alone().next())
@@ -546,11 +689,11 @@ fn tallest(formats: &[Format]) -> Option<&Format> {
         .max_by_key(|format| format.level().unwrap_or(0))
 }
 
-/// Tiếng bitrate cao nhất (ước lượng cho selector cũ).
+/// Tiếng bitrate cao nhất (ước lượng cho selector cũ), không kể nhạc nền TikTok.
 fn loudest(formats: &[Format]) -> Option<&Format> {
     formats
         .iter()
-        .filter(|format| format.audio_only)
+        .filter(|format| format.audio_only && !format.soundtrack)
         .max_by(|left, right| audio_rank(left).total_cmp(&audio_rank(right)))
 }
 
@@ -603,6 +746,7 @@ fn parse_format(value: &Value, items: &[Value]) -> Option<Format> {
         size,
         tbr: value.get("tbr").and_then(Value::as_f64),
         abr: value.get("abr").and_then(Value::as_f64),
+        soundtrack: false,
     })
 }
 
@@ -1182,7 +1326,11 @@ mod tests {
             Some(vec!["bytevc1_1080p_1146746-1"]),
             "cache đọc được mã"
         );
-        assert_eq!(selector(&result, "audio-m4a"), "audio/ba[ext=m4a]/ba");
+        assert_eq!(
+            selector(&result, "audio-m4a"),
+            "bytevc1_1080p_1146746-1/b",
+            "tiếng của video (format gộp), không phải nhạc nền `audio`"
+        );
     }
 
     #[test]
@@ -1351,21 +1499,29 @@ mod tests {
         assert_eq!(mirror_pin("plain", &alone), None);
     }
 
+    const LONG_TIKTOK: &str = "https://www.tiktok.com/@a/video/7677185063775194386";
+
+    /// Video TikTok dài (bản đo thật 2026-10-27, 174 s): hình 720p h265 CHỈ HÌNH dài 175 s, còn tiếng riêng `audio`
+    /// là NHẠC NỀN của bài (đo trên hai video: dài gấp ~2,3 lần hình, bắt đầu từ đầu bài hát nên lệch đoạn, mất
+    /// lời nói đè lên nhạc). Tiếng thật của video chỉ nằm trong format gộp h264 540p (aac).
     #[test]
-    fn pins_the_mirror_of_a_video_only_top_tier_next_to_the_audio_only_stream() {
-        let url = "https://www.tiktok.com/@a/video/7677185063775194386";
-        let result = build_result(url, &info(tiktok_long()), true).unwrap();
+    fn pairs_a_video_only_top_tier_with_the_sound_of_the_best_combined_format() {
+        let result = build_result(LONG_TIKTOK, &info(tiktok_long()), true).unwrap();
         let best = selector(&result, "best");
         assert_eq!(
-            best, "bytevc1_720p_698386-1+audio/bv*+ba/b",
-            "hình 720p chỉ hình ghim mirror cuối, tiếng riêng là `audio`"
+            best, "bytevc1_720p_698386-1+h264_540p_1526080-1/b",
+            "hình 720p ghim mirror cuối + tiếng của format gộp tốt nhất; không `audio` (nhạc nền), dự phòng `b`"
         );
         assert_eq!(
             probe_cache::selector_ids(best),
-            Some(vec!["bytevc1_720p_698386-1", "audio"]),
-            "cache đọc được cả hai mã"
+            Some(vec!["bytevc1_720p_698386-1", "h264_540p_1526080-1"]),
+            "cache đọc được cả hai mã, hình trước"
         );
-        assert_eq!(option(&result, "best").size_bytes, Some(11_107_596));
+        assert_eq!(
+            option(&result, "best").size_bytes,
+            Some(11_107_596 + 33_376_714),
+            "tải cả hai: hình + format gộp"
+        );
         assert_eq!(
             option(&result, "best").detail,
             "Video + âm thanh · tối đa 720p"
@@ -1378,23 +1534,112 @@ mod tests {
         );
         assert_eq!(
             panel(&result, "720").selector,
-            "bytevc1_720p_698386-1+audio/bv*[height<=1280]+ba/b[height<=1280]"
+            "bytevc1_720p_698386-1+h264_540p_1526080-1/b[height<=1280]"
         );
+        assert_eq!(panel(&result, "720").size_bytes, Some(11_107_596 + 33_376_714));
         // 576p chỉ có format gộp (h264 + aac): ghim mirror như trước.
         assert_eq!(
             panel(&result, "576").selector,
             "h264_540p_1526080-1/bv*[height<=1024]+ba/b[height<=1024]"
         );
+        // Dòng chỉ âm thanh cũng lấy tiếng của video, không lấy nhạc nền; tải cả file nên kích thước là của file đó.
+        assert_eq!(selector(&result, "audio-m4a"), "h264_540p_1526080-1/b");
+        assert_eq!(selector(&result, "audio-mp3"), "h264_540p_1526080-1/b");
+        assert_eq!(option(&result, "audio-m4a").size_bytes, Some(33_376_714));
+        assert_eq!(option(&result, "audio-m4a").bitrate_kbps, None);
+    }
+
+    #[test]
+    fn never_lets_the_background_music_back_in_through_a_fallback() {
+        for formats in [tiktok_long(), tiktok_ladder()] {
+            let result = build_result(LONG_TIKTOK, &info(formats), true).unwrap();
+            for option in result.formats.iter().chain(&result.every_height) {
+                let ids = probe_cache::selector_ids(&option.selector).unwrap_or_default();
+                assert!(!ids.contains(&"audio"), "{}: {}", option.id, option.selector);
+                // Hình chỉ hình + format gộp: dự phòng `b` (gộp sẵn), không `+ba` ghép hình với nhạc nền.
+                if ids.len() == 2 {
+                    let tail = option.selector.split_once('/').map_or("", |(_, tail)| tail);
+                    assert!(!tail.contains("ba"), "{}: {}", option.id, option.selector);
+                }
+                // Dòng chỉ âm thanh: lấy từ format gộp, dự phòng `b`.
+                if option.audio_format.is_some() {
+                    assert!(option.selector.ends_with("/b"), "{}", option.selector);
+                    assert!(!option.selector.contains("ba["), "{}", option.selector);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_tiktok_treats_the_audio_format_as_background_music() {
+        // Cùng danh sách format nhưng trang khác: `audio` là tiếng riêng thật, ghép như mọi tiếng riêng.
+        let other = build_result("https://example.com/watch", &info(tiktok_long()), true).unwrap();
+        assert_eq!(
+            selector(&other, "best"),
+            "bytevc1_720p_698386-1+audio/bv*+ba/b"
+        );
+        assert_eq!(selector(&other, "audio-m4a"), "audio/ba[ext=m4a]/ba");
+        // YouTube vẫn `hình+tiếng` như cũ.
+        let youtube = vec![
+            audio("140", "m4a", 100),
+            video("399", "mp4", 1080, 400),
+            video("398", "mp4", 720, 200),
+        ];
+        let result = build_result("https://www.youtube.com/watch?v=x", &info(youtube), true).unwrap();
+        assert_eq!(selector(&result, "best"), "399+140/bv*+ba/b");
+        assert_eq!(selector(&result, "audio-m4a"), "140/ba[ext=m4a]/ba");
+
+        // yt-dlp ghi `extractor_key` thì tin nó hơn tên miền của link.
+        let mut value = info(tiktok_long());
+        value["extractor_key"] = json!("TikTok");
+        let result = build_result("https://example.com/watch", &value, true).unwrap();
+        assert_eq!(
+            selector(&result, "best"),
+            "bytevc1_720p_698386-1+h264_540p_1526080-1/b"
+        );
+        value["extractor_key"] = json!("Generic");
+        let result = build_result(LONG_TIKTOK, &value, true).unwrap();
+        assert_eq!(
+            selector(&result, "best"),
+            "bytevc1_720p_698386-1+audio/bv*+ba/b"
+        );
+    }
+
+    #[test]
+    fn a_short_tiktok_whose_top_tier_is_combined_keeps_its_selectors_apart_from_the_audio_rows() {
+        let result = build_result(LONG_TIKTOK, &info(tiktok_ladder()), true).unwrap();
+        assert_eq!(
+            selector(&result, "best"),
+            "bytevc1_1080p_1146746-1/bv*+ba/b",
+            "bậc cao nhất đã gộp sẵn: không đổi"
+        );
+        assert_eq!(
+            selector(&result, "720"),
+            "bytevc1_720p_509915-1/bv*[height<=1280]+ba/b[height<=1280]"
+        );
+        assert_eq!(selector(&result, "audio-m4a"), "bytevc1_1080p_1146746-1/b");
+        assert_eq!(option(&result, "audio-m4a").size_bytes, Some(3200));
+        assert_eq!(selector(&result, "audio-mp3"), "bytevc1_1080p_1146746-1/b");
+    }
+
+    #[test]
+    fn a_tiktok_post_with_nothing_but_its_soundtrack_still_offers_it_as_audio() {
+        // Bài ảnh: yt-dlp chỉ ra nhạc của bài. Không có format gộp nào để lấy tiếng thay ⇒ dùng nhạc như tiếng riêng.
+        let result = build_result(
+            LONG_TIKTOK,
+            &info(vec![audio("audio", "m4a", 200)]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(selector(&result, "audio-m4a"), "audio/ba[ext=m4a]/ba");
+        assert_eq!(selector(&result, "audio-mp3"), "audio/ba/b");
     }
 
     #[test]
     fn never_takes_a_format_with_picture_but_no_height_as_audio_only() {
-        let url = "https://www.tiktok.com/@a/video/7677185063775194386";
-        let result = build_result(url, &info(tiktok_long()), true).unwrap();
-        // `download` có h264 nhưng thiếu `height`: không phải "chỉ tiếng" (yt-dlp `ba` chỉ lấy `vcodec=none`).
-        assert_eq!(selector(&result, "audio-m4a"), "audio/ba[ext=m4a]/ba");
-        assert_eq!(selector(&result, "audio-mp3"), "audio/ba/b");
-        assert_eq!(option(&result, "audio-m4a").size_bytes, None);
+        let result = build_result(LONG_TIKTOK, &info(tiktok_long()), true).unwrap();
+        // `download` có h264 nhưng thiếu `height`: không phải "chỉ tiếng" (yt-dlp `ba` chỉ lấy `vcodec=none`),
+        // cũng không phải nguồn tiếng của video (bản có watermark).
         for option in result.formats.iter().chain(&result.every_height) {
             assert!(
                 !option.selector.contains("download"),
@@ -1403,7 +1648,7 @@ mod tests {
                 option.selector
             );
         }
-        let formats = parse_formats(&info(tiktok_long())).unwrap();
+        let formats = parse_formats(&info(tiktok_long()), false).unwrap();
         let download = formats
             .iter()
             .find(|format| format.pin.as_deref() == Some("download"));
@@ -1412,7 +1657,7 @@ mod tests {
         assert_eq!(loud, Some("audio"));
         // Không có tiếng riêng nào: ba mức "tiếng" đều không chọn `download`.
         let without_audio: Vec<Value> = tiktok_long().into_iter().skip(1).collect();
-        let formats = parse_formats(&info(without_audio)).unwrap();
+        let formats = parse_formats(&info(without_audio), false).unwrap();
         assert!(pick_audio(&formats, Some("m4a")).is_none());
         assert!(loudest(&formats).is_none());
     }

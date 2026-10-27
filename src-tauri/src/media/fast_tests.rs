@@ -627,9 +627,10 @@ fn tiktok_json(server: &Server, page: &str) -> serde_json::Value {
     })
 }
 
-/// `yt-dlp -J` của một video TikTok DÀI: tiếng mp3 riêng (không cookie, không hạn), `download` (bản có watermark,
-/// thiếu `width`/`height`), 540p gộp hình + tiếng, 720p h265 CHỈ HÌNH. Mirror `-0` của mỗi mức trỏ vào `/gone`
-/// (403); chỉ hình `-1` ở `/tt-v.mp4` (đòi cookie `tt_chain_token`).
+/// `yt-dlp -J` của một video TikTok DÀI: nhạc nền `audio` (mp3, không cookie, không hạn; dài hơn video nên KHÔNG
+/// được tải), `download` (bản có watermark, thiếu `width`/`height`), 540p gộp hình + tiếng, 720p h265 CHỈ HÌNH. Mirror
+/// `-0` của mỗi mức trỏ vào `/gone` (403); `-1` ở `/tt-v.mp4` (hình) và `/tt-c.mp4` (gộp, mpeg4 + aac, đòi cookie
+/// `tt_chain_token`).
 fn tiktok_split_json(server: &Server, page: &str) -> serde_json::Value {
     let expire = resolve::now_secs() + 6 * 3600;
     let cookies = "ttwid=1%7Cx; Domain=127.0.0.1; Path=/; Expires=1824135169; tt_chain_token=\"abc\"; Domain=127.0.0.1; Path=/";
@@ -653,7 +654,7 @@ fn tiktok_split_json(server: &Server, page: &str) -> serde_json::Value {
         format["height"] = height.into();
         format
     };
-    // Tiếng riêng: không cookie, không hạn, không `preference`. Nội dung là m4a nhưng khai mp3 như TikTok.
+    // Nhạc nền: không cookie, không hạn, không `preference`. Nội dung là m4a nhưng khai mp3 như TikTok.
     let audio = serde_json::json!({
         "format_id": "audio",
         "url": server.url("/a.m4a"),
@@ -667,11 +668,12 @@ fn tiktok_split_json(server: &Server, page: &str) -> serde_json::Value {
     serde_json::json!({
         "title": "Clip",
         "webpage_url": page,
+        "extractor_key": "TikTok",
         "formats": [
             audio,
             format("download", "/gone", "h264", "aac", -2),
             sized(format("h264_540p_1526080-0", "/gone", "h264", "aac", -1), 576, 1024),
-            sized(format("h264_540p_1526080-1", "/gone", "h264", "aac", -1), 576, 1024),
+            sized(format("h264_540p_1526080-1", "/tt-c.mp4", "h264", "aac", -1), 576, 1024),
             sized(format("bytevc1_720p_698386-0", "/gone", "h265", "none", -1), 720, 1280),
             sized(format("bytevc1_720p_698386-1", "/tt-v.mp4", "h265", "none", -1), 720, 1280),
         ]
@@ -758,18 +760,19 @@ async fn plans_one_cached_stream_with_its_cookies_for_a_combined_only_page() {
     }
 }
 
-/// TikTok video DÀI: bậc cao nhất là hình riêng (h265, mirror `-0/-1`) + tiếng mp3 riêng, kèm bản `download`
-/// có watermark thiếu chiều cao. Chọn chất lượng vẫn là tải ngay (trước đây `fresh` 8–12 s): kế hoạch Cached, hai
-/// task con (hình + tiếng, không phải `download`), cookie luồng của hình, không hỏi yt-dlp.
+/// TikTok video DÀI: bậc cao nhất là hình riêng (h265, mirror `-0/-1`), tiếng riêng `audio` là nhạc nền, kèm bản
+/// `download` có watermark thiếu chiều cao. Chọn chất lượng vẫn là tải ngay (trước đây `fresh` 8–12 s): kế hoạch Cached,
+/// hai task con (hình, rồi format gộp 540p để lấy tiếng thật của video; không phải nhạc nền, không phải
+/// `download`), cookie luồng của hình, không hỏi yt-dlp.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn plans_cached_video_and_audio_for_a_long_tiktok_whose_top_tier_is_video_only() {
+async fn plans_cached_video_and_the_sound_of_the_combined_format_for_a_long_tiktok() {
     let Some(lab) = lab() else { return };
     let server = lab.server();
     for id in ["best", "720"] {
         let json = |page: &str| tiktok_split_json(&server, page);
         let (mut task, job, selector) = analysed_page(&lab, json, id);
         assert!(
-            selector.starts_with("bytevc1_720p_698386-1+audio/"),
+            selector.starts_with("bytevc1_720p_698386-1+h264_540p_1526080-1/b"),
             "{selector}"
         );
         let resolver = Fixed {
@@ -782,7 +785,11 @@ async fn plans_cached_video_and_audio_for_a_long_tiktok_whose_top_tier_is_video_
             .iter()
             .map(|stream| stream.format_id.as_str())
             .collect();
-        assert_eq!(ids, ["bytevc1_720p_698386-1", "audio"], "hình + tiếng");
+        assert_eq!(
+            ids,
+            ["bytevc1_720p_698386-1", "h264_540p_1526080-1"],
+            "hình + format gộp"
+        );
 
         let sink = Recorder::default();
         let fast = lab.fast(&sink, &resolver, CancellationToken::new());
@@ -793,7 +800,7 @@ async fn plans_cached_video_and_audio_for_a_long_tiktok_whose_top_tier_is_video_
         assert_eq!(plan.layout, Layout::Merge, "hình và tiếng ghép bằng ffmpeg");
         assert_eq!(plan.children.len(), 2);
         assert!(plan.children[0].url.contains("/tt-v.mp4"), "hình trước");
-        assert!(plan.children[1].url.contains("/a.m4a"), "rồi tiếng");
+        assert!(plan.children[1].url.contains("/tt-c.mp4"), "rồi format gộp");
         assert_eq!(
             resolver.calls.load(Ordering::Relaxed),
             0,
@@ -891,8 +898,10 @@ async fn resume_keeps_the_stream_cookies_of_a_paused_combined_only_page() {
     );
 }
 
-/// Như trên cho trang tách hình/tiếng: `resume_plan` lấy cookie luồng từ lần "Phân tích" nên tiếp tục không hỏi
-/// yt-dlp (trước đây selector `bv*+ba/b` không có trong cache ⇒ hỏi lại ~12 s).
+/// Như trên cho trang có bậc cao nhất chỉ hình (hình + format gộp lấy tiếng): `resume_plan` lấy cookie luồng từ lần
+/// "Phân tích" nên tiếp tục không hỏi yt-dlp (trước đây selector `bv*+ba/b` không có trong cache ⇒ hỏi lại ~12 s).
+/// File cuối đúng một hình + một tiếng: hình của format gộp không lọt vào (`assert_finished` đếm luồng), và nhạc
+/// nền `audio` không bị tải.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resume_keeps_the_stream_cookies_of_a_paused_video_only_top_tier() {
     let Some(lab) = lab() else { return };
@@ -938,7 +947,40 @@ async fn resume_keeps_the_stream_cookies_of_a_paused_video_only_top_tier() {
             .all(|hit| hit.cookie_text.as_deref() == Some("ttwid=1%7Cx; tt_chain_token=abc")),
         "mọi yêu cầu hình, cả lượt tiếp tục, mang cookie luồng: {video:?}"
     );
+    assert!(!server.hits("/tt-c.mp4").is_empty(), "tiếng lấy từ format gộp");
+    assert!(server.hits("/a.m4a").is_empty(), "không tải nhạc nền");
     assert!(server.hits("/gone").is_empty(), "không đụng mirror `-0`");
+}
+
+/// Dòng "Âm thanh M4A" của TikTok video dài: tiếng lấy từ format gộp (không phải nhạc nền `audio`), ffmpeg bỏ hình
+/// khi tách ⇒ file m4a chỉ có tiếng.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn extracts_the_sound_of_the_combined_format_for_the_audio_row_of_a_long_tiktok() {
+    let Some(lab) = lab() else { return };
+    let server = lab.server();
+    let json = |page: &str| tiktok_split_json(&server, page);
+    let (mut task, mut job, selector) = analysed_page(&lab, json, "audio-m4a");
+    assert_eq!(selector, "h264_540p_1526080-1/b");
+    job.audio_format = Some("m4a".into());
+    lab.journal.save_media_job(&job).unwrap();
+    let resolver = Fixed {
+        resolved: lab.streams(&server, "/gone", "/gone"),
+        calls: AtomicUsize::new(0),
+    };
+    let sink = Recorder::default();
+    let fast = lab.fast(&sink, &resolver, CancellationToken::new());
+    assert_eq!(run(&fast, &mut task, &job).await.unwrap(), FastEnd::Handled);
+    assert_eq!(task.status, TaskStatus::Completed, "{:?}", task.error);
+    assert_eq!(lab.files(), ["Clip.m4a"]);
+    assert_eq!(
+        lab.stream_kinds(&lab.downloads.join("Clip.m4a")),
+        ["audio"],
+        "chỉ tiếng, không còn hình của format gộp"
+    );
+    assert_eq!(resolver.calls.load(Ordering::Relaxed), 0, "không hỏi yt-dlp");
+    assert!(!server.hits("/tt-c.mp4").is_empty());
+    assert!(server.hits("/a.m4a").is_empty(), "không tải nhạc nền");
+    assert!(server.hits("/gone").is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -67,11 +67,11 @@ Chủ dự án báo (sổ chốt e5z3): chọn một dòng trong bảng "Tải v
   selector, phần dự phòng sau `/` giữ nguyên (ba chỗ kỳ vọng trong `probe.rs` thêm tiền tố mã: `18/…`, `22/…`, `37/…`).
 - **Video dài vẫn `fresh` 8–12 s (thử thật 2026-10-27, đã sửa):** bậc cao nhất (720p h265) là format CHỈ HÌNH có mirror
   `-0/-1`, kèm `audio` (mp3) và `download` (watermark, h264 + aac, thiếu `height`). Hình chỉ hình nay ghim mirror cuối
-  (`Format::video_pin` = `pin` rồi `mirror_pin`) ⇒ `bytevc1_720p_698386-1+audio/bv*+ba/b`; "chỉ tiếng" = có tiếng và
-  `vcodec=none` như `ba` của yt-dlp (`Format::audio_only`), nên `download` không còn bị lấy làm tiếng. Bài thử:
-  `probe::tests::{pins_the_mirror_of_a_video_only_top_tier_next_to_the_audio_only_stream,
-  never_takes_a_format_with_picture_but_no_height_as_audio_only}`, `fast::tests::{plans_cached_video_and_audio_for_a_long_tiktok_whose_top_tier_is_video_only,
-  resume_keeps_the_stream_cookies_of_a_paused_video_only_top_tier}`.
+  (`Format::video_pin` = `pin` rồi `mirror_pin`) ⇒ `bytevc1_720p_698386-1+audio/bv*+ba/b` (**phần `+audio` đã đổi,
+  xem mục "Tiếng của video, không phải nhạc nền" bên dưới**); "chỉ tiếng" = có tiếng và `vcodec=none` như `ba` của
+  yt-dlp (`Format::audio_only`), nên `download` không còn bị lấy làm tiếng. Bài thử:
+  `probe::tests::never_takes_a_format_with_picture_but_no_height_as_audio_only`,
+  `fast::tests::resume_keeps_the_stream_cookies_of_a_paused_video_only_top_tier`.
 - **Chưa kiểm với TikTok thật:** các bài thử dùng JSON dựng theo mô tả format yt-dlp 2026.10.26 (mã, kích thước, cookie).
   Cần mở bảng trên một video TikTok thật và đọc log `media.timing … resolved source=cached`.
 
@@ -99,6 +99,52 @@ downloads_a_combined_only_page_from_the_analysed_stream_without_asking_yt_dlp}` 
   `analysisUrl` (content.js) rơi về `location.href` (link feed) ⇒ một lượt yt-dlp vô ích rồi bảng báo lỗi chung. Nay trang
   có module mà module trả `null` ⇒ `analysisUrl` trả `null`, `open()` báo luôn "UTD không đọc được video này." (không
   hỏi nền). Bài thử: `e2e/video-button.spec.ts` › "TikTok thẻ quảng cáo trong feed…".
+
+## Tiếng của video, không phải nhạc nền (2026-10-27, sổ chốt 3qpj)
+
+QA thật: video TikTok dài ra file có tiếng DÀI HƠN hình (Rubik hình 175 s / tiếng 397 s; Ronaldo 276 s / 583 s). Mất lời
+nói đè lên nhạc, nhạc lệch đoạn.
+
+- **Nguyên nhân:** format `audio` (mp3/m4a, `vcodec=none`) của yt-dlp TikTok là **nhạc nền của bài đăng** (`music.playUrl`,
+  track "nhạc nền - …"), không phải tiếng của video. Video dùng bài hát thịnh hành thì nhạc dài cả bài và bắt đầu từ
+  đầu bài. Đo lại bằng ffprobe (video Rubik): nhạc nền `audio` 397,09 s, hình 720p 174,97 s, tiếng AAC trong format
+  gộp `h264_540p_…` 174,89 s. Bậc hình cao nhất (720p h265) chỉ có hình, nên `bv*+ba` của yt-dlp (mặc định, và selector
+  cũ `…+audio`) luôn ghép hình với nhạc nền. Tiếng thật của video chỉ nằm trong format gộp (kể cả mức 540p thấp hơn).
+- **Quyết định:** "Tốt nhất" = hình cao nhất có thật + tiếng thật của video; không cắt nhạc nền cho bằng hình, không
+  `-shortest`; tốn thêm byte (tải cả format gộp để lấy tiếng) thì chấp nhận.
+- **Nhận diện (`probe::is_tiktok`, `Format::soundtrack`):** trang TikTok (`extractor_key` = `TikTok`; JSON thiếu trường
+  đó thì xét tên miền `tiktok.com` của link) + format có `format_id` đúng `audio` và `vcodec=none` ⇒ nhạc nền. Chỉ
+  đánh dấu khi trang có format gộp để lấy tiếng thay (`sound_source`); bài ảnh TikTok chỉ có nhạc thì nhạc vẫn là tiếng
+  riêng. Trang khác (YouTube…) không đổi: ở đó `ba` đúng là tiếng của video.
+- **Selector (video `tiktok_long`):** Tốt nhất `bytevc1_720p_698386-1+h264_540p_1526080-1/b`; 720p
+  `…-1+h264_540p_1526080-1/b[height<=1280]`; 576p `h264_540p_1526080-1/bv*[height<=1024]+ba/b[height<=1024]` (đã gộp
+  sẵn, không đổi); Âm thanh M4A và MP3 `h264_540p_1526080-1/b`. Phần dự phòng sau `/` là `b` (gộp sẵn, tiếng đúng, hình
+  thấp hơn) chứ không `bv*+ba`: `+ba` ghép hình với nhạc nền. Video ngắn (bậc cao nhất đã gộp sẵn) giữ nguyên selector
+  `<mã gộp>/bv*+ba/b`; ở đó `bv*` chọn format gộp rồi yt-dlp bỏ `ba` thừa (đo thật), nên không rơi vào nhạc nền.
+- **Dòng M4A/MP3 trên TikTok** tải cả format gộp (cùng `b` chọn) rồi ffmpeg bỏ hình (`-vn -map 0:a:0`); kích thước hiển
+  thị là của file tải. Tiếng AAC của các format gộp trong một video có thể khác bitrate (đo một video ngắn: 32 kbps ở
+  bytevc1, 64 kbps ở h264 2240k); `-J` không cho biết bitrate tiếng nên chưa chọn theo đó.
+- **Đường tải:**
+  - Cache/`fast.rs`: `selector_ids` đọc cả hai mã ⇒ hai task con `[hình, gộp]` ⇒ `Layout::Merge`; `resume_plan` suy
+    `Merge` từ hai task con. `mux.rs`: `-map 0:v:0 -map 1:a:0 -c copy` bỏ hình h264 của format gộp; hevc + aac chọn Mp4
+    (đo: `hvc1` + `mp4a`). Bộ ghép Rust (`utd-mp4`) từ chối file 2 trak rồi ffmpeg lo.
+  - Trượt cache ⇒ `resolve.rs` `yt-dlp -J -f <V>+<C>`: **mặc định yt-dlp bỏ format thứ hai nếu nó cũng có hình** và chỉ
+    trả hình, MẤT TIẾNG (đo thật: không có `requested_formats`). Có `--video-multistreams` thì `requested_formats` =
+    `[hình, gộp]` đúng thứ tự. `resolve::pair_args` thêm cờ khi selector ghim đúng hai mã; cờ chỉ đổi kết quả khi hai vế
+    đều có hình (`_merge` trong `YoutubeDL.py`), đo không đổi với `bv*+ba/b`, `b`, `ba`, mã ghim, lọc chiều cao trên
+    TikTok và YouTube.
+  - yt-dlp tải thẳng (`runner.rs`, khi đường nhanh lui): cùng cờ, thêm `--ppa "Merger+ffmpeg_o:-map -1:v:0"`, vì
+    ffmpeg của yt-dlp map cả hình của format gộp (đo: file ra `hevc 720p, aac, h264 576p`; có đối số ra `hevc 720p, aac`).
+    Với cặp hình + tiếng riêng (YouTube `134+140`) file ra trùng từng byte có và không có hai đối số này.
+- **Đo thật ngoài app (yt-dlp 2026.10.26, ffmpeg 8.1.2):** đúng tham số `mux::ffmpeg_args` cho `Merge(Mp4)` ⇒
+  `hevc hvc1 720x1280 174,967 s` + `aac 174,892 s` (nhạc nền `audio` 397,087 s), 11,9 MB.
+- **Bài thử:** `probe::tests::{pairs_a_video_only_top_tier_with_the_sound_of_the_best_combined_format,
+  never_lets_the_background_music_back_in_through_a_fallback, only_tiktok_treats_the_audio_format_as_background_music, …}`,
+  `resolve::tests::{merges_a_video_only_stream_with_the_audio_of_a_combined_one_in_that_order,
+  asks_yt_dlp_for_several_video_streams_only_when_two_ids_are_pinned}`, `fast::tests::{plans_cached_video_and_the_sound_of_the_combined_format_for_a_long_tiktok,
+  resume_keeps_the_stream_cookies_of_a_paused_video_only_top_tier,
+  extracts_the_sound_of_the_combined_format_for_the_audio_row_of_a_long_tiktok}` (server giả: nhạc nền `/a.m4a` không bị
+  tải, file ra đúng một hình + một tiếng).
 
 ## Phụ lục A — Các dự án khác làm thế nào (đọc mã, 2026-10-26)
 
