@@ -1,1 +1,2 @@
 - y-ehc9u1 · 2026-10-28 · cải tiến · Hộp Tải hàng loạt: bấm "Tải N mục" mà thêm vào danh sách tải bị lỗi (không tạo được thư mục, danh sách đã bị bỏ) thì không đóng hộp, hiện một dòng lỗi đỏ cạnh nút Tải kèm số mục không thêm được (review Grok 2026-10-28, chủ dự án chọn để sau)
+- y-nnv0zm · 2026-10-28 · cải tiến · Hộp Tải hàng loạt: dòng ảnh Facebook đang ghi "Photos —" (Facebook không gửi tên/ngày kèm ảnh trong danh sách) — thử lấy ngày đăng / chú thích cho ảnh, hoặc đánh số thay chữ lặp lại (thấy khi thử NASA 2026-10-28)
