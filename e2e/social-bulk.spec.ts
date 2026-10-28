@@ -707,7 +707,9 @@ test('Facebook: Tin, tin nổi bật, ảnh, reels, video fanpage qua GraphQL c�
       return `for (;;);${json(first)}\n${json({ label: 'FBUnifiedVideoFeedbackBar_feedback', data: { feedback: { total_comment_count: 3 } } })}`
     }
     if (name === 'PagesCometChannelTabAllVideosCardImplPaginationQuery') {
-      return json({ data: { node: { all_videos: { edges: [{ node: { id: '2001' } }, { node: { id: '2002' } }], page_info: { has_next_page: false } } } } })
+      // Như Facebook thật (thử 28/10): danh sách chỉ kèm bản SD; bản HD phải hỏi từng video.
+      const sd = (id: string) => ({ __typename: 'Video', id, videoDeliveryResponseFragment: { videoDeliveryResponseResult: { progressive_urls: [{ progressive_url: `${FB_CDN}/o1/${id}-sd.mp4`, metadata: { quality: 'SD' } }] } } })
+      return json({ data: { node: { all_videos: { edges: [{ node: sd('2001') }, { node: sd('2002') }], page_info: { has_next_page: false } } } } })
     }
     if (name === 'FBUnifiedVideoRootWithEntrypointQuery') {
       const id = String(variables.initial_node_id)
@@ -736,7 +738,8 @@ test('Facebook: Tin, tin nổi bật, ảnh, reels, video fanpage qua GraphQL c�
   expect(byId['1002']).toMatchObject({ url: `${FB_CDN}/v/1002_1440.jpg`, page: 'https://www.facebook.com/photo/?fbid=1002' })
   expect(byId['3001']).toMatchObject({ url: `${FB_CDN}/o1/3001-hd.mp4`, timestamp: 1730000000, title: 'Reel 1' })
   expect(byId['2001']).toMatchObject({ url: `${FB_CDN}/o1/2001-hd.mp4`, timestamp: 1710000000, title: 'Clip 2001' })
-  expect(byId['2002']).toMatchObject({ url: null, page: 'https://www.facebook.com/watch/?v=2002' })
+  // Hỏi riêng không có link ⇒ dùng bản SD của danh sách.
+  expect(byId['2002']).toMatchObject({ url: `${FB_CDN}/o1/2002-sd.mp4` })
   expect(messages.at(-1)?.social.done).toEqual({ complete: true, error: null })
 
   expect(fetched, 'dữ liệu hồ sơ không có trong tab ⇒ tải HTML trang hồ sơ một lần').toEqual(['/trangthu'])

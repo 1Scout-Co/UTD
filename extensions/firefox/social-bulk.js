@@ -536,26 +536,26 @@ async function socialPart(job, source, read) {
 const socialFacebookItem = (reply, id) => reply.items.find((item) => item.id === String(id)) ?? null
 
 /**
- * Facebook: video trong danh sách chỉ có mã ⇒ hỏi từng video lấy link file (như Social Bulk Downloader). Không có link
- * thì vẫn giữ mục (UTD tải bằng yt-dlp từ trang video). Mỗi mục gửi ngay (bị chặn giữa chừng vẫn giữ phần đã có).
+ * Facebook: danh sách video chỉ kèm bản SD (thử thật 28/10: 640 / 360 dù video gốc 4K) ⇒ luôn hỏi từng video lấy bản HD
+ * (như Social Bulk Downloader); hỏi không ra link thì dùng bản của danh sách, không có nữa thì vẫn giữ mục (UTD tải
+ * bằng yt-dlp từ trang video). Mỗi mục gửi ngay (bị chặn giữa chừng vẫn giữ phần đã có).
  */
 async function socialFacebookVideos(job, ids, known, source) {
   for (const id of ids) {
     if (!job.wants(source)) break
-    let item = known.find((media) => media.id === id && media.url) ?? null
-    if (!item) {
-      const reply = await job.facebook("video", {
-        count: 1, initial_node_id: id, isAggregationProfileViewerOrShouldShowReelsForPage: false, page_id: "", scale: 1, should_use_stream: false,
-        shouldIncludeInitialNodeFetch: true, shouldShowReelsForPage: false, stream_initial_count: 1, useDefaultActor: false, ...SOCIAL_FB_VIDEO_FLAGS,
-      }).catch((reason) => {
-        if (reason?.message === "social.rate_limited" || reason?.message === "social.login") throw reason
-        return null
-      })
-      const story = reply?.data?.data?.video?.creation_story
-      item = (reply && socialFacebookItem(reply, id)) ?? { id, kind: "video", url: null, page: `https://www.facebook.com/watch/?v=${id}` }
-      item.timestamp = item.timestamp ?? (Number(story?.creation_time) || null)
-      item.title = item.title || (typeof story?.message?.text === "string" ? story.message.text.replace(/\s+/g, " ").trim().slice(0, 300) : "")
-    }
+    const reply = await job.facebook("video", {
+      count: 1, initial_node_id: id, isAggregationProfileViewerOrShouldShowReelsForPage: false, page_id: "", scale: 1, should_use_stream: false,
+      shouldIncludeInitialNodeFetch: true, shouldShowReelsForPage: false, stream_initial_count: 1, useDefaultActor: false, ...SOCIAL_FB_VIDEO_FLAGS,
+    }).catch((reason) => {
+      if (reason?.message === "social.rate_limited" || reason?.message === "social.login") throw reason
+      return null
+    })
+    const story = reply?.data?.data?.video?.creation_story
+    const found = reply ? socialFacebookItem(reply, id) : null
+    const listed = known.find((media) => media.id === id) ?? null
+    const item = [found, listed].find((media) => media?.url) ?? found ?? listed ?? { id, kind: "video", url: null, page: `https://www.facebook.com/watch/?v=${id}` }
+    item.timestamp = item.timestamp ?? (Number(story?.creation_time) || null)
+    item.title = item.title || (typeof story?.message?.text === "string" ? story.message.text.replace(/\s+/g, " ").trim().slice(0, 300) : "")
     await job.push([item], source)
   }
 }
