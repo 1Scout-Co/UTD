@@ -7,8 +7,9 @@
   const MAX_ITEMS = 25000
   const MAX_URL = 4096
   const CDN = /^https:\/\/[^/]*(fbcdn\.net|cdninstagram\.com|fbsbx\.com)\//i
-  const items = new Map() // id ⇒ mục
-  let fresh = new Set() // id mới hoặc vừa có link tốt hơn, chưa giao cho nền
+  // id ⇒ mục của các câu trả lời đọc từ lần giao trước. Giao xong là xoá: bấm Tải hàng loạt lần nữa trên cùng tab vẫn
+  // nhận đủ mục (nền tự bỏ trùng trong một lượt).
+  const items = new Map()
   let parsed = 0
   const cdn = (value) => typeof value === "string" && value.length <= MAX_URL && CDN.test(value)
   const text = (value, max) => (typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : "")
@@ -24,13 +25,10 @@
     if (known) {
       // Cùng mục thấy lại: chỉ thay khi có link file mà trước chưa có, hoặc ảnh lớn hơn.
       const better = (!known.url && item.url) || (item.url && area(item) > area(known))
-      if (!better) return
-      items.set(item.id, { ...known, ...item, story: known.story || item.story })
-    } else {
-      if (items.size >= MAX_ITEMS) return
+      if (better) items.set(item.id, { ...known, ...item, story: known.story || item.story })
+    } else if (items.size < MAX_ITEMS) {
       items.set(item.id, item)
     }
-    fresh.add(item.id)
   }
 
   // --- Instagram / Threads: bài viết dạng REST (`image_versions2`, `video_versions`, `carousel_media`) ---
@@ -208,11 +206,11 @@
 
   Object.defineProperty(window, KEY, {
     value: Object.freeze({
-      /** Mục mới (hoặc vừa có link tốt hơn) từ lần gọi trước; `parsed` = số câu trả lời đã đọc. */
+      /** Mục đọc được từ lần giao trước (rồi xoá); `parsed` = số câu trả lời đã đọc. */
       take() {
-        const ids = [...fresh]
-        fresh = new Set()
-        return { items: ids.map((id) => ({ ...items.get(id) })), parsed, total: items.size }
+        const list = Array.from(items.values(), (item) => ({ ...item }))
+        items.clear()
+        return { items: list, parsed }
       },
       /** Đọc một câu trả lời JSON tiện ích vừa lấy. */
       read(value) {

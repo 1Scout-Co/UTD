@@ -5,8 +5,8 @@ const MENU_ALL = "utd-download-all"
 const MENU_SOCIAL = "utd-social-bulk"
 const api = globalThis.browser ?? globalThis.chrome
 
-// Chữ theo ngôn ngữ của trình duyệt (_locales/<mã>/messages.json, mặc định en).
-const t = (key) => api.i18n.getMessage(key) || key
+// Chữ theo ngôn ngữ của trình duyệt (_locales/<mã>/messages.json, mặc định en); `values` điền vào `$COUNT$`….
+const t = (key, values) => api.i18n.getMessage(key, values) || key
 
 // Native host chưa gửi mã lỗi, chỉ gửi câu tiếng Việt cố định (src-tauri/src/native_host.rs, ipc.rs,
 // media_pages.rs, batch.rs): đổi các câu đó sang chữ của tiện ích; câu khác hiện nguyên văn.

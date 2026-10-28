@@ -27,7 +27,8 @@ function stubBrowser() {
   host.__reply = { ok: true, media: { go: true, sources: null, since: null } }
   host.__navigate = null
   host.chrome = {
-    i18n: { getMessage: () => '' },
+    // Chữ có số (`$COUNT$`) trả kèm số để kiểm nền có truyền số; chữ khác: '' ⇒ nền dùng khoá.
+    i18n: { getMessage: (key: string, values?: string[]) => (values ? `${key}(${values.join(',')})` : '') },
     runtime: {
       id: 'utd',
       getURL: (file: string) => `chrome-extension://utd/${file}`,
@@ -299,6 +300,22 @@ test('Instagram: Tin, tin nổi bật, reels, bài viết (carousel tách từng
   expect(requests[0].headers).toMatchObject({ 'x-ig-app-id': '936619743392459', 'x-csrftoken': 'tok123', 'x-fb-lsd': 'lsd-xyz' })
   expect([requests[0].body.get('fb_dtsg'), requests[0].body.get('lsd')]).toEqual(['dtsg-abc', 'lsd-xyz'])
   await expect(page.locator('#utd-social-pill')).toBeAttached()
+})
+
+test('bấm Tải hàng loạt lần hai trên cùng tab (chưa tải lại trang) ⇒ đủ danh sách như lần đầu; nhãn ghi số mục đã gửi', async ({ page, context }) => {
+  await context.addCookies([{ name: 'csrftoken', value: 'tok123', domain: '.instagram.com', path: '/', secure: true }])
+  igRoutes(page)
+  await loadExtension(page, 'https://www.instagram.com/nasa/')
+  const pill = page.locator('#utd-social-pill .text')
+  const first = entriesOf(await runBulk(page)).map((entry) => [entry.source, entry.id, entry.url])
+  expect(first).toHaveLength(7)
+  await expect(pill).toHaveText('UTD · socialDone(7)')
+  await page.evaluate(() => {
+    const bg = (window as unknown as { __bg: { native: unknown[] } }).__bg
+    bg.native.length = 0
+  })
+  const second = entriesOf(await runBulk(page)).map((entry) => [entry.source, entry.id, entry.url])
+  expect(second).toEqual(first)
 })
 
 test('Instagram: UTD bỏ chọn nhóm ⇒ tiện ích không gọi phần đó; bị chặn tạm (429) ⇒ dừng, báo mã, giữ phần đã có', async ({ page }) => {
