@@ -618,6 +618,42 @@ function fbRoutes(page: Page, header: unknown, answer: (name: string, variables:
   return { requests, fetched }
 }
 
+test('Facebook: nhận đúng hồ sơ / nhóm theo đường dẫn (nasa ≠ nasaphoto, nhóm 12345 ≠ 123456); tải trang hồ sơ bị 429 ⇒ bị chặn tạm', async ({ page }) => {
+  let status = 200
+  const header = (owner: unknown) => `<script type="application/json">${JSON.stringify({ require: [['x', { profile_header_renderer: owner }]] })}</script>`
+  await page.route('https://www.facebook.com/**', (route) => {
+    const request = route.request()
+    if (request.resourceType() === 'document') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><html><body></body></html>' })
+    if (status !== 200) return route.fulfill({ status, body: '' })
+    // Hồ sơ / nhóm khác có tên là tiền tố đứng trước trong dữ liệu trang.
+    const body = new URL(request.url()).pathname.startsWith('/groups/')
+      ? header({ group: { id: '123456', name: 'Nhóm khác', url: 'https://www.facebook.com/groups/123456/' } }) + header({ group: { id: '12345', name: 'Nhóm thử', url: 'https://www.facebook.com/groups/12345/' } })
+      : header({ user: { id: '1', name: 'Khác', url: 'https://www.facebook.com/nasaphoto' } }) + header({ user: { id: '2', name: 'NASA', url: 'https://www.facebook.com/NASA' } })
+    return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><html><body>${body}</body></html>` })
+  })
+  await loadExtension(page, 'https://www.facebook.com/nasa')
+  type Profile = (base: string, expect: string, group: boolean) => Promise<{ id?: string; code?: string } | null>
+  const read = (base: string, expect: string, group: boolean) =>
+    page.evaluate(([b, e, g]) => (window as unknown as { socialFacebookProfile: Profile }).socialFacebookProfile(b, e, g), [base, expect, group] as const)
+  expect((await read('https://www.facebook.com/nasa', 'nasa', false))?.id).toBe('2')
+  expect((await read('https://www.facebook.com/groups/12345', '12345', true))?.id).toBe('12345')
+  status = 429
+  expect(await read('https://www.facebook.com/nasa', 'nasa', false)).toEqual({ code: 'social.rate_limited' })
+})
+
+test('nhãn trên trang: bấm Dừng ở lượt trước không làm lượt sau (bấm lại trong lúc nhãn cũ còn hiện) dừng ngay', async ({ page }) => {
+  igRoutes(page)
+  await loadExtension(page, 'https://www.instagram.com/explore/')
+  type Pill = (text: string, stop: string, hint: string, final: boolean) => boolean
+  const pill = (text: string, final: boolean) =>
+    page.evaluate(([value, last]) => (window as unknown as { socialPill: Pill }).socialPill(value, 'Dừng', '', last), [text, final] as const)
+  expect(await pill('Đang lấy', false)).toBe(false)
+  await page.locator('#utd-social-pill button').click()
+  expect(await pill('Đang lấy', false)).toBe(true)
+  await pill('Xong', true)
+  expect(await pill('Đang lấy', false)).toBe(false)
+})
+
 test('Facebook: Tin, tin nổi bật, ảnh, reels, video fanpage qua GraphQL của trang (đúng doc_id, mã trang, tài khoản); không cuộn, không chuyển trang', async ({ page, context }) => {
   await context.addCookies([{ name: 'c_user', value: '100099', domain: '.facebook.com', path: '/', secure: true }])
   const header = {
@@ -926,6 +962,10 @@ test('S-61 hàng loạt: bật riêng "Ảnh" ⇒ chỉ ảnh của mọi nhóm;
   for (const name of groups) await chips.getByRole('button', { name }).click()
   await expect(chips.getByRole('button', { pressed: true })).toHaveCount(0)
   await expect(dialog.getByRole('button', { name: 'Tải 5 mục' })).toBeVisible()
+  // Tiện ích được báo quay về lấy mọi nhóm, không giữ nhóm hẹp lúc trước.
+  await expect
+    .poll(async () => (await app(page).calls('social_control')).at(-1))
+    .toEqual({ listingId: 'sb-abcdef123456', go: true, sources: null, since: null })
 })
 
 test('S-63 hàng loạt: bị chặn tạm ⇒ câu rõ, không có nút thử lại; a11y không lỗi', async ({ page }) => {

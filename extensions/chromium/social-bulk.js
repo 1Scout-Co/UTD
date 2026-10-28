@@ -807,6 +807,18 @@ async function socialFacebookProfile(base, expect, group) {
     return null
   }
   const wanted = String(expect).toLowerCase()
+  // Địa chỉ hồ sơ `/<tên>`, `profile.php?id=<mã>`, `/groups/<mã>`: so trọn từng đoạn (tên là tiền tố của tên khác không khớp).
+  const named = (link) => {
+    let url = null
+    try {
+      url = new URL(String(link ?? ""))
+    } catch {
+      return false
+    }
+    const parts = url.pathname.toLowerCase().split("/").filter(Boolean)
+    if (group) return parts[0] === "groups" && parts[1] === wanted
+    return parts[0] === wanted || url.searchParams.get("id") === wanted
+  }
   const read = (text) => {
     for (let at = text.indexOf('"profile_header_renderer"'); at >= 0; at = text.indexOf('"profile_header_renderer"', at + 1)) {
       const raw = object(text, text.indexOf("{", at))
@@ -818,9 +830,7 @@ async function socialFacebookProfile(base, expect, group) {
       }
       const owner = group ? header?.group : header?.user
       if (!owner?.id) continue
-      const url = String(owner.url ?? "").toLowerCase()
-      const same = String(owner.id) === String(expect) || url.includes(group ? `/groups/${wanted}` : `/${wanted}`) || url.includes(`id=${wanted}`)
-      if (!same) continue
+      if (String(owner.id) !== String(expect) && !named(owner.url)) continue
       const avatar = owner.profilePicLarge?.uri ?? owner.profilePicture?.uri ?? owner.profile_picture?.uri
       return {
         id: String(owner.id),
@@ -841,6 +851,7 @@ async function socialFacebookProfile(base, expect, group) {
     const response = await request(base, { credentials: "include" })
     if (/^\/(login|checkpoint)/.test(new URL(response.url).pathname)) return { code: "social.login" }
     if (response.status === 404) return { code: "social.not_found" }
+    if (response.status === 429) return { code: "social.rate_limited" }
     return response.ok ? read(await response.text()) : null
   } catch {
     return null
@@ -1099,8 +1110,11 @@ function socialPill(text, stopLabel, hint, final) {
   shadow.querySelector(".box").title = final ? "" : hint
   const button = shadow.querySelector("button")
   button.textContent = stopLabel
-  button.hidden = final || host.dataset.stop === "1"
+  const stopped = host.dataset.stop === "1"
+  button.hidden = final || stopped
+  // Nhãn cuối: lượt đã xong; bấm "Tải hàng loạt" lại lúc nhãn còn hiện là lượt mới, chưa bị Dừng.
+  if (final) delete host.dataset.stop
   clearTimeout(Number(host.dataset.timer) || 0)
   if (final) host.dataset.timer = String(setTimeout(() => host.remove(), 8000))
-  return host.dataset.stop === "1"
+  return stopped
 }

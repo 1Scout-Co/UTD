@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { AlertCircle, Download, FolderOpen, RotateCw } from "lucide-react"
 
@@ -133,11 +133,15 @@ export function ChannelDialog({
           ? "S-60"
           : "S-62"
 
-  // Tải hàng loạt: báo tiện ích nhóm còn cần lấy và mốc "từ ngày", để khỏi gọi trang thừa.
+  // Tải hàng loạt: báo tiện ích nhóm còn cần lấy và mốc "từ ngày", để khỏi gọi trang thừa. Đã báo một lần thì quay về
+  // tất cả (tắt hết chip, bỏ mốc ngày) cũng báo, để tiện ích không giữ bộ lọc hẹp lúc trước.
   const since = sinceOf(filter)
   const listingId = social?.listingId
+  const controlled = useRef<string | null>(null)
   useEffect(() => {
-    if (!listingId || status !== "loading" || (!sources && since === null)) return
+    if (!listingId || status !== "loading") return
+    if (!sources && since === null && controlled.current !== listingId) return
+    controlled.current = listingId
     const wanted = sources ? SOCIAL_SOURCES.filter((source) => sources.has(source)) : null
     void controlSocial(listingId, { go: true, sources: wanted, since }).catch(() => undefined)
   }, [listingId, status, sources, since])
