@@ -1,6 +1,7 @@
 # QA — Tải hàng loạt Facebook / Instagram / Threads (nhánh claude/social-bulk-e821de)
 
-Commit đã kiểm bằng máy: `e06cfc7` (2026-10-28; sau `20540f2` sửa 3 lỗi tìm ra khi thử thật, xem bảng dưới). Thử thật trên Chrome của chủ dự án: bản dựng `290b3d5` (nhịp Facebook
+Commit đã kiểm bằng máy: `f6f472c` (2026-10-28; sau `20540f2` sửa 3 lỗi tìm ra khi thử thật, xem bảng dưới; `f6f472c`
+thêm ưu tiên bản HD khi cùng video thấy hai chỗ — review Grok, kiểm bằng e2e). Thử thật trên Chrome của chủ dự án: bản dựng `290b3d5` (nhịp Facebook
 mới). Sau đó: `1edb841` chỉ đổi cách dựng nhãn trên trang (DOM thay innerHTML), thêm log gỡ lỗi ở các `catch`, tách
 `UrlPreview` sang file riêng, không đổi hành vi; `20540f2` sửa 3 MAJOR + 1 MINOR của review (nhận đúng hồ sơ / nhóm theo
 đường dẫn, 429 khi tải trang hồ sơ ⇒ bị chặn tạm, cờ Dừng của nhãn không dính sang lượt sau, hộp báo tiện ích khi quay về

@@ -1,13 +1,15 @@
 {
   "branch": "claude/social-bulk-e821de",
   "base": "main",
-  "commit": "20540f2",
+  "commit": "f6f472c",
   "date": "2026-10-28",
   "tier": "Nhạy cảm (gọi GraphQL bằng phiên đăng nhập của trình duyệt, native messaging / named pipe, > 400 dòng): Codex Sol high lượt bảo mật + Grok high lượt chất lượng; sau khi sửa MAJOR chạy lại một lượt Grok chỉ BLOCKER/MAJOR",
   "passes": [
     {"file": "review-codex.json", "reviewer": "gpt-6.1-sol high", "brief": "review-brief-security.md", "commit": "1edb841", "findings": 0},
     {"file": "review-grok.json", "reviewer": "grok-4.7-high (Cursor)", "brief": "review-brief.md", "commit": "1edb841", "findings": 5},
-    {"file": "review-grok-2.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau sửa 20540f2, chỉ BLOCKER/MAJOR", "commit": "20540f2", "findings": 0}
+    {"file": "review-grok-2.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau sửa 20540f2, chỉ BLOCKER/MAJOR", "commit": "20540f2", "findings": 0},
+    {"file": "review-grok-3.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát các sửa sau thử thật e4b3c0c (take() trả hết rồi xoá, t() truyền số), e06cfc7 (luôn hỏi video lẻ lấy HD), chỉ BLOCKER/MAJOR", "commit": "e06cfc7", "findings": 1},
+    {"file": "review-grok-4.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau sửa f6f472c, chỉ BLOCKER/MAJOR", "commit": "f6f472c", "findings": 0}
   ],
   "findings": [
     {
@@ -55,6 +57,17 @@
       "how": "429 ⇒ {code: social.rate_limited}; cùng bài e2e nhận đúng hồ sơ"
     },
     {
+      "severity": "MAJOR",
+      "reviewer": "grok",
+      "path": "extensions/chromium/social-harvest.js",
+      "line": 27,
+      "title": "Cùng video thấy hai chỗ trong một câu trả lời: chỗ đầu bản SD, chỗ sau HD cùng cỡ ⇒ put() chỉ so cỡ nên giữ SD",
+      "ac": ["S-61"],
+      "status": "fixed",
+      "fix_commit": "f6f472c",
+      "how": "fbVideo đánh dấu hd (progressive HD / *_hd_url trước SD); put() thay khi có HD mà bản cũ chỉ SD, cùng mức mới so cỡ; e2e fanpage có hai chỗ SD-trước / HD-sau"
+    },
+    {
       "severity": "MINOR",
       "reviewer": "grok",
       "path": "src/features/home/ui/channel-flow.tsx",
@@ -62,7 +75,7 @@
       "title": "Lệnh add_social_downloads lỗi thì hộp vẫn đóng, chỉ ghi console; số mục không thêm được không hiện",
       "ac": ["S-61"],
       "status": "deferred",
-      "how": "Hiếm (lệnh chỉ lỗi khi danh sách đã bị bỏ hoặc không tạo được thư mục). Sửa cần dòng lỗi mới trên hộp (giao diện + 16 ngôn ngữ, chủ dự án phải xem lại) ⇒ hỏi chủ dự án làm ngay hay để sau"
+      "how": "Hiếm (lệnh chỉ lỗi khi danh sách đã bị bỏ hoặc không tạo được thư mục). Sửa cần dòng lỗi mới trên hộp (giao diện + 16 ngôn ngữ). Chủ dự án chọn để sau (2026-10-28) ⇒ docs/IDEAS.md"
     }
   ]
 }
