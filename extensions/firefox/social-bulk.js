@@ -6,16 +6,19 @@
 // NGAY TRONG TAB đó (scripting.executeScript) bằng phiên đăng nhập sẵn có của trình duyệt — tiện ích không đọc, không
 // gửi cookie. Danh sách đi sang UTD từng đợt (`social-list`); mỗi đợt UTD trả lời đi tiếp hay dừng (nút Dừng, đóng hộp)
 // và loại nào còn cần lấy. Cả ba mạng: truy vấn GraphQL của chính trang web (doc_id + biến như Social Bulk Downloader
-// 1.8.8), đọc thẳng, không cuộn, không chuyển trang. Giữa hai yêu cầu luôn nghỉ ngẫu nhiên 1–2 s và không quá 200 yêu
-// cầu / 10 phút để tránh bị khoá tạm vì gọi nhiều.
+// 1.8.8), đọc thẳng, không cuộn, không chuyển trang. Giữa hai yêu cầu luôn nghỉ ngẫu nhiên (Facebook 0,3–0,6 s;
+// Instagram / Threads 1–2 s và không quá 200 yêu cầu / 10 phút) để tránh bị khoá tạm vì gọi nhiều.
 
 const SOCIAL_PART_ENTRIES = 150
 const SOCIAL_PART_CHARS = 600_000
 const SOCIAL_FLUSH_MS = 3000
 const SOCIAL_MAX_ENTRIES = 20_000
-// Nhịp gọi: nghỉ 1–2 s giữa hai yêu cầu (câu trả lời JSON nhỏ như trang tự gọi khi cuộn), tối đa 200 yêu cầu trong
-// 10 phút (instaloader tự giới hạn 275 truy vấn GraphQL / 10 phút).
+// Nhịp gọi Instagram / Threads: nghỉ 1–2 s giữa hai yêu cầu (câu trả lời JSON nhỏ như trang tự gọi khi cuộn), tối đa
+// 200 yêu cầu trong 10 phút (instaloader tự giới hạn 275 truy vấn GraphQL / 10 phút).
 const SOCIAL_GAP_MS = 1000
+// Facebook: nghỉ 0,3–0,6 s, không trần (Social Bulk Downloader mặc định không nghỉ, SCrawler nghỉ 1 s); bị chặn tạm
+// (1675004 / 429) thì dừng ngay, giữ phần đã lấy.
+const SOCIAL_FB_GAP_MS = 300
 // Instagram: bài viết hỏi bấy nhiêu một lượt (bị từ chối thì về 12 như web), tin nổi bật bấy nhiêu cái một lượt.
 const SOCIAL_IG_POSTS = 50
 const SOCIAL_IG_HIGHLIGHTS = 5
@@ -197,15 +200,17 @@ class SocialJob {
     return false
   }
 
-  /** Nghỉ trước một yêu cầu tới mạng xã hội: 2–4 s (Instagram 1–2 s), và không quá 70 yêu cầu / 10 phút. */
+  /** Nghỉ trước một yêu cầu tới mạng xã hội: Facebook 0,3–0,6 s; Instagram / Threads 1–2 s và không quá 200 yêu cầu / 10 phút. */
   async pace() {
+    const facebook = this.plan.platform === "facebook"
     const now = Date.now()
     this.calls = this.calls.filter((at) => now - at < SOCIAL_WINDOW_MS)
-    if (this.calls.length >= SOCIAL_WINDOW_CALLS) {
+    if (!facebook && this.calls.length >= SOCIAL_WINDOW_CALLS) {
       const wait = SOCIAL_WINDOW_MS - (now - this.calls[0])
       await this.wait(socialDelay(wait))
     }
-    if (this.calls.length > 0) await this.wait(socialDelay(SOCIAL_GAP_MS + Math.random() * SOCIAL_GAP_MS))
+    const gap = facebook ? SOCIAL_FB_GAP_MS : SOCIAL_GAP_MS
+    if (this.calls.length > 0) await this.wait(socialDelay(gap + Math.random() * gap))
     this.calls.push(Date.now())
   }
 

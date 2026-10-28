@@ -21,8 +21,10 @@ Nhánh `claude/social-bulk-e821de` (cắt từ main `93ed9a3`). Chủ dự án y
   `<YYYY-MM-DD> <chú thích ngắn> <id>.<đuôi>`. Video Facebook không có link file ⇒ task media (yt-dlp) từ trang video.
 - Cả ba mạng hỏi thẳng GraphQL của trang ngay trong tab (doc_id + biến như Social Bulk Downloader 1.8.8), không cuộn,
   không chuyển trang (chủ dự án chốt 2026-10-27, sổ chốt [tig8]).
-- Nhịp gọi: nghỉ ngẫu nhiên **1–2 s** giữa hai yêu cầu, **≤ 200 yêu cầu / 10 phút** (instaloader tự giới hạn 275 truy vấn
-  GraphQL / 10 phút); bị chặn tạm / cần đăng nhập ⇒ dừng ngay, báo rõ, phần đã thu vẫn tải được.
+- Nhịp gọi: Instagram / Threads nghỉ ngẫu nhiên **1–2 s** giữa hai yêu cầu, **≤ 200 yêu cầu / 10 phút** (instaloader tự
+  giới hạn 275 truy vấn GraphQL / 10 phút); Facebook nghỉ **0,3–0,6 s**, không trần (Social Bulk Downloader mặc định không
+  nghỉ, SCrawler nghỉ 1 s; chủ dự án chốt 2026-10-28, sổ chốt [f0vf] — 1–2 s + trần chỉ được ~150–200 ảnh/phút, trang lớn
+  chững sau ~1.600 ảnh); bị chặn tạm / cần đăng nhập ⇒ dừng ngay, báo rõ, phần đã thu vẫn tải được.
 
 ## Cách lấy danh sách — các dự án khác (đọc mã, 2026-10-26)
 
@@ -83,8 +85,9 @@ nhập (hồ sơ công khai): `ProfileRootContentQuery`, tin nổi bật, reels 
 
 Tốc độ (hồ sơ thật 414 mục mất ~2 phút với reels 4/lượt, nghỉ 2–4 s): đo thật, reels trả tối đa **12/lượt** dù hỏi 30/50
 (~0,5 s mỗi lượt) ⇒ hỏi 12. Bài viết hỏi 50/lượt (chưa đo được vì cần đăng nhập; bị lỗi thì quay về 12 như web). Tin nổi
-bật hỏi 5 cái/lượt, cái nào câu trả lời thiếu thì hỏi lại (trả ít hơn cũng không chậm hơn hỏi từng cái). Instagram nghỉ
-1–2 s giữa hai yêu cầu (JSON nhỏ như trang tự gọi khi cuộn); Facebook / Threads giữ 2–4 s; trần 70 yêu cầu / 10 phút giữ.
+bật hỏi 5 cái/lượt, cái nào câu trả lời thiếu thì hỏi lại (trả ít hơn cũng không chậm hơn hỏi từng cái). Instagram /
+Threads nghỉ 1–2 s giữa hai yêu cầu (JSON nhỏ như trang tự gọi khi cuộn), trần 200 yêu cầu / 10 phút; Facebook nghỉ
+0,3–0,6 s, không trần ([f0vf]).
 
 ## Thiết kế
 
@@ -95,7 +98,7 @@ bật hỏi 5 cái/lượt, cái nào câu trả lời thiếu thì hỏi lại 
   - `socialPlan(url)`: trang nào làm gì (Instagram `/<user>/`, `/stories/<user>/`; Threads `/@user`; Facebook `/<vanity>`,
     `profile.php?id=`, `people/<tên>/<id>`, `groups/<id>`, `stories/<bucket>`). Trang khác ⇒ nhãn "Mở trang cá nhân,
     fanpage, nhóm hoặc Tin rồi bấm lại.", không gửi gì.
-  - `SocialJob`: nhịp gọi (`pace`), cửa sổ 70 yêu cầu / 10 phút, gửi UTD từng đợt ≤ 150 mục / ≤ 600 KB (tin native ≤ 1 MiB),
+  - `SocialJob`: nhịp gọi (`pace`), cửa sổ 200 yêu cầu / 10 phút (Instagram / Threads), gửi UTD từng đợt ≤ 150 mục / ≤ 600 KB (tin native ≤ 1 MiB),
     ít nhất mỗi ~9 s một đợt khi đang nghỉ để biết người dùng có Dừng không. Bấm menu lần nữa khi đang chạy = Dừng.
   - Mọi yêu cầu chạy trong tab bằng `scripting.executeScript` (thế giới MAIN; trình duyệt không cho thì content script, Firefox
     dùng `content.fetch` để mang nguồn của trang). Tab không chuyển trang.
@@ -154,8 +157,9 @@ không bao giờ hiện chữ do trang gửi.
 - **Cần đăng nhập** trên trình duyệt cho Tin, tin nổi bật, tài khoản riêng tư, phần lớn Facebook. Tiện ích không đăng nhập hộ.
 - **Instagram đổi `doc_id`**: phần đó báo "danh sách có thể chưa đủ", các phần khác vẫn lấy; cập nhật `SOCIAL_IG_QUERIES`.
 - **Bị khoá tạm vì gọi nhiều**: Instagram 429 / `checkpoint_required` / `challenge_required` / "Please wait a few minutes";
-  Facebook `1675004`. UTD dừng ngay, không thử lại; nhịp 1–2 s, ≤ 200/10 phút. Video fanpage, ảnh/video nhóm cần thêm 1
-  yêu cầu mỗi mục ⇒ ~20–40 mục/phút; ảnh hồ sơ, reels, bài Instagram/Threads 8–50 mục mỗi yêu cầu. Có thể bấm Dừng bất cứ
+  Facebook `1675004`. UTD dừng ngay, không thử lại; Instagram / Threads nhịp 1–2 s, ≤ 200/10 phút; Facebook 0,3–0,6 s,
+  không trần (nhanh hơn ⇒ dễ bị chặn tạm hơn, chủ dự án chọn). Video fanpage, ảnh/video nhóm cần thêm 1 yêu cầu mỗi mục ⇒
+  Facebook ~60–100 mục/phút; ảnh hồ sơ, reels, bài Instagram/Threads 8–50 mục mỗi yêu cầu. Có thể bấm Dừng bất cứ
   lúc nào và tải phần đã có.
 - **Meta đổi `doc_id` / cờ**: phần đó báo "danh sách có thể chưa đủ" (`social.partial`) hoặc `social.changed`; cập nhật
   bảng mã theo bản Social Bulk Downloader mới. Facebook, Threads chưa thử thật — chủ dự án thử trên Chrome.

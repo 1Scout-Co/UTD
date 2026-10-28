@@ -412,6 +412,39 @@ test('trang không hỗ trợ (bài viết lẻ, trang chủ) ⇒ báo trên tra
   ])
 })
 
+test('nhịp gọi: Facebook nghỉ 0,3–0,6 s, không trần; Instagram / Threads nghỉ 1–2 s, đủ 200 yêu cầu / 10 phút thì chờ', async ({ page }) => {
+  igRoutes(page)
+  await loadExtension(page, 'https://www.instagram.com/explore/')
+  const waits = await page.evaluate(async () => {
+    type Job = { calls: number[]; wait: (ms: number) => Promise<void>; pace: () => Promise<void> }
+    const SocialJob = (0, eval)('SocialJob') as new (tab: unknown, plan: unknown) => Job
+    const host = window as unknown as Record<string, unknown>
+    host.__utdSocialFast = false
+    // 200 yêu cầu trong phút vừa qua; ghi lại các lần nghỉ thay vì nghỉ thật.
+    const paced = async (platform: string) => {
+      const job = new SocialJob({ id: 7, url: location.href }, { platform })
+      const now = Date.now()
+      job.calls = Array.from({ length: 200 }, (_, index) => now - 60_000 + index)
+      const asked: number[] = []
+      job.wait = async (ms) => {
+        asked.push(ms)
+      }
+      await job.pace()
+      return asked
+    }
+    return { facebook: await paced('facebook'), instagram: await paced('instagram'), threads: await paced('threads') }
+  })
+  expect(waits.facebook).toHaveLength(1)
+  expect(waits.facebook[0]).toBeGreaterThanOrEqual(300)
+  expect(waits.facebook[0]).toBeLessThan(600)
+  for (const asked of [waits.instagram, waits.threads]) {
+    expect(asked).toHaveLength(2)
+    expect(asked[0]).toBeGreaterThan(8 * 60_000)
+    expect(asked[1]).toBeGreaterThanOrEqual(1000)
+    expect(asked[1]).toBeLessThan(2000)
+  }
+})
+
 // --- Link trang cá nhân / fanpage / nhóm dán vào UTD hoặc bấm "Tải bằng UTD": nhắc dùng Tải hàng loạt ---
 
 // Cùng bộ ca với `social_profiles_point_to_the_bulk_download` trong src-tauri/src/media_pages.rs.
