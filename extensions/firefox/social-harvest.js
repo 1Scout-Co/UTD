@@ -23,8 +23,8 @@
     if (!item.id || (!item.url && !item.page)) return
     const known = items.get(item.id)
     if (known) {
-      // Cùng mục thấy lại: chỉ thay khi có link file mà trước chưa có, hoặc ảnh lớn hơn.
-      const better = (!known.url && item.url) || (item.url && area(item) > area(known))
+      // Cùng mục thấy lại: chỉ thay khi có link file mà trước chưa có, video có bản HD mà trước chỉ SD, hoặc cùng mức mà lớn hơn.
+      const better = (!known.url && item.url) || (item.url && item.hd && !known.hd) || (item.url && Boolean(item.hd) === Boolean(known.hd) && area(item) > area(known))
       if (better) items.set(item.id, { ...known, ...item, story: known.story || item.story })
     } else if (items.size < MAX_ITEMS) {
       items.set(item.id, item)
@@ -119,11 +119,12 @@
   function fbVideo(node, story) {
     const result = node.videoDeliveryResponseFragment?.videoDeliveryResponseResult
     const legacy = node.videoDeliveryLegacyFields ?? {}
-    const progressive = (Array.isArray(result?.progressive_urls) ? result.progressive_urls : [])
-      .filter((item) => !item?.failure_reason && cdn(item?.progressive_url))
-      .sort((a, b) => (String(b?.metadata?.quality).toUpperCase() === "HD") - (String(a?.metadata?.quality).toUpperCase() === "HD"))
-      .map((item) => item.progressive_url)
-    const url = [...progressive, node.playable_url_quality_hd, legacy.playable_url_quality_hd, node.browser_native_hd_url, legacy.browser_native_hd_url, node.playable_url, legacy.playable_url, node.browser_native_sd_url, legacy.browser_native_sd_url].find(cdn) ?? null
+    const progressive = (Array.isArray(result?.progressive_urls) ? result.progressive_urls : []).filter((item) => !item?.failure_reason && cdn(item?.progressive_url))
+    const high = (item) => String(item?.metadata?.quality).toUpperCase() === "HD"
+    // Bản HD trước (progressive HD, *_hd_url), rồi SD.
+    const hd = [...progressive.filter(high).map((item) => item.progressive_url), node.playable_url_quality_hd, legacy.playable_url_quality_hd, node.browser_native_hd_url, legacy.browser_native_hd_url].find(cdn)
+    const sd = [...progressive.filter((item) => !high(item)).map((item) => item.progressive_url), node.playable_url, legacy.playable_url, node.browser_native_sd_url, legacy.browser_native_sd_url].find(cdn)
+    const url = hd ?? sd ?? null
     const thumb = [node.preferred_thumbnail?.image?.uri, node.thumbnailImage?.uri, node.image?.uri, node.previewImage?.uri, node.first_frame_thumbnail].find(cdn) ?? null
     const id = String(node.id)
     const link = [node.permalink_url, node.url].find((value) => typeof value === "string" && /^https:\/\/(www|web|m)\.facebook\.com\//.test(value))
@@ -132,6 +133,7 @@
       id,
       kind: "video",
       url,
+      hd: Boolean(hd),
       width: Number(node.width) || 0,
       height: Number(node.height) || 0,
       thumb,

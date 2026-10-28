@@ -159,12 +159,16 @@ không bao giờ hiện chữ do trang gửi.
 - **Bị khoá tạm vì gọi nhiều**: Instagram 429 / `checkpoint_required` / `challenge_required` / "Please wait a few minutes";
   Facebook `1675004`. UTD dừng ngay, không thử lại; Instagram / Threads nhịp 1–2 s, ≤ 200/10 phút; Facebook 0,3–0,6 s,
   không trần (nhanh hơn ⇒ dễ bị chặn tạm hơn, chủ dự án chọn). Video fanpage, ảnh/video nhóm cần thêm 1 yêu cầu mỗi mục ⇒
-  Facebook ~60–100 mục/phút; ảnh hồ sơ, reels, bài Instagram/Threads 8–50 mục mỗi yêu cầu. Có thể bấm Dừng bất cứ
-  lúc nào và tải phần đã có.
+  Facebook ~40 mục/phút (đo thật: ảnh nhóm, video fanpage); ảnh hồ sơ, reels, bài Instagram/Threads 8–50 mục mỗi yêu cầu.
+  Có thể bấm Dừng bất cứ lúc nào và tải phần đã có.
 - **Meta đổi `doc_id` / cờ**: phần đó báo "danh sách có thể chưa đủ" (`social.partial`) hoặc `social.changed`; cập nhật
-  bảng mã theo bản Social Bulk Downloader mới. Facebook, Threads chưa thử thật — chủ dự án thử trên Chrome.
-- Mã thẻ Ảnh / Reels Facebook tìm theo `tab_key` trong `profile_header_renderer` (như tiện ích mẫu, không có đường dẫn
-  cố định); không thấy thì bỏ thẻ đó. `viewer_image` là ảnh xem (tiện ích mẫu tải thẳng ảnh này).
+  bảng mã theo bản Social Bulk Downloader mới.
+- Mã thẻ Ảnh / Reels Facebook tìm theo `tab_key` trong `profile_header_renderer` của dữ liệu SẴN CÓ trong tab (HTML tải
+  lại bằng fetch không có `tab_key` nào — thử 28/10); không thấy thì bỏ thẻ đó. `viewer_image` là ảnh xem (tiện ích mẫu
+  tải thẳng ảnh này). Fanpage kiểu mới như NASA không có thẻ `owner_reels` ⇒ không lấy được reels (tiện ích mẫu cũng vậy).
+- Video Facebook: danh sách chỉ kèm bản SD ⇒ hỏi từng video lấy bản HD tải thẳng (`progressive_urls` HD = tối đa 720p);
+  bản 1080p / 4K chỉ có dạng DASH (hình, tiếng tách) — tiện ích mẫu cũng chỉ lấy HD progressive. "Tất cả video" của
+  fanpage dừng ở chỗ Facebook báo hết trang (NASA: 49).
 - Tab chỉ cần **mở** (không cần đang hiện) tới khi xong.
 - Link CDN hết hạn sau vài ngày (`oe=`): nên tải ngay sau khi thu.
 - Firefox < 128 không có thế giới MAIN: chạy bằng content script (`content.fetch` mang nguồn của trang); không đọc được
@@ -183,6 +187,12 @@ không bao giờ hiện chữ do trang gửi.
   bucket lạ bị bỏ, đúng doc_id/biến/av/fb_dtsg/lsd, không chuyển trang); nhóm (ảnh qua `prefetch_uris_v2`, `1675004` ⇒
   dừng, giữ phần đã có); hộp S-61 (chip, Ảnh/Video,
   báo tiện ích, Dừng, gửi đúng id, đóng ⇒ `social_close`); S-63 (lỗi rõ, không Thử lại, axe).
+- Thử thật 2026-10-28 (Chrome đã đăng nhập của chủ dự án, qua cổng gỡ lỗi Chrome cho phép; app release có cổng WebView2
+  riêng, tắt sau khi thử): Threads @nasa 206 bài (190 ảnh, 16 video) trong 86 s, tải 3 ảnh gốc (tới 4096×3891); nhóm
+  Facebook `aiartworksvn` (tên dạng chữ) 60 ảnh / 90 s có ngày, tải 3 ảnh bản lớn; Instagram nasa 740 mục / 2 phút (Tin,
+  tin nổi bật, reels), tải 2 video 720×1280 + 1 ảnh; fanpage NASA: ảnh, 49 video HD có ngày + chú thích, bấm hai lần trên
+  cùng tab đủ cả hai lần, tải video 720×1280. Lỗi tìm ra và đã sửa (bài e2e đỏ trước): lần bấm thứ hai trên cùng tab mất mục
+  (`social-harvest` chỉ giao mục mới), nhãn trên trang thiếu số, video fanpage lấy bản SD của danh sách.
 
 ## Phụ lục — ghi chép nghiên cứu chi tiết
 

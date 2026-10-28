@@ -713,8 +713,10 @@ test('Facebook: Tin, tin nổi bật, ảnh, reels, video fanpage qua GraphQL c�
     }
     if (name === 'FBUnifiedVideoRootWithEntrypointQuery') {
       const id = String(variables.initial_node_id)
-      const video = id === '2001' ? fbVideo('2001') : { __typename: 'Video', id }
-      return json({ data: { video: { creation_story: { creation_time: 1710000000, message: { text: `Clip ${id}` }, attachments: [{ media: video }] } } } })
+      const story = (media: unknown) => ({ creation_time: 1710000000, message: { text: `Clip ${id}` }, attachments: [{ media }] })
+      if (id !== '2001') return json({ data: { video: { creation_story: story({ __typename: 'Video', id }) } } })
+      // Cùng video hai chỗ: chỗ đọc trước chỉ có bản SD, chỗ sau có HD cùng cỡ ⇒ phải giữ HD.
+      return json({ data: { video: { __typename: 'Video', id, width: 1920, height: 1080, browser_native_sd_url: `${FB_CDN}/o1/2001-native-sd.mp4`, creation_story: story({ ...fbVideo('2001'), width: 1920, height: 1080 }) } } })
     }
     return json({ errors: [{ message: 'GraphQL document with ID was not found', code: 1675012 }], data: null })
   })
