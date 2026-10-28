@@ -39,6 +39,14 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../extensions/chromium/fb-media.js"),
     ),
     (
+        "chromium/social-bulk.js",
+        include_bytes!("../../extensions/chromium/social-bulk.js"),
+    ),
+    (
+        "chromium/social-harvest.js",
+        include_bytes!("../../extensions/chromium/social-harvest.js"),
+    ),
+    (
         "chromium/tiktok.js",
         include_bytes!("../../extensions/chromium/tiktok.js"),
     ),
@@ -97,6 +105,14 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
     (
         "firefox/fb-media.js",
         include_bytes!("../../extensions/firefox/fb-media.js"),
+    ),
+    (
+        "firefox/social-bulk.js",
+        include_bytes!("../../extensions/firefox/social-bulk.js"),
+    ),
+    (
+        "firefox/social-harvest.js",
+        include_bytes!("../../extensions/firefox/social-harvest.js"),
     ),
     (
         "firefox/tiktok.js",
@@ -427,7 +443,8 @@ mod tests {
 
     /// Tự bắt link tải (takeover.js): quyền `downloads`; mọi script hai bản tiện ích nạp đều được UTD cài kèm
     /// (Firefox theo manifest, Chromium bằng importScripts, takeover-keys.js đăng ký lúc chạy; page-media.js đọc luồng
-    /// video trong trang cho nút "Tải video này", fb-media.js đăng ký lúc chạy trên Facebook).
+    /// video trong trang cho nút "Tải video này", fb-media.js đăng ký lúc chạy trên Facebook; social-bulk.js tải hàng
+    /// loạt, social-harvest.js nạp vào trang lúc bấm).
     #[test]
     fn both_extensions_ship_the_takeover_scripts() {
         let bundled = |path: &str| EXTENSION_FILES.iter().any(|(relative, _)| *relative == path);
@@ -438,7 +455,19 @@ mod tests {
                 .map(|(_, bytes)| serde_json::from_slice::<serde_json::Value>(bytes).unwrap())
                 .unwrap();
             assert!(manifest["permissions"].as_array().unwrap().contains(&"downloads".into()));
-            for script in ["background.js", "takeover.js", "takeover-keys.js", "page-media.js", "fb-media.js", "tiktok.js", "douyin.js", "douyin-page.js", "douyin-channel.js"] {
+            for script in [
+                "background.js",
+                "takeover.js",
+                "takeover-keys.js",
+                "page-media.js",
+                "fb-media.js",
+                "social-bulk.js",
+                "social-harvest.js",
+                "tiktok.js",
+                "douyin.js",
+                "douyin-page.js",
+                "douyin-channel.js",
+            ] {
                 assert!(bundled(&format!("{browser}/{script}")), "{browser}/{script}");
             }
         }
@@ -448,11 +477,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             firefox["background"]["scripts"],
-            serde_json::json!(["background.js", "takeover.js", "page-media.js", "douyin-channel.js"])
+            serde_json::json!(["background.js", "takeover.js", "page-media.js", "social-bulk.js", "douyin-channel.js"])
         );
         let background = String::from_utf8_lossy(include_bytes!("../../extensions/chromium/background.js"));
         assert!(background.contains("importScripts(\"takeover.js\")"));
         assert!(background.contains("importScripts(\"page-media.js\")"));
+        assert!(background.contains("importScripts(\"social-bulk.js\")"));
     }
 
     #[test]

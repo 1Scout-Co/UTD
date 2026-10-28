@@ -44,5 +44,13 @@
   "takeoverMore": { "message": "विकल्प" },
   "takeoverMinSize": { "message": "इससे छोटी फ़ाइलें छोड़ें (MB)" },
   "takeoverSkipTypes": { "message": "ये प्रकार न लें" },
-  "takeoverHint": { "message": "क्लिक करते समय Alt दबाए रखें, ताकि ब्राउज़र ही डाउनलोड करे।" }
+  "takeoverHint": { "message": "क्लिक करते समय Alt दबाए रखें, ताकि ब्राउज़र ही डाउनलोड करे।" },
+  "menuSocial": { "message": "UTD से एक साथ डाउनलोड करें" },
+  "socialCollecting": { "message": "$COUNT$ फ़ोटो/वीडियो इकट्ठा हो रहे हैं", "placeholders": { "count": { "content": "$1" } } },
+  "socialStop": { "message": "रोकें" },
+  "socialHint": { "message": "पूरा होने तक यह टैब खुला रखें।" },
+  "socialDone": { "message": "$COUNT$ फ़ोटो/वीडियो UTD को भेजे गए", "placeholders": { "count": { "content": "$1" } } },
+  "socialUnsupported": { "message": "कोई प्रोफ़ाइल, पेज, ग्रुप या स्टोरी खोलें, फिर दोबारा कोशिश करें।" },
+  "socialFailed": { "message": "इस पेज पर फ़ोटो/वीडियो इकट्ठा नहीं हो सके।" },
+  "socialUseBulk": { "message": "इस पेज के लिए: राइट-क्लिक › UTD › UTD से एक साथ डाउनलोड करें" }
 }

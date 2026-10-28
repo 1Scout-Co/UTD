@@ -63,6 +63,10 @@ pub(crate) fn enqueue_download(
     if crate::media_pages::is_drive_folder(&input.url) {
         return Err(crate::media_pages::DRIVE_FOLDER.into());
     }
+    // Trang cá nhân / fanpage / nhóm: tải bằng HTTP chỉ được trang HTML; báo cách tải hàng loạt.
+    if crate::media_pages::is_social_profile(&input.url) {
+        return Err(crate::media_pages::SOCIAL_PROFILE.into());
+    }
     let dest_dir = download_dir_for(&app, input.dest_dir.as_deref())?;
     let place = if input.later { Place::Back } else { Place::Front };
     let grant = signed_in(&app, input.auth_grant.as_deref(), &input.url);

@@ -36,6 +36,8 @@ interface Page {
   videoParam: boolean
   /** Có `?list=<id>` (playlist YouTube). */
   listParam: boolean
+  /** Có `?id=<id>` (`facebook.com/profile.php?id=`). */
+  idParam: boolean
 }
 
 const at = (page: Page, index: number) => page.path[index] ?? ""
@@ -175,6 +177,7 @@ function matchesSite(raw: string, sites: [string, (page: Page) => boolean][]): b
     path,
     videoParam: url.searchParams.getAll("v").some(Boolean),
     listParam: url.searchParams.getAll("list").some(Boolean),
+    idParam: url.searchParams.getAll("id").some(Boolean),
   }
   const site = sites.find(([domain]) => onDomain(host, domain))
   return site ? site[1](page) : false
@@ -188,4 +191,55 @@ export function isMediaPage(raw: string): boolean {
 /** Link là trang kênh TikTok (`tiktok.com/@user`) hoặc kênh/playlist YouTube. */
 export function isChannelPage(raw: string): boolean {
   return matchesSite(raw, CHANNEL_SITES)
+}
+
+// --- Trang cá nhân / fanpage / nhóm / Tin (Facebook, Instagram, Threads): chỉ tải cả trang được bằng "Tải hàng loạt
+// bằng UTD" của tiện ích (notes/social-bulk.md). Cùng luật `is_social_profile` trong media_pages.rs.
+
+const FACEBOOK_RESERVED = new Set([
+  "watch", "reel", "reels", "photo", "photo.php", "photos", "videos", "video.php", "marketplace", "gaming", "events",
+  "search", "notifications", "messages", "friends", "saved", "settings", "help", "login", "login.php",
+  "permalink.php", "story.php", "share", "hashtag", "bookmarks", "ads", "business", "pages", "groups", "stories",
+  "home.php", "memories", "privacy", "policies", "dialog",
+])
+const FACEBOOK_TABS = new Set(["photos", "photos_by", "photos_of", "photos_albums", "videos", "reels"])
+const INSTAGRAM_RESERVED = new Set([
+  "p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about", "legal", "developer", "web", "api",
+  "challenge", "emails", "session",
+])
+const INSTAGRAM_TABS = new Set(["reels", "tagged"])
+const THREADS_TABS = new Set(["replies", "media", "reposts"])
+
+// Tên người dùng Instagram/Threads, tên trang Facebook: chữ, số, `.`, `_` (`-` chỉ có ở Facebook).
+const isName = (part: string, dash: boolean) => part.length <= 100 && (dash ? /^[\w.-]+$/ : /^[\w.]+$/).test(part)
+// Không có đoạn sau, hoặc đúng một thẻ của trang.
+const onlyTab = (page: Page, tabs: Set<string>) => !has(page, 1) || (page.path.length === 2 && tabs.has(at(page, 1)))
+
+function facebookProfile(page: Page): boolean {
+  const first = at(page, 0)
+  if (first === "groups") return isName(at(page, 1), true) && (!has(page, 2) || at(page, 2) === "media")
+  if (first === "profile.php") return page.idParam
+  if (first === "people") return isDigits(at(page, 2))
+  if (first === "stories") return isDigits(at(page, 1))
+  return isName(first, true) && !FACEBOOK_RESERVED.has(first.toLowerCase()) && onlyTab(page, FACEBOOK_TABS)
+}
+
+function instagramProfile(page: Page): boolean {
+  if (at(page, 0) === "stories") return isName(at(page, 1), false) && at(page, 1) !== "highlights"
+  return isName(at(page, 0), false) && !INSTAGRAM_RESERVED.has(at(page, 0)) && onlyTab(page, INSTAGRAM_TABS)
+}
+
+const threadsProfile = (page: Page) =>
+  isHandle(at(page, 0)) && isName(at(page, 0).slice(1), false) && onlyTab(page, THREADS_TABS)
+
+const SOCIAL_SITES: [string, (page: Page) => boolean][] = [
+  ["facebook.com", facebookProfile],
+  ["instagram.com", instagramProfile],
+  ["threads.net", threadsProfile],
+  ["threads.com", threadsProfile],
+]
+
+/** Link là trang cá nhân / fanpage / nhóm / Tin: hộp Thêm nhắc dùng Tải hàng loạt trên trình duyệt. */
+export function isSocialProfile(raw: string): boolean {
+  return !isMediaPage(raw) && matchesSite(raw, SOCIAL_SITES)
 }

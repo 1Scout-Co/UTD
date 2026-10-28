@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { AlertCircle, Download, FolderOpen, RotateCw } from "lucide-react"
 
@@ -25,16 +25,35 @@ import {
   toggleEntry,
   visibleEntries,
 } from "../model/channel"
+import { controlSocial } from "../api/social"
 import { commandCode, needsSignIn } from "../model/sign-in"
+import {
+  inScope,
+  kindCounts,
+  SOCIAL_SOURCES,
+  SOURCE_LABELS,
+  sinceOf,
+  sourceCounts,
+  toggleIn,
+  withTitles,
+  type SocialEntry,
+  type SocialKind,
+  type SocialRequest,
+  type SocialSource,
+} from "../model/social"
 import type { AddMediaPayload } from "../model/types"
-import { ChannelCard, EntryList, FilterBar, QualityPicker } from "./channel-parts"
+import { ChannelCard, EntryList, FilterBar, QualityPicker, SourceChips } from "./channel-parts"
 import { SignInNotice, useAuthGranted } from "./sign-in-notice"
 import { useChannelListing } from "./use-channel-listing"
+import { useSocialListing } from "./use-social-listing"
 
 /**
  * Tải cả kênh (S-60 đang liệt kê, S-61 có danh sách, S-62 trống, S-63 lỗi): liệt kê dần video của kênh,
  * lọc/chọn, một chất lượng chung, rồi giao danh sách cho `onStart` (màn chính thêm lần lượt từng video).
  * Mỗi lần mở là một `key` mới: hộp dựng lại và liệt kê từ đầu.
+ *
+ * Có `social`: chế độ tải hàng loạt Facebook / Instagram / Threads — danh sách do tiện ích gửi (không liệt kê bằng
+ * yt-dlp), thêm chip nhóm (Ảnh, Video, Reels, Tin…), không chọn chất lượng (tải file gốc), giao id cho `onStartSocial`.
  */
 export function ChannelDialog({
   open,
@@ -42,7 +61,9 @@ export function ChannelDialog({
   desktop,
   url,
   authGrant,
+  social,
   onStart,
+  onStartSocial,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -50,15 +71,20 @@ export function ChannelDialog({
   url: string
   /** Kênh riêng tư (S-63): lần cho phép đăng nhập từ trình duyệt, không phải cookie. */
   authGrant?: string
+  social?: SocialRequest
   onStart: (payloads: AddMediaPayload[]) => void
+  onStartSocial?: (ids: string[], subfolder: string | null) => void
 }) {
   const [grant, setGrant] = useState<string | null>(authGrant ?? null)
-  const listing = useChannelListing(url, open && desktop, grant)
+  const channelListing = useChannelListing(url, open && desktop && !social, grant)
+  const socialListing = useSocialListing(social?.listingId ?? null, open && desktop && Boolean(social))
+  const listing = social ? socialListing : channelListing
   const errorCode = commandCode(listing.error)
   const signIn =
-    Boolean(listing.profile?.private) ||
-    errorCode === "channel.private_all" ||
-    needsSignIn(errorCode)
+    !social &&
+    (Boolean(listing.profile?.private) ||
+      errorCode === "channel.private_all" ||
+      needsSignIn(errorCode))
   // Popup tiện ích vừa cho phép trang của kênh: liệt kê lại với đăng nhập.
   const regrant = useCallback((fresh: string) => setGrant(fresh), [])
   useAuthGranted(open && signIn, url, regrant)
@@ -67,8 +93,32 @@ export function ChannelDialog({
   const [qualityId, setQualityId] = useState(CHANNEL_QUALITIES[0].id)
   const [ownFolder, setOwnFolder] = useState(true)
 
-  const { entries, status } = listing
-  const visible = useMemo(() => visibleEntries(entries, filter), [entries, filter])
+  const [sources, setSources] = useState<ReadonlySet<SocialSource> | null>(null)
+  const [kinds, setKinds] = useState<ReadonlySet<SocialKind> | null>(null)
+
+  const { status } = listing
+  const all = listing.entries
+  const socialEntries = useMemo(
+    () => (social ? withTitles(all as SocialEntry[], (source) => t(SOURCE_LABELS[source])) : []),
+    [social, all],
+  )
+  const entries = social ? socialEntries : all
+  const counts = useMemo(() => sourceCounts(socialEntries), [socialEntries])
+  // Chip Ảnh / Video: hiện khi danh sách trộn cả hai loại (không cho Facebook: nhóm đã tách ảnh / video); số đếm trong
+  // các nhóm đang bật, để chip "Ảnh 0" giải thích danh sách trống.
+  const kindTotals = useMemo(
+    () => {
+      if (social?.platform === "facebook") return null
+      const total = kindCounts(socialEntries)
+      return total.photo > 0 && total.video > 0 ? kindCounts(inScope(socialEntries, sources, null)) : null
+    },
+    [social?.platform, socialEntries, sources],
+  )
+  const scoped = useMemo(
+    () => (social ? inScope(socialEntries, sources, kinds) : all),
+    [social, socialEntries, sources, kinds, all],
+  )
+  const visible = useMemo(() => visibleEntries(scoped, filter), [scoped, filter])
   const picked = useMemo(() => pickedEntries(visible, selection), [visible, selection])
   const downloaded = useMemo(() => entries.filter((entry) => entry.downloaded).length, [entries])
   const selectable = visible.filter((entry) => !entry.blocked).length
@@ -83,7 +133,24 @@ export function ChannelDialog({
           ? "S-60"
           : "S-62"
 
+  // Tải hàng loạt: báo tiện ích nhóm còn cần lấy và mốc "từ ngày", để khỏi gọi trang thừa. Đã báo một lần thì quay về
+  // tất cả (tắt hết chip, bỏ mốc ngày) cũng báo, để tiện ích không giữ bộ lọc hẹp lúc trước.
+  const since = sinceOf(filter)
+  const listingId = social?.listingId
+  const controlled = useRef<string | null>(null)
+  useEffect(() => {
+    if (!listingId || status !== "loading") return
+    if (!sources && since === null && controlled.current !== listingId) return
+    controlled.current = listingId
+    const wanted = sources ? SOCIAL_SOURCES.filter((source) => sources.has(source)) : null
+    void controlSocial(listingId, { go: true, sources: wanted, since }).catch(() => undefined)
+  }, [listingId, status, sources, since])
+
   const start = () => {
+    if (social) {
+      onStartSocial?.(picked.map((entry) => entry.id), ownFolder ? folder : null)
+      return
+    }
     const quality = CHANNEL_QUALITIES.find((item) => item.id === qualityId) ?? CHANNEL_QUALITIES[0]
     const payloads = channelPayloads(picked, quality, listing.head?.key ?? null, ownFolder ? folder : null)
     onStart(payloads.map((payload) => ({ ...payload, authGrant: grant ?? undefined })))
@@ -93,9 +160,9 @@ export function ChannelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-variant="soniox" className="sm:max-w-[680px]">
         <DialogHeader>
-          <DialogTitle>{t("channel.title")}</DialogTitle>
+          <DialogTitle>{t(social ? "social.title" : "channel.title")}</DialogTitle>
           <DialogDescription className="sr-only">
-            {t("channel.description")}
+            {t(social ? "social.description" : "channel.description")}
           </DialogDescription>
         </DialogHeader>
 
@@ -107,13 +174,24 @@ export function ChannelDialog({
               count={entries.length}
               loading={loading}
               onStop={listing.stop}
+              countLabel={social ? t("social.count", { count: entries.length }) : undefined}
             />
           ) : null}
           {signIn ? <SignInNotice url={url} screen={null} /> : null}
 
           {entries.length > 0 ? (
             <>
-              <FilterBar filter={filter} downloaded={downloaded} onChange={setFilter} />
+              {social ? (
+                <SourceChips
+                  counts={counts}
+                  sources={sources}
+                  onToggle={(source) => setSources((current) => toggleIn(current, source))}
+                  kinds={kinds}
+                  kindCounts={kindTotals}
+                  onToggleKind={(kind) => setKinds((current) => toggleIn(current, kind))}
+                />
+              ) : null}
+              <FilterBar filter={filter} downloaded={downloaded} onChange={setFilter} social={Boolean(social)} />
               <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span className="tabular-nums">
                   {t("channel.picked", { done: picked.length, total: selectable })}
@@ -132,10 +210,11 @@ export function ChannelDialog({
                   entries={visible}
                   selection={selection}
                   onToggle={(id) => setSelection((previous) => toggleEntry(previous, id))}
+                  label={social ? t("social.items") : undefined}
                 />
               ) : (
                 <p className="py-6 text-center text-sm text-muted-foreground">
-                  {t("channel.noMatch")}
+                  {t(social ? "social.noMatch" : "channel.noMatch")}
                 </p>
               )}
             </>
@@ -148,12 +227,13 @@ export function ChannelDialog({
             status={status}
             error={listing.error ? commandErrorText(listing.error) : null}
             empty={entries.length === 0}
-            onRetry={listing.retry}
+            onRetry={social ? null : listing.retry}
+            emptyText={t(social ? "social.empty" : "channel.empty")}
           />
 
           {entries.length > 0 ? (
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <QualityPicker value={qualityId} onChange={setQualityId} />
+              {social ? <span /> : <QualityPicker value={qualityId} onChange={setQualityId} />}
               {folder ? (
                 <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                   <Switch size="sm" checked={ownFolder} onCheckedChange={setOwnFolder} />
@@ -172,7 +252,9 @@ export function ChannelDialog({
             </Button>
             <Button data-primary type="button" disabled={!desktop || picked.length === 0} onClick={start}>
               <Download />
-              {t("channel.download", { count: picked.length })}
+              {social
+                ? t("social.download", { count: picked.length })
+                : t("channel.download", { count: picked.length })}
             </Button>
           </div>
         </div>
@@ -197,12 +279,15 @@ function StatusMessage({
   error,
   empty,
   onRetry,
+  emptyText,
 }: {
   desktop: boolean
   status: string
   error: string | null
   empty: boolean
-  onRetry: () => void
+  /** Tải hàng loạt: không thử lại được (danh sách do trang trên trình duyệt gửi). */
+  onRetry: (() => void) | null
+  emptyText: string
 }) {
   if (!desktop) {
     return <Alert text={t("channel.desktopOnly")} />
@@ -211,10 +296,12 @@ function StatusMessage({
     return (
       <div className="space-y-2">
         <Alert text={error ?? t("channel.readFailed")} />
-        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
-          <RotateCw />
-          {t("app.retry")}
-        </Button>
+        {onRetry ? (
+          <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+            <RotateCw />
+            {t("app.retry")}
+          </Button>
+        ) : null}
       </div>
     )
   }
@@ -222,7 +309,7 @@ function StatusMessage({
   if (empty && status !== "loading") {
     return (
       <p className="py-6 text-center text-sm text-muted-foreground">
-        {t("channel.empty")}
+        {emptyText}
       </p>
     )
   }

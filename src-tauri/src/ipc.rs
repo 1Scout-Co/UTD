@@ -49,6 +49,9 @@ struct PipeRequest {
     /// Tiện ích (`channel-entries`): một phần danh sách hồ sơ Douyin lấy trong tab.
     #[serde(default)]
     channel: Option<crate::media::channel::douyin::Part>,
+    /// Tải hàng loạt (`social-list`): một đợt ảnh/video tiện ích liệt kê trong trang, kiểm ở `social::receive`.
+    #[serde(default)]
+    social: Option<serde_json::Value>,
 }
 
 /// Câu trả cho extension khi link cần người dùng xác nhận cảnh báo trước khi tải (S-22).
@@ -85,6 +88,8 @@ enum Route {
     ChannelEntries,
     /// Download trình duyệt vừa bắt đầu (tự bắt link tải, takeover.rs): nhận nếu dò được file.
     Takeover,
+    /// Tải hàng loạt Facebook / Instagram / Threads: một đợt danh sách (social/mod.rs).
+    SocialList,
 }
 
 fn route(request: &PipeRequest, token: &str) -> Route {
@@ -105,6 +110,7 @@ fn route(request: &PipeRequest, token: &str) -> Route {
             }
             "channel-entries" if request.channel.is_some() => Route::ChannelEntries,
             "takeover" => Route::Takeover,
+            "social-list" if request.social.as_ref().is_some_and(serde_json::Value::is_object) => Route::SocialList,
             _ => Route::Reject("Yêu cầu từ trình duyệt không hợp lệ."),
         }
     } else if let Some(links) = &request.batch {
@@ -119,6 +125,9 @@ fn route(request: &PipeRequest, token: &str) -> Route {
     } else if crate::media_pages::is_drive_folder(&request.url) {
         // Không gắn vào download chờ link mới, không tạo dòng tải hỏng: báo cách làm.
         Route::Reject(crate::media_pages::DRIVE_FOLDER)
+    } else if crate::media_pages::is_social_profile(&request.url) {
+        // Trang cá nhân / fanpage / nhóm: không tạo dòng tải trang HTML; báo cách tải hàng loạt.
+        Route::Reject(crate::media_pages::SOCIAL_PROFILE)
     } else if let Some(links) = needs_confirm(request) {
         Route::Confirm(links)
     } else {
@@ -598,6 +607,16 @@ where
             },
             None => PipeResponse::error("Yêu cầu từ trình duyệt không hợp lệ."),
         },
+        // Trả lời tiện ích đi tiếp / dừng trong `media` (native host chuyển nguyên trường này).
+        Route::SocialList => match request.social.as_ref().map(|social| crate::social::receive(&app, &request.url, social)) {
+            Some(Ok((reply, note))) => {
+                let mut response = PipeResponse::media(Ok(reply));
+                response.message = note.map(str::to_string);
+                response
+            }
+            Some(Err(message)) => PipeResponse::error(message),
+            None => PipeResponse::error("Yêu cầu từ trình duyệt không hợp lệ."),
+        },
         Route::AuthRenew => match request.auth.take() {
             Some(auth) => PipeResponse::auth(crate::auth::flow::renew(&app, &request.url, auth)),
             None => PipeResponse::error("Yêu cầu từ trình duyệt không hợp lệ."),
@@ -730,6 +749,29 @@ mod tests {
 
     fn request(token: &str, url: &str) -> PipeRequest {
         serde_json::from_value(serde_json::json!({ "token": token, "url": url })).unwrap()
+    }
+
+    #[test]
+    fn social_lists_route_only_with_a_list_object() {
+        let ask = |value: serde_json::Value| {
+            let request: PipeRequest = serde_json::from_value(value).unwrap();
+            route(&request, TOKEN)
+        };
+        let page = "https://www.facebook.com/groups/1";
+        assert_eq!(
+            ask(serde_json::json!({ "token": TOKEN, "url": page, "kind": "social-list", "social": { "listingId": "sb-1", "part": 0 } })),
+            Route::SocialList
+        );
+        assert!(matches!(ask(serde_json::json!({ "token": TOKEN, "url": page, "kind": "social-list" })), Route::Reject(_)));
+        // "Tải bằng UTD" lên trang hồ sơ: không tải trang HTML, báo cách tải hàng loạt.
+        assert_eq!(
+            route(&request(TOKEN, "https://www.instagram.com/mytay95/"), TOKEN),
+            Route::Reject(crate::media_pages::SOCIAL_PROFILE)
+        );
+        assert!(matches!(
+            ask(serde_json::json!({ "token": "0".repeat(TOKEN.len()), "url": page, "kind": "social-list", "social": {} })),
+            Route::Reject(_)
+        ));
     }
 
     #[test]

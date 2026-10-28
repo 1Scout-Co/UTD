@@ -44,5 +44,13 @@
   "takeoverMore": { "message": "選項" },
   "takeoverMinSize": { "message": "略過小於此大小的檔案 (MB)" },
   "takeoverSkipTypes": { "message": "不接管這些類型" },
-  "takeoverHint": { "message": "點擊時按住 Alt：交給瀏覽器下載。" }
+  "takeoverHint": { "message": "點擊時按住 Alt：交給瀏覽器下載。" },
+  "menuSocial": { "message": "用 UTD 批次下載" },
+  "socialCollecting": { "message": "正在收集 $COUNT$ 個圖片/影片", "placeholders": { "count": { "content": "$1" } } },
+  "socialStop": { "message": "停止" },
+  "socialHint": { "message": "請保持此分頁開啟，直到完成。" },
+  "socialDone": { "message": "已將 $COUNT$ 個圖片/影片傳送到 UTD", "placeholders": { "count": { "content": "$1" } } },
+  "socialUnsupported": { "message": "請開啟個人檔案、粉絲專頁、社團或限時動態後再試一次。" },
+  "socialFailed": { "message": "無法在此頁面收集圖片/影片。" },
+  "socialUseBulk": { "message": "此頁面：右鍵 › UTD › 用 UTD 批次下載" }
 }

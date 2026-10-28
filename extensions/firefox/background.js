@@ -2,10 +2,11 @@ const HOST = "app.utd.desktop"
 const MENU_LINK = "utd-download"
 const MENU_MEDIA = "utd-download-media"
 const MENU_ALL = "utd-download-all"
+const MENU_SOCIAL = "utd-social-bulk"
 const api = globalThis.browser ?? globalThis.chrome
 
-// Chữ theo ngôn ngữ của trình duyệt (_locales/<mã>/messages.json, mặc định en).
-const t = (key) => api.i18n.getMessage(key) || key
+// Chữ theo ngôn ngữ của trình duyệt (_locales/<mã>/messages.json, mặc định en); `values` điền vào `$COUNT$`….
+const t = (key, values) => api.i18n.getMessage(key, values) || key
 
 // Native host chưa gửi mã lỗi, chỉ gửi câu tiếng Việt cố định (src-tauri/src/native_host.rs, ipc.rs,
 // media_pages.rs, batch.rs): đổi các câu đó sang chữ của tiện ích; câu khác hiện nguyên văn.
@@ -24,6 +25,7 @@ const HOST_TEXT = {
 // Câu có mã (`[mã] câu`, src-tauri/src/coded.rs): mã đã biết ⇒ chữ của tiện ích; mã khác ⇒ bỏ mã, giữ câu.
 const HOST_CODES = {
   "link.drive_folder": "driveFolder",
+  "social.use_bulk": "socialUseBulk",
 }
 const fromHost = (text) => {
   if (HOST_TEXT[text]) return t(HOST_TEXT[text])
@@ -230,6 +232,13 @@ async function installMenus() {
       title: t("menuAll"),
       contexts: ["page", "link", "image", "selection"],
     },
+    // Tải hàng loạt Facebook / Instagram / Threads (social-bulk.js): chỉ hiện trên các trang đó.
+    {
+      id: MENU_SOCIAL,
+      title: t("menuSocial"),
+      contexts: ["page", "link", "image", "video"],
+      documentUrlPatterns: ["*://*.facebook.com/*", "*://*.instagram.com/*", "*://*.threads.net/*", "*://*.threads.com/*"],
+    },
   ]) {
     try {
       await api.contextMenus.create(item)
@@ -252,6 +261,11 @@ async function download(info, tab) {
   if (!url) return
   // Trang hồ sơ Douyin: tải cả hồ sơ, danh sách lấy ngay trong tab (douyin-channel.js).
   if (await douyinPart()?.channel(url, tab).catch(() => false)) return
+  // Chuột phải lên chính trang cá nhân / fanpage / nhóm (social-bulk.js): nhắc dùng Tải hàng loạt ngay trên trang.
+  if (url === tab?.url && typeof socialPlan === "function" && socialPlan(url)) {
+    await socialHint(tab)
+    return
+  }
   const auth = await authFor(url, tab?.url, tab).catch(() => null)
   await sendToUtd(
     withAuth({ version: 1, type: "download", url, pageUrl: tab?.url ?? null, suggestedName: null }, auth),
@@ -379,6 +393,7 @@ async function downloadOrPick(info, tab) {
 
 api.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === MENU_ALL) void downloadAll(info, tab)
+  else if (info.menuItemId === MENU_SOCIAL) void socialStart(tab)
   else void downloadOrPick(info, tab)
 })
 
@@ -518,6 +533,8 @@ const fromPopup = (sender) =>
 if (typeof importScripts === "function") importScripts("takeover.js")
 // Hàm đọc luồng trong trang (page-media.js): Chromium nạp ở đây; Firefox nạp theo manifest.
 if (typeof importScripts === "function") importScripts("page-media.js")
+// Tải hàng loạt Facebook / Instagram / Threads (social-bulk.js): Chromium nạp ở đây; Firefox nạp theo manifest.
+if (typeof importScripts === "function") importScripts("social-bulk.js")
 // Douyin: gọi API trong trang, tải cả hồ sơ (douyin-channel.js). Chromium nạp ở đây; Firefox nạp theo manifest.
 if (typeof importScripts === "function") importScripts("douyin-channel.js")
 // Phần Douyin nếu đã nạp (thiếu file thì các trang khác vẫn chạy như thường).

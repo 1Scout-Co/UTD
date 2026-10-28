@@ -1,90 +1,81 @@
 {
-  "branch": "claude/fb-media-4c7a19",
+  "branch": "claude/social-bulk-e821de",
   "base": "main",
-  "commit": "d173dcd",
-  "date": "2026-10-27",
-  "tier": "Nhạy cảm (đồng thời + cookie luồng + gọi API trong trang, > 400 dòng): Codex Sol high lượt bảo mật + Grok high lượt chất lượng; sau mỗi lần sửa MAJOR chạy lại một lượt Grok chỉ BLOCKER/MAJOR",
+  "commit": "f6f472c",
+  "date": "2026-10-28",
+  "tier": "Nhạy cảm (gọi GraphQL bằng phiên đăng nhập của trình duyệt, native messaging / named pipe, > 400 dòng): Codex Sol high lượt bảo mật + Grok high lượt chất lượng; sau khi sửa MAJOR chạy lại một lượt Grok chỉ BLOCKER/MAJOR",
   "passes": [
-    {"file": "review-codex.json", "reviewer": "gpt-6.1-sol high", "brief": "review-brief-security.md", "findings": 1},
-    {"file": "review-grok.json", "reviewer": "grok-4.7-high (Cursor)", "brief": "review-brief.md", "findings": 4},
-    {"file": "review-grok-2.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau sửa 9c7a39a/2cc7e68", "findings": 1},
-    {"file": "review-grok-3.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau sửa 5cd4db9", "findings": 0},
-    {"file": "review-grok-4.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau 51f52d8", "findings": 0},
-    {"file": "review-grok-5.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau 3cd8713 (tiếng thật của video thay nhạc nền TikTok), commit d173dcd", "findings": 0}
+    {"file": "review-codex.json", "reviewer": "gpt-6.1-sol high", "brief": "review-brief-security.md", "commit": "1edb841", "findings": 0},
+    {"file": "review-grok.json", "reviewer": "grok-4.7-high (Cursor)", "brief": "review-brief.md", "commit": "1edb841", "findings": 5},
+    {"file": "review-grok-2.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau sửa 20540f2, chỉ BLOCKER/MAJOR", "commit": "20540f2", "findings": 0},
+    {"file": "review-grok-3.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát các sửa sau thử thật e4b3c0c (take() trả hết rồi xoá, t() truyền số), e06cfc7 (luôn hỏi video lẻ lấy HD), chỉ BLOCKER/MAJOR", "commit": "e06cfc7", "findings": 1},
+    {"file": "review-grok-4.json", "reviewer": "grok-4.7-high (Cursor)", "note": "soát lại sau sửa f6f472c, chỉ BLOCKER/MAJOR", "commit": "f6f472c", "findings": 0}
   ],
   "findings": [
     {
       "severity": "MAJOR",
-      "reviewer": "codex",
-      "path": "extensions/chromium/douyin-channel.js",
-      "line": 18,
-      "title": "Tab đã rời Douyin vẫn có thể đưa nguồn tải giả vào danh sách hồ sơ",
+      "reviewer": "grok",
+      "path": "extensions/chromium/social-bulk.js",
+      "line": 822,
+      "title": "Khớp hồ sơ Facebook bằng url.includes nên nhận nhầm hồ sơ / nhóm có tên là tiền tố (nasa ↔ nasaphoto, groups/12345 ↔ groups/123456)",
       "ac": ["S-60", "S-61"],
       "status": "fixed",
-      "fix_commit": "9c7a39a",
-      "how": "douyinDocument kiểm location.hostname ở thế giới ISOLATED + ghim documentIds cho mọi lần gọi; tài liệu đổi giữa lượt ⇒ ném lỗi"
+      "fix_commit": "20540f2",
+      "how": "So trọn từng đoạn đường dẫn (`/<tên>`, `profile.php?id=`, `/groups/<mã>`); bài e2e đỏ trước khi sửa"
     },
     {
       "severity": "MAJOR",
       "reviewer": "grok",
-      "path": "extensions/chromium/douyin-channel.js",
-      "line": 61,
-      "title": "Dừng/đóng hộp Tải cả kênh Douyin không dừng vòng lật trang; bấm lại bị nuốt",
+      "path": "extensions/chromium/social-bulk.js",
+      "line": 1105,
+      "title": "Cờ Dừng của nhãn trên trang còn giữ 8 giây: bấm Tải hàng loạt lại thì lượt mới dừng ngay, hộp trống",
       "ac": ["S-60", "S-61"],
       "status": "fixed",
-      "fix_commit": "9c7a39a",
-      "how": "douyinRuns theo sec_uid, bấm lại thay lượt cũ; vòng dừng khi push không ok"
+      "fix_commit": "20540f2",
+      "how": "Nhãn cuối xoá cờ Dừng sau khi đọc; bài e2e bấm Dừng thật trên nhãn rồi vẽ lượt mới"
     },
     {
       "severity": "MAJOR",
       "reviewer": "grok",
-      "path": "src-tauri/src/media/fast.rs",
-      "line": 365,
-      "title": "Tiếp tục tải TikTok không gửi tt_chain_token nên CDN trả 403",
-      "ac": ["S-74", "S-75"],
+      "path": "src/features/home/ui/channel-dialog.tsx",
+      "line": 140,
+      "title": "Tắt hết chip / bỏ mốc ngày không báo lại tiện ích, tiện ích giữ bộ lọc hẹp tới hết lượt",
+      "ac": ["S-61"],
       "status": "fixed",
-      "fix_commit": "2cc7e68",
-      "how": "resume_plan lấy cookie luồng từ probe_cache qua Resolver::cached(job); test fast_tests"
+      "fix_commit": "20540f2",
+      "how": "Đã báo một lần cho danh sách này thì quay về tất cả cũng gửi social_control (sources null); e2e S-61 kiểm lần gửi cuối"
     },
     {
       "severity": "MINOR",
       "reviewer": "grok",
-      "path": "extensions/chromium/content.js",
-      "line": 164,
-      "title": "videoUrl trả null (quảng cáo TikTok) bị đổi thành địa chỉ trang",
-      "ac": ["S-74"],
+      "path": "extensions/chromium/social-bulk.js",
+      "line": 844,
+      "title": "Tải HTML hồ sơ Facebook bị 429 báo social.changed thay vì social.rate_limited",
+      "ac": ["S-63"],
       "status": "fixed",
-      "fix_commit": "2cc7e68",
-      "how": "analysisUrl trả null khi module trang trả null ⇒ bảng báo không đọc được video ngay; e2e thẻ quảng cáo"
-    },
-    {
-      "severity": "MINOR",
-      "reviewer": "grok",
-      "path": "extensions/chromium/douyin-page.js",
-      "line": 68,
-      "title": "window.player camelCase không loại bytevc2 trên gearName, bỏ sót cờ isBytevc1",
-      "ac": ["S-74"],
-      "status": "fixed",
-      "fix_commit": "9c7a39a",
-      "how": "lọc gearName bytevc2, đọc cờ isBytevc1"
+      "fix_commit": "20540f2",
+      "how": "429 ⇒ {code: social.rate_limited}; cùng bài e2e nhận đúng hồ sơ"
     },
     {
       "severity": "MAJOR",
       "reviewer": "grok",
-      "path": "src-tauri/src/media/channel/douyin.rs",
-      "line": 295,
-      "title": "Huỷ lượt liệt kê cũ đặt Feed.stopped lên feed mới (bấm lại / StrictMode bị từ chối)",
-      "ac": ["S-60"],
+      "path": "extensions/chromium/social-harvest.js",
+      "line": 27,
+      "title": "Cùng video thấy hai chỗ trong một câu trả lời: chỗ đầu bản SD, chỗ sau HD cùng cỡ ⇒ put() chỉ so cỡ nên giữ SD",
+      "ac": ["S-61"],
       "status": "fixed",
-      "fix_commit": "5cd4db9",
-      "how": "Feed.generation + listeners; guard Listening chỉ đặt stopped khi đúng lượt, listeners về 0 và do người dùng dừng"
+      "fix_commit": "f6f472c",
+      "how": "fbVideo đánh dấu hd (progressive HD / *_hd_url trước SD); put() thay khi có HD mà bản cũ chỉ SD, cùng mức mới so cỡ; e2e fanpage có hai chỗ SD-trước / HD-sau"
+    },
+    {
+      "severity": "MINOR",
+      "reviewer": "grok",
+      "path": "src/features/home/ui/channel-flow.tsx",
+      "line": 120,
+      "title": "Lệnh add_social_downloads lỗi thì hộp vẫn đóng, chỉ ghi console; số mục không thêm được không hiện",
+      "ac": ["S-61"],
+      "status": "deferred",
+      "how": "Hiếm (lệnh chỉ lỗi khi danh sách đã bị bỏ hoặc không tạo được thư mục). Sửa cần dòng lỗi mới trên hộp (giao diện + 16 ngôn ngữ). Chủ dự án chọn để sau (2026-10-28) ⇒ docs/IDEAS.md"
     }
-  ],
-  "qa_bugs_fixed_after_review": [
-    {"commit": "51f52d8", "what": "TikTok video dài chờ ~12 s: ghim mirror hình riêng; bản download watermark không bị coi là tiếng"},
-    {"commit": "3cd8713", "what": "TikTok video dài: tiếng (nhạc nền `audio`) dài hơn hình ⇒ ghép hình 720p với tiếng của format gộp; M4A/MP3 lấy tiếng của video; --video-multistreams khi selector ghim 2 mã; runner --ppa -map -1:v:0", "reviewed_by": "review-grok-5.json (0 finding)"}
-  ],
-  "delta_reviewed_by": "captain",
-  "delta": "d173dcd..HEAD",
-  "delta_note": "Chỉ sửa MINOR M-1 của QA lượt 5: borrowed_sound_choice ghi cỡ = cỡ hình (không cộng format gộp mà ffmpeg bỏ hình); m4a_option không ghi cỡ khi tiếng lấy từ format gộp; test probe cập nhật (đỏ trước, xanh sau); ghi chú tiktok-button.md + notes qa-report.md/review-final.json"
+  ]
 }

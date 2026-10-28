@@ -1,12 +1,12 @@
 import { Fragment, type ReactNode } from "react"
 
-import { Clock, Film, Loader2, Lock, Square } from "lucide-react"
+import { Clock, Film, Loader2, Lock, Play, Square } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { formatCompact, formatDate } from "@/shared/i18n/format"
+import { formatCompact, formatDate, formatNumber } from "@/shared/i18n/format"
 import { codeText, t } from "@/shared/i18n/i18n"
 import { cn } from "cn"
 
@@ -20,6 +20,7 @@ import {
   type ChannelRange,
   type ChannelSelection,
 } from "../model/channel"
+import { isSocialEntry, SOURCE_LABELS, type SocialKind, type SocialSource } from "../model/social"
 
 function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60)
@@ -62,20 +63,24 @@ export function ChannelCard({
   count,
   loading,
   onStop,
+  countLabel,
 }: {
   head: ChannelHead | null
   profile: ChannelProfile | null
   count: number
   loading: boolean
   onStop: () => void
+  /** Tải hàng loạt: "N mục" thay cho "N video". */
+  countLabel?: string
 }) {
   const name = profile?.name ?? head?.name ?? null
   const total = profile?.videoCount
   const details = [
     head?.handle,
-    total && total > count
-      ? t("channel.videoCountOf", { done: count, total })
-      : t("channel.videoCount", { count }),
+    countLabel ??
+      (total && total > count
+        ? t("channel.videoCountOf", { done: count, total })
+        : t("channel.videoCount", { count })),
     profile?.followers
       ? t("channel.followers", {
           count: profile.followers,
@@ -119,10 +124,13 @@ export function FilterBar({
   filter,
   downloaded,
   onChange,
+  social = false,
 }: {
   filter: ChannelFilter
   downloaded: number
   onChange: (filter: ChannelFilter) => void
+  /** Tải hàng loạt: chữ "mục" thay cho "video". */
+  social?: boolean
 }) {
   const set = (patch: Partial<ChannelFilter>) => onChange({ ...filter, ...patch })
   return (
@@ -148,7 +156,7 @@ export function FilterBar({
       {filter.range === "latest" ? (
         <Input
           type="number"
-          aria-label={t("channel.latestCount")}
+          aria-label={t(social ? "social.latestCount" : "channel.latestCount")}
           min={1}
           value={filter.latest}
           onChange={(event) => set({ latest: Number(event.target.value) })}
@@ -181,7 +189,7 @@ export function FilterBar({
             checked={filter.onlyNew}
             onCheckedChange={(checked) => set({ onlyNew: checked })}
           />
-          {t("channel.onlyNew")}
+          {t(social ? "social.onlyNew" : "channel.onlyNew")}
           <span className="tabular-nums">
             {t("channel.downloadedCount", { count: downloaded })}
           </span>
@@ -196,13 +204,15 @@ export function EntryList({
   entries,
   selection,
   onToggle,
+  label = t("channel.videos"),
 }: {
   entries: ChannelEntry[]
   selection: ChannelSelection
   onToggle: (id: string) => void
+  label?: string
 }) {
   return (
-    <ul aria-label={t("channel.videos")} className="-mx-1 max-h-80 space-y-0.5 overflow-y-auto px-1">
+    <ul aria-label={label} className="-mx-1 max-h-80 space-y-0.5 overflow-y-auto px-1">
       {entries.map((entry) => (
         <li
           key={entry.id}
@@ -220,7 +230,10 @@ export function EntryList({
               disabled={Boolean(entry.blocked)}
               onCheckedChange={() => onToggle(entry.id)}
             />
-            <span className="h-11 w-16 shrink-0 overflow-hidden rounded-md bg-muted">
+            <span className="relative h-11 w-16 shrink-0 overflow-hidden rounded-md bg-muted">
+              {isSocialEntry(entry) && entry.kind === "video" ? (
+                <Play aria-hidden className="absolute end-1 bottom-1 size-3.5 fill-white text-white drop-shadow" />
+              ) : null}
               {entry.thumbnail ? (
                 <img
                   src={entry.thumbnail}
@@ -284,6 +297,54 @@ export function QualityPicker({
           {quality.labelKey ? t(quality.labelKey) : quality.label}
         </button>
       ))}
+    </div>
+  )
+}
+
+/** Tải hàng loạt: chip nhóm (Ảnh, Video, Reels, Tin…) kèm số mục; bấm để chỉ lọc theo chip đó, không chip nào bật = tất cả. */
+export function SourceChips({
+  counts,
+  sources,
+  onToggle,
+  kinds,
+  kindCounts,
+  onToggleKind,
+}: {
+  counts: [SocialSource, number][]
+  sources: ReadonlySet<SocialSource> | null
+  onToggle: (source: SocialSource) => void
+  /** Ảnh / Video (null = ẩn): số mục trong các nhóm đang bật, để số trên chip khớp danh sách. */
+  kinds: ReadonlySet<SocialKind> | null
+  kindCounts: Record<SocialKind, number> | null
+  onToggleKind: (kind: SocialKind) => void
+}) {
+  const chip = (pressed: boolean) =>
+    cn(
+      "flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
+      pressed ? "bg-card shadow-soft ring-2 ring-primary" : "bg-muted text-muted-foreground hover:text-foreground",
+    )
+  return (
+    <div role="group" aria-label={t("social.sources")} className="flex flex-wrap items-center gap-1.5">
+      {counts.map(([source, count]) => (
+        <button key={source} type="button" aria-pressed={Boolean(sources?.has(source))} onClick={() => onToggle(source)} className={chip(Boolean(sources?.has(source)))}>
+          {t(SOURCE_LABELS[source])}
+          <span className="tabular-nums opacity-70">{formatNumber(count, 0)}</span>
+        </button>
+      ))}
+      {kindCounts
+        ? (["photo", "video"] as const).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              aria-pressed={Boolean(kinds?.has(kind))}
+              onClick={() => onToggleKind(kind)}
+              className={cn(chip(Boolean(kinds?.has(kind))), kind === "photo" && "ms-2")}
+            >
+              {t(kind === "photo" ? "social.kind.photo" : "social.kind.video")}
+              <span className="tabular-nums opacity-70">{formatNumber(kindCounts[kind], 0)}</span>
+            </button>
+          ))
+        : null}
     </div>
   )
 }

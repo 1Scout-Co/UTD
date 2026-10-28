@@ -44,5 +44,13 @@
   "takeoverMore": { "message": "Opsi" },
   "takeoverMinSize": { "message": "Lewati file lebih kecil dari (MB)" },
   "takeoverSkipTypes": { "message": "Jangan tangkap jenis ini" },
-  "takeoverHint": { "message": "Tahan Alt saat mengeklik agar browser yang mengunduh." }
+  "takeoverHint": { "message": "Tahan Alt saat mengeklik agar browser yang mengunduh." },
+  "menuSocial": { "message": "Unduh massal dengan UTD" },
+  "socialCollecting": { "message": "Mengumpulkan $COUNT$ foto/video", "placeholders": { "count": { "content": "$1" } } },
+  "socialStop": { "message": "Berhenti" },
+  "socialHint": { "message": "Biarkan tab ini terbuka sampai selesai." },
+  "socialDone": { "message": "$COUNT$ foto/video dikirim ke UTD", "placeholders": { "count": { "content": "$1" } } },
+  "socialUnsupported": { "message": "Buka profil, halaman, grup, atau story, lalu coba lagi." },
+  "socialFailed": { "message": "Tidak dapat mengumpulkan foto/video di halaman ini." },
+  "socialUseBulk": { "message": "Untuk halaman ini: klik kanan › UTD › Unduh massal dengan UTD" }
 }

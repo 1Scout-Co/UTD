@@ -44,5 +44,13 @@
   "takeoverMore": { "message": "Настройки" },
   "takeoverMinSize": { "message": "Пропускать файлы меньше (МБ)" },
   "takeoverSkipTypes": { "message": "Не перехватывать эти типы" },
-  "takeoverHint": { "message": "Удерживайте Alt при щелчке, чтобы скачал браузер." }
+  "takeoverHint": { "message": "Удерживайте Alt при щелчке, чтобы скачал браузер." },
+  "menuSocial": { "message": "Массовая загрузка через UTD" },
+  "socialCollecting": { "message": "Собрано фото/видео: $COUNT$", "placeholders": { "count": { "content": "$1" } } },
+  "socialStop": { "message": "Стоп" },
+  "socialHint": { "message": "Не закрывайте вкладку, пока всё не завершится." },
+  "socialDone": { "message": "Отправлено в UTD фото/видео: $COUNT$", "placeholders": { "count": { "content": "$1" } } },
+  "socialUnsupported": { "message": "Откройте профиль, страницу, группу или историю и повторите." },
+  "socialFailed": { "message": "Не удалось собрать фото/видео на этой странице." },
+  "socialUseBulk": { "message": "Для этой страницы: правый клик › UTD › Массовая загрузка через UTD" }
 }

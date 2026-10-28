@@ -44,5 +44,13 @@
   "takeoverMore": { "message": "Tuỳ chọn" },
   "takeoverMinSize": { "message": "Bỏ qua file nhỏ hơn (MB)" },
   "takeoverSkipTypes": { "message": "Không bắt các đuôi" },
-  "takeoverHint": { "message": "Giữ Alt khi bấm: để trình duyệt tự tải." }
+  "takeoverHint": { "message": "Giữ Alt khi bấm: để trình duyệt tự tải." },
+  "menuSocial": { "message": "Tải hàng loạt bằng UTD" },
+  "socialCollecting": { "message": "Đang thu $COUNT$ ảnh/video", "placeholders": { "count": { "content": "$1" } } },
+  "socialStop": { "message": "Dừng" },
+  "socialHint": { "message": "Giữ tab này mở tới khi xong." },
+  "socialDone": { "message": "Đã gửi $COUNT$ ảnh/video sang UTD", "placeholders": { "count": { "content": "$1" } } },
+  "socialUnsupported": { "message": "Mở trang cá nhân, fanpage, nhóm hoặc Tin rồi bấm lại." },
+  "socialFailed": { "message": "Không thu được ảnh/video trên trang này." },
+  "socialUseBulk": { "message": "Trang này: chuột phải › UTD › Tải hàng loạt bằng UTD" }
 }

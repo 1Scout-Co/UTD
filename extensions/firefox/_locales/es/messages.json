@@ -44,5 +44,13 @@
   "takeoverMore": { "message": "Opciones" },
   "takeoverMinSize": { "message": "Omitir archivos de menos de (MB)" },
   "takeoverSkipTypes": { "message": "No capturar estos tipos" },
-  "takeoverHint": { "message": "Mantén Alt al hacer clic para que descargue el navegador." }
+  "takeoverHint": { "message": "Mantén Alt al hacer clic para que descargue el navegador." },
+  "menuSocial": { "message": "Descarga masiva con UTD" },
+  "socialCollecting": { "message": "Recopilando $COUNT$ fotos/vídeos", "placeholders": { "count": { "content": "$1" } } },
+  "socialStop": { "message": "Detener" },
+  "socialHint": { "message": "Mantén esta pestaña abierta hasta que termine." },
+  "socialDone": { "message": "$COUNT$ fotos/vídeos enviados a UTD", "placeholders": { "count": { "content": "$1" } } },
+  "socialUnsupported": { "message": "Abre un perfil, página, grupo o historia y vuelve a intentarlo." },
+  "socialFailed": { "message": "No se pudieron recopilar fotos/vídeos en esta página." },
+  "socialUseBulk": { "message": "Para esta página: clic derecho › UTD › Descarga masiva con UTD" }
 }

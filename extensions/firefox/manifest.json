@@ -24,7 +24,7 @@
     }
   ],
   "background": {
-    "scripts": ["background.js", "takeover.js", "page-media.js", "douyin-channel.js"]
+    "scripts": ["background.js", "takeover.js", "page-media.js", "social-bulk.js", "douyin-channel.js"]
   },
   "action": {
     "default_title": "__MSG_actionTitle__",

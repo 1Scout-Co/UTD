@@ -192,6 +192,10 @@ pub async fn media_probe(
     auth_grant: Option<String>,
 ) -> Result<probe::MediaProbeResult, String> {
     let url = validate_url(&url).map_err(|error| error.to_string())?;
+    // yt-dlp không liệt kê được trang cá nhân / fanpage / nhóm: báo cách tải hàng loạt thay câu lỗi chung.
+    if crate::media_pages::is_social_profile(url.as_str()) {
+        return Err(crate::media_pages::SOCIAL_PROFILE.into());
+    }
     let grant = crate::commands::signed_in(&app, auth_grant.as_deref(), url.as_str());
     let result = analyze(&app, url.as_str(), grant.as_deref()).await;
     // S-14: popup tiện ích đếm hộp này vào việc chờ đăng nhập của trang.
@@ -379,7 +383,7 @@ pub(crate) fn create_media(
 }
 
 /// Thư mục tải, cộng thư mục con (tên kênh) khi tải cả kênh; tên con được làm sạch thành một tầng.
-fn with_subfolder(
+pub(crate) fn with_subfolder(
     folder: std::path::PathBuf,
     subfolder: Option<&str>,
 ) -> Result<std::path::PathBuf, String> {
@@ -655,7 +659,7 @@ fn js_runtime_args(tools: &tools::MediaTools) -> Vec<OsString> {
     }
 }
 
-fn safe_base(title: &str) -> String {
+pub(crate) fn safe_base(title: &str) -> String {
     let cleaned: String = title
         .chars()
         .map(|character| {
