@@ -193,8 +193,9 @@ class SocialJob {
         await api.scripting.executeScript(world ? { target, world, files: ["social-harvest.js"] } : { target, files: ["social-harvest.js"] })
         this.world = world
         return true
-      } catch {
+      } catch (error) {
         // Thử cách sau.
+        console.debug("UTD social: inject", world ?? "content", error?.message)
       }
     }
     return false
@@ -229,8 +230,9 @@ class SocialJob {
     try {
       const stop = await this.run(socialPill, [text, t("socialStop"), t("socialHint"), Boolean(final)], null)
       if (stop === true && !final) this.stopped = true
-    } catch {
+    } catch (error) {
       // Tab đang chuyển trang: lần sau vẽ lại.
+      console.debug("UTD social: pill", error?.message)
     }
   }
 
@@ -508,12 +510,8 @@ async function socialThreads(job) {
 function socialFacebookError(reply) {
   const message = String(reply.message ?? "").toLowerCase()
   const codes = Array.isArray(reply.codes) ? reply.codes : []
-  let path = ""
-  try {
-    path = new URL(reply.url).pathname
-  } catch {
-    // Không có địa chỉ (lỗi mạng).
-  }
+  // Không có địa chỉ: lỗi mạng (`response.url` luôn là địa chỉ đầy đủ).
+  const path = reply.url ? new URL(reply.url).pathname : ""
   // 1357001 / 1357004: chưa đăng nhập / phiên hết hạn.
   if (/^\/(login|checkpoint)/.test(path) || codes.includes(1357001) || codes.includes(1357004) || /not logged in|log in to continue/.test(message)) return "social.login"
   // 1675004: "Rate limit exceeded" (trả kèm HTTP 200).
@@ -897,6 +895,7 @@ async function socialFacebookCall(doc, name, variables) {
         lines.push(JSON.parse(line))
       } catch {
         // Dòng không phải JSON: bỏ qua.
+        console.debug("UTD social: dòng không phải JSON", line.slice(0, 80))
       }
     }
     harvest?.take()
@@ -920,6 +919,7 @@ async function socialFacebookCall(doc, name, variables) {
       prefetch = raw ? JSON.parse(`"${raw}"`) : null
     } catch {
       // Link hỏng: không dùng.
+      console.debug("UTD social: link prefetch_uris_v2 hỏng")
     }
     return { status: response.status, url: response.url, data: lines[0] ?? null, codes, message: messages.join(" ").trim().slice(0, 300), items, prefetch }
   } catch {
@@ -1008,8 +1008,9 @@ async function socialInstagramCall(path, doc, name, variables, appId) {
   let claim = "0"
   try {
     claim = sessionStorage.getItem("www-claim-v2") || "0"
-  } catch {
+  } catch (error) {
     // Không đọc được: dùng "0" như trang lúc mới mở.
+    console.debug("UTD social: www-claim-v2", error?.message)
   }
   const headers = {
     "X-IG-App-ID": appId,
@@ -1064,7 +1065,8 @@ function socialPill(text, stopLabel, hint, final) {
     host = document.createElement("div")
     host.id = ID
     const shadow = host.attachShadow({ mode: "open" })
-    shadow.innerHTML = `<style>
+    const style = document.createElement("style")
+    style.textContent = `
       :host { all: initial; }
       .box { position: fixed; z-index: 2147483647; inset-inline-end: 16px; bottom: 16px; display: flex; align-items: center; gap: 8px;
         padding: 6px 6px 6px 12px; border-radius: 8px; color: #0f1b2d; background: #fff; border: 1px solid rgb(0 0 0 / 0.12);
@@ -1075,8 +1077,19 @@ function socialPill(text, stopLabel, hint, final) {
       button:hover { background: #005bb8; }
       button:focus-visible { outline: 2px solid #8ec5ff; outline-offset: 1px; }
       [hidden] { display: none !important; }
-    </style><div class="box" role="status"><span class="dot"></span><span class="text"></span><button type="button"></button></div>`
-    shadow.querySelector("button").addEventListener("click", (event) => {
+    `
+    const box = document.createElement("div")
+    box.className = "box"
+    box.setAttribute("role", "status")
+    const dot = document.createElement("span")
+    dot.className = "dot"
+    const label = document.createElement("span")
+    label.className = "text"
+    const stop = document.createElement("button")
+    stop.type = "button"
+    box.append(dot, label, stop)
+    shadow.append(style, box)
+    stop.addEventListener("click", (event) => {
       if (event.isTrusted) host.dataset.stop = "1"
     })
     document.documentElement.append(host)
