@@ -1,0 +1,12 @@
+{
+  "commit": "a89c785",
+  "branch": "worktree-fix-fb-story-card",
+  "passes": [
+    { "model": "grok-4.7-high", "status": "lỗi — Cursor chưa đăng nhập (agent login), chuyển dự phòng" },
+    { "model": "gemini-3.8-flash-high", "status": "xong", "findings": 0 }
+  ],
+  "findings": [],
+  "areas_checked": "targetOf ưu tiên data-id thẻ Tin quanh <video>, dự phòng địa chỉ; Reels/Watch/bảng tin không có khung data-id ⇒ như cũ; chromium = firefox; khớp khoá cards của fb-media.js; e2e tái hiện.",
+  "real_test": "2026-11-05 Chrome đã đăng nhập của chủ dự án: địa chỉ đứng ở thẻ Truong Khoa, khung đang chiếu Dân Nguyễn ⇒ bản cũ trả Truong Khoa + video của Truong Khoa, bản sửa trả Dân Nguyễn + video của Dân Nguyễn.",
+  "reviewer": "gemini-3.8-flash-high"
+}

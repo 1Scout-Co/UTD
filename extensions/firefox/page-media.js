@@ -45,9 +45,13 @@ function utdFindPageMedia(x, y) {
     return found
   }
 
-  /** Mã thẻ Tin (địa chỉ /stories/<bucket>/<thẻ>) và các mã video có thể của `video`, chắc trước. */
+  /**
+   * Mã thẻ Tin và các mã video có thể của `video`, chắc trước. Thẻ: `data-id` của khung đang chiếu quanh `video` trước
+   * — Tin tự chuyển sang người khác thì địa chỉ /stories/<bucket>/<thẻ> đứng yên ở thẻ mở đầu (thử thật 2026-11-05).
+   */
   function targetOf(video, props) {
-    let card = /^\/stories\/[^/]+\/([^/?#]+)/.exec(location.pathname)?.[1] ?? null
+    let card = video?.closest?.('[data-id^="UzpfSVNDO"]')?.getAttribute("data-id") ?? null
+    card ??= /^\/stories\/[^/]+\/([^/?#]+)/.exec(location.pathname)?.[1] ?? null
     try {
       if (card) card = decodeURIComponent(card)
     } catch {

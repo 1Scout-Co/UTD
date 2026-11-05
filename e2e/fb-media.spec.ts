@@ -168,6 +168,25 @@ test('Tin Facebook chuyển trong app (GraphQL) ⇒ video của thẻ mới; th�
   expect(other.formats.map((format) => format.streams[0].url)).toEqual([`${CDN}/other-hd.mp4`, `${CDN}/other-sd.mp4`])
 })
 
+test('Tin tự chuyển sang người khác mà địa chỉ đứng yên ⇒ theo thẻ đang chiếu (data-id quanh <video>), không theo địa chỉ', async ({ page }) => {
+  // Thử thật 2026-11-05: mở Tin người A từ hàng Tin, Facebook tự sang người B nhưng địa chỉ vẫn là thẻ của A; khung
+  // đang chiếu mang `data-id` = thẻ B.
+  await servePages(page)
+  await page.addInitScript({ path: 'extensions/chromium/fb-media.js' })
+  await page.goto(`https://www.facebook.com/stories/111/${CARD}/`)
+  await page.evaluate(
+    ([text, next]) => {
+      JSON.parse(text)
+      document.getElementById('viewer')!.setAttribute('data-id', next)
+    },
+    [JSON.stringify(GRAPHQL), NEXT],
+  )
+  await page.waitForTimeout(50)
+  const found = await findMedia(page)
+  expect(found.title).toBe('Bạn khác')
+  expect(found.formats).toEqual([{ id: 'sd', sizeBytes: null, streams: [{ url: `${CDN}/next-sd.mp4`, kind: 'both' }] }])
+})
+
 test('tiện ích nạp sau khi trang đã mở ⇒ đọc lại các khối JSON có sẵn trong trang', async ({ page }) => {
   await servePages(page)
   await page.goto(`https://www.facebook.com/stories/111/${CARD}/`)
